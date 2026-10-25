@@ -1,4 +1,4 @@
-# Personal browsing MCP taskset v3 (pending tag)
+# Personal browsing MCP taskset v3
 
 [Documentation index](README.md) · [Running guide](running.md) ·
 [Six-task pilot](results/2026-10-19-personal-six-task.md) · [Optimization/log analysis](optimization-findings.md)
