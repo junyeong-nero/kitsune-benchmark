@@ -191,11 +191,13 @@ Isolation: `--setting-sources ""` (no user/project settings or hooks),
 `--strict-mcp-config` with the single `browser` server, `--tools ""` (no
 built-in tools), `--permission-mode dontAsk`, no session persistence. Because
 `--allowedTools` only pre-approves, `mcp_tool_filter.py` hides non-allowlisted
-tools from `tools/list`, matching Codex `enabled_tools`. The stream-json audit
-reports `input_tokens` as total input (`cached_input_tokens` = cache reads, a
-subset) and `list_price_cost_usd`, which is Claude Code's list-price estimate,
-not the subscription charge. Results from different harnesses/models are
-separate experiments, not one leaderboard.
+tools from `tools/list`, matching Codex `enabled_tools`. Upstream exit or stdout
+EOF closes the relay even while client stdin stays open, preserving upstream
+failure status; cleanup escalates from stdin EOF to terminate and then kill.
+The stream-json audit reports `input_tokens` as total input
+(`cached_input_tokens` = cache reads, a subset) and `list_price_cost_usd`, which
+is Claude Code's list-price estimate, not the subscription charge. Results
+from different harnesses/models are separate experiments, not one leaderboard.
 
 ### Personal browsing: recommended starting point
 

@@ -4,6 +4,7 @@ import io
 import json
 import os
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -301,6 +302,97 @@ for line in sys.stdin:
                     self.assertEqual((root / filename).stat().st_mode & 0o777, 0o600)
             finally:
                 transport.close()
+
+    def test_native_tool_failure_preserves_only_sanitized_fields(self):
+        failure = {"stage": "tab_creation", "tool": "browser_tabs", "code": "TAB_CREATE_FAILED",
+                   "duration_ms": 125, "message": "https://user:password@private.invalid/?token=secret",
+                   "credentials": "sk-private-secret"}
+        responses = [
+            {"error": {"code": -32000, "message": failure["message"], "data": failure}},
+            {"result": {"isError": True, "structuredContent": {"error": failure}}},
+            {"result": {"isError": True, "content": [{"type": "text", "text": json.dumps(failure)}]}},
+        ]
+        for response in responses:
+            with self.subTest(response=response):
+                session = NativeSession({})
+                with patch.object(session, "request", return_value=response), self.assertRaises(ValueError) as caught:
+                    session.tool("browser_tabs", {"action": "new", "url": failure["message"]})
+                message = str(caught.exception)
+                fields = session.evidence["native_error"]
+                self.assertEqual(fields, json.loads(message.split(": ", 1)[1]))
+                self.assertEqual(set(fields), {"stage", "tool", "code", "duration_ms", "duration_sec"})
+                self.assertEqual({key: fields[key] for key in ("stage", "tool", "code", "duration_ms")},
+                    {key: failure[key] for key in ("stage", "tool", "code", "duration_ms")})
+                self.assertGreaterEqual(fields["duration_sec"], 0)
+                self.assertNotIn("private", message)
+                self.assertNotIn("password", message)
+                self.assertNotIn("credentials", message)
+                self.assertNotIn("https://", message)
+                self.assertEqual(session.evidence["harness_calls"], 1)
+                self.assertGreaterEqual(session.evidence["harness_seconds"], 0)
+
+    def test_native_tool_failure_omits_sensitive_and_malformed_fields(self):
+        responses = [
+            {"error": {"code": -32001, "data": {"stage": "https://private.invalid", "tool": "sk-secret",
+                "duration_ms": "https://private.invalid", "duration": float("inf")}}},
+            {"result": {"isError": True, "structuredContent": {"stage": ["secret"], "code": {"token": "secret"}},
+                "content": [{"type": "text", "text": "Bearer secret https://private.invalid"}]}},
+            {"result": {"isError": True, "structuredContent": {"stage": "private.example.com",
+                "tool": "ghp_" + "a" * 36, "code": "x" * 65, "duration_ms": True,
+                "duration": float("nan")}}},
+        ]
+        for response in responses:
+            session = NativeSession({})
+            with patch.object(session, "request", return_value=response), self.assertRaises(ValueError) as caught:
+                session.tool("browser_tabs", {})
+            message = str(caught.exception)
+            fields = session.evidence["native_error"]
+            self.assertEqual(fields, json.loads(message.split(": ", 1)[1]))
+            self.assertEqual(fields["stage"], "tools/call")
+            self.assertEqual(fields["tool"], "browser_tabs")
+            if "error" in response:
+                self.assertEqual(fields["code"], -32001)
+            self.assertNotIn("duration_ms", fields)
+            self.assertNotIn("duration", fields)
+            for sensitive in ("private", "secret", "Bearer", "token", "https://", "ghp_", "x" * 65):
+                self.assertNotIn(sensitive, message)
+
+    def test_relay_entrypoint_saves_sanitized_setup_failure_to_native_evidence(self):
+        failure = {"stage": "tab_creation", "tool": "browser_navigate", "code": "NAV_FAILED",
+                   "duration_ms": 125, "message": "https://user:password@private.invalid/?token=secret",
+                   "credentials": "sk-private-secret"}
+        fake = '''import json, sys
+failure = json.loads(sys.argv[1])
+for line in sys.stdin:
+    message = json.loads(line)
+    if message["params"]["name"] == "browser_tabs":
+        result = {"content": [{"type": "text", "text": "- 0: (current) [](about:blank)"}]}
+    else:
+        result = {"isError": True, "structuredContent": {"error": failure}}
+    print(json.dumps({"jsonrpc": "2.0", "id": message["id"], "result": result}), flush=True)
+'''
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / "native.py").write_text(fake)
+            settings = {"target": "playwright", "upstream": [sys.executable, str(root / "native.py"),
+                json.dumps(failure)], "bootstrap_url": failure["message"],
+                "evidence_path": str(root / "evidence.json")}
+            (root / "config.json").write_text(json.dumps(settings))
+            result = subprocess.run([sys.executable, str(ROOT / "kitsune_benchmark/personal_session.py"),
+                str(root / "config.json")], input=json.dumps({"id": 1, "method": "tools/list"}) + "\n",
+                text=True, capture_output=True, timeout=10)
+            self.assertEqual(result.returncode, 2, result.stderr)
+            evidence = json.loads((root / "evidence.json").read_text())
+            self.assertFalse(evidence["setup_complete"])
+            self.assertEqual(evidence["error"], "native_session_setup_or_inventory_failed")
+            fields = evidence["native_error"]
+            self.assertEqual(set(fields), {"stage", "tool", "code", "duration_ms", "duration_sec"})
+            for key in ("stage", "tool", "code", "duration_ms"):
+                self.assertEqual(fields[key], failure[key])
+            self.assertGreaterEqual(fields["duration_sec"], 0)
+            self.assertEqual((root / "evidence.json").stat().st_mode & 0o777, 0o600)
+            for sensitive in ("private", "password", "credentials", "https://", "sk-"):
+                self.assertNotIn(sensitive, json.dumps(evidence))
 
     def test_native_inventory_parsers(self):
         playwright = {"content": [{"type": "text", "text": "### Result\n- 0: [A](http://localhost/a)\n- 1: (current) [B](http://localhost/b)"}]}
