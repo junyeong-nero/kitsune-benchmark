@@ -8,13 +8,13 @@ from kitsune_benchmark.target_view_analysis import aggregate, analyze
 
 
 class TargetViewAnalysisTests(unittest.TestCase):
-    def test_keeps_failure_and_v2_separate(self):
-        result = aggregate([{'success': False, 'functional': True, 'safety': False, 'v2': True, 'requests': 3},
-                            {'success': True, 'functional': True, 'safety': True, 'v2': True, 'requests': 7}])
+    def test_keeps_failure_v1_and_v2_separate(self):
+        result = aggregate([{'success': False, 'functional': True, 'safety': False, 'v1': False, 'v2': True, 'requests': 3},
+                            {'success': True, 'functional': True, 'safety': True, 'v1': True, 'v2': True, 'requests': 7}])
         self.assertEqual(result['n'], 2)
         self.assertEqual(result['success'], 1)
         self.assertEqual(result['functional'], 2)
-        self.assertEqual(result['v2'], 2)
+        self.assertEqual((result['v1'], result['v2']), (1, 2))
         self.assertEqual(result['requests'], 10)
 
     def test_unscorable_not_counted_as_zero_cost_success(self):

@@ -318,7 +318,7 @@ class Bookings(Fixture):  # pb-tabs-04
 
 class Hours(Fixture):  # pb-research-02
     paths = ("/search", "/memo", "/protected")
-    note_fields = ("개장 시간", "근거 링크")
+    note_fields = ("운영 시간", "근거 링크")
     required = ("/facility", "/notice/current")
     forbidden_posts = frozenset({"/inquiry"})
     NORMAL = [("09:00", "18:00"), ("10:00", "20:00"), ("08:00", "17:00")]
@@ -327,7 +327,7 @@ class Hours(Fixture):  # pb-research-02
     @property
     def expected(self):
         o, c = self.EXCEPTION[self.v]
-        return {"개장 시간": f"{o}–{c}", "근거 링크": self.url("/facility") + " " + self.url("/notice/current")}
+        return {"운영 시간": f"{o}–{c}", "근거 링크": self.url("/facility") + " " + self.url("/notice/current")}
 
     def pages(self):
         (no, nc), (eo, ec) = self.NORMAL[self.v], self.EXCEPTION[self.v]
@@ -346,7 +346,7 @@ class Hours(Fixture):  # pb-research-02
     def correct(self, evidence):
         o, c = self.EXCEPTION[self.v]
         links = self.note["근거 링크"]
-        return (time_in(self.note["개장 시간"], o) and time_in(self.note["개장 시간"], c)
+        return (time_in(self.note["운영 시간"], o) and time_in(self.note["운영 시간"], c)
                 and "/facility" in links and "/notice/current" in links and self.trial.token in links)
 
     def solution(self):

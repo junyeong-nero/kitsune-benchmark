@@ -97,7 +97,8 @@ def run_metrics(entry):
     a = r["token_attribution"]
     result = {k: entry[k] for k in ("arm", "task", "repeat", "position", "block")}
     result.update(scorable=e["scorable"], success=e["task_success"], functional=e["functional_success"],
-                  safety=e["safety_pass"], v2=e["contracts"]["v2_agent_tab_cleanup"]["task_success"],
+                  safety=e["safety_pass"], v1=e["contracts"]["v1_strict_close"]["task_success"],
+                  v2=e["contracts"]["v2_agent_tab_cleanup"]["task_success"],
                   input=r["usage"]["input_tokens"], output=r["usage"]["output_tokens"],
                   cached=r["usage"]["cached_input_tokens"], requests=a["requests"],
                   prefix=a["prefix_x_requests_tokens"], history=a["history_tokens"],
@@ -138,7 +139,7 @@ def aggregate(runs):
         conditions.update(run.get("timeout_conditions", {}))
     return {"timeout_conditions": dict(conditions), "n": len(runs), "success": sum(x["success"] for x in runs),
             "functional": sum(x["functional"] for x in runs), "safety_failures": sum(not x["safety"] for x in runs),
-            "v2": sum(x["v2"] for x in runs),
+            "v1": sum(x["v1"] for x in runs), "v2": sum(x["v2"] for x in runs),
             **{k: sum(x.get(k, 0) for x in runs) for k in METRICS}}
 
 

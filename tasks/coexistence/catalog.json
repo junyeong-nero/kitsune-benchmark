@@ -12,7 +12,7 @@
     {
       "id": "user-seeded",
       "status": "runnable",
-      "applies_to": "all 24 personal-browsing-local-v1 tasks, unchanged fixtures and graders",
+      "applies_to": "all 24 personal-browsing-local-v2 tasks, unchanged fixtures and graders",
       "description": "Starting tabs are opened through the user channel (WebDriver BiDi), so Kitsune lists them as user tabs; setup fails if any is agent-owned. The shown tab and window focus are recorded after every agent call and every 0.25 s. v1 contracts are reported unchanged; contract v3_user_view additionally requires that the tab the user sees never left the starting tab.",
       "measures": ["seeded_owned_by_agent", "view_left_initial_after_calls", "view_transitions_away", "view_restored_at_end"]
     },

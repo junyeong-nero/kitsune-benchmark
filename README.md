@@ -102,7 +102,7 @@ PERSONAL_BROWSER_TEST=1 PERSONAL_KITSUNE_TEST=1 \
 | [Documentation index](docs/README.md) | Guide map, track status and source-of-truth boundaries |
 | [Results by Kitsune version](docs/results/kitsune-versions.md) | Reports per Kitsune revision, frozen `taskset-v1` and upgrade rules |
 | [Personal protocol](docs/personal-browsing.md) | Catalog, session/reset setup, state-based grading and provenance |
-| [Coexistence track](docs/coexistence.md) | Draft taskset-v2 candidate: user channel, v3 contracts, delegation/recovery specs |
+| [Coexistence track](docs/coexistence.md) | Draft candidate for a later taskset (provisionally v3): user channel, v3 contracts, delegation/recovery specs |
 | [Codex harness](docs/codex-harness.md) | Authentication, tool policy, generic runs and process cleanup |
 | [Resource methodology](docs/resources.md) | CPU/RSS scope, attribution and sampling caveats |
 | [Optimization findings](docs/optimization-findings.md) | Evidence-backed cache/observation/schema targets, RPC logs and offline analysis |

@@ -1,6 +1,6 @@
 """Coexistence relay: the personal relay, but the *user* seeds the session and watches the view.
 
-Differences from `personal_session.py` (which stays frozen as taskset-v1):
+Differences from `personal_session.py` (taskset-v1 behaviour; taskset-v2 only adds `tab_calls`):
 
 - Starting tabs are opened through the user channel (`user_driver.py`, WebDriver BiDi),
   not with the MCP server's `browser_tabs new`. Kitsune therefore lists them as user tabs.

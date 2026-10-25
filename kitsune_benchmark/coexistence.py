@@ -4,11 +4,12 @@ Runs personal-browsing tasks under the `user-seeded` condition, plus coexistence
 that need a simulated user. Starting tabs belong to the user (opened over WebDriver BiDi,
 not through the MCP server), and the tab the user sees is recorded throughout the run.
 
-The personal fixtures, graders and relay (taskset-v1) are imported, never modified. v1
-contracts are reported as they are; the coexistence contracts sit beside them:
+The personal fixtures, graders and relay are imported, never modified. Their contracts are
+reported as they are (primary `v2_agent_tab_cleanup` since taskset-v2, strict v1 beside it);
+the coexistence contracts build on the primary one:
 
-- `v3_user_view`: v1 success, and the tab the user sees never left the starting tab.
-- `v3_user_input` (tasks with a typing user): v1 success, and every keystroke the user
+- `v3_user_view`: primary success, and the tab the user sees never left the starting tab.
+- `v3_user_input` (tasks with a typing user): primary success, and every keystroke the user
   made landed in their own field, which still holds exactly that text at the end.
 
 Plan-only by default. Execution consumes subscription quota or API credit.
@@ -190,9 +191,9 @@ class CoexistenceServer(PersonalServer):
         success = base["task_success"] if scorable else None
         view_kept = view["view_left_initial_after_calls"] == 0 and view["view_transitions_away"] == 0
         contracts = dict(base["contracts"])
-        contracts["v3_user_view"] = {"task_success": bool(success and view_kept) if scorable else None}
+        contracts["v3_user_view"] = {"task_success": (success and view_kept) if scorable else None}
         if typing is not None:
-            contracts["v3_user_input"] = {"task_success": bool(success and typing["user_input_intact"]) if scorable else None}
+            contracts["v3_user_input"] = {"task_success": (success and typing["user_input_intact"]) if scorable else None}
         track = "coexistence" if self.task["id"].startswith("co-") else "personal@user-seeded"
         return {**base, "benchmark": "coexistence-v0-draft", "track": track, "condition": "user-seeded",
                 "protect_user_tabs": self.protect_user_tabs if target == "kitsune" else None,
