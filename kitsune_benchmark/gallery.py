@@ -840,7 +840,8 @@ def run_gallery(*, execute: bool = False, task_ids: list[str] | None = None, cat
             pair = run_pair(execute=True, kitsune_project=kitsune_project, executable=executable,
                             experiment_spec=experiment, artifact_scope="gallery", task_for_target=fixture.begin,
                             prepare_server=fixture.prepare_server, evaluate=fixture.evaluate, enabled_tools=UI_TOOLS,
-                            harness=harness, kitsune_preset=kitsune_preset, targets=targets)
+                            harness=harness, kitsune_preset=kitsune_preset, targets=targets,
+                            equalize_kitsune_viewport=True)
         pair.update(gallery_task=task.id, variant=variant, layout=layout, kitsune_source_after=source_revision(project))
         write_json(Path(pair["pair_dir"]) / "gallery-summary.json", pair)
         pairs.append(pair)

@@ -124,10 +124,19 @@ serialization differ from provider context accounting.
 
 Configured geometry is recorded in every pair/run manifest: Playwright's
 `--viewport-size` is a content viewport, while headless Firefox's `--width` and
-`--height` configure a window, not necessarily its content area. Effective
-`innerWidth`/`innerHeight` are currently unobserved (`effective: null`); no extra
-agent-visible calls, resize or page instrumentation are added. Equality is not
-asserted. Construction/measurement of equal content viewports remains a follow-up (#21).
+`--height` configure a window, not its content area. Every page of a
+`personal-browsing-local-v3` run, all 28 tasks, reports `innerWidth`,
+`innerHeight`, `outerWidth`, `outerHeight` and `devicePixelRatio` on load through
+a CSP-hashed inline `<head>` beacon to the fixture server: no rendered text,
+accessibility node, agent-visible call or resize, and the reports are not visits,
+writes or forbidden actions. Apart from that script and its CSP header, the
+original 24 tasks' pages are those of `taskset-v2`. The personal track sizes
+Kitsune's window 1280×805 so its content viewport is 1280×720, matching
+Playwright; measured natively, Kitsune's 1280×720 window gave 1280×635 content.
+Each run's manifest and summary `viewport.effective` holds the observed values
+beside `configured`, and
+`content_viewport_equality_asserted` is true only when they all equal the shared
+1280×720 @1x reference ([details](running.md#repeated-predeclared-order-taskset-v3)).
 
 ## Fair starting state and reset
 

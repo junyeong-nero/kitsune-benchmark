@@ -7,8 +7,9 @@ from contextlib import redirect_stdout
 from unittest.mock import MagicMock, patch
 
 from kitsune_benchmark.__main__ import main
+from kitsune_benchmark.adapter import write_json
 from kitsune_benchmark.specs import Task
-from kitsune_benchmark.viewport import viewport_record
+from kitsune_benchmark.viewport import REFERENCE, observed_viewport, parse_report, report_script, viewport_record
 from kitsune_benchmark.smoke import ROOT, WS_SETTING, benchmark_source, copy_extension, tool_surface, experiment, private_ports, run_pair
 
 
@@ -42,9 +43,12 @@ class SmokeTests(unittest.TestCase):
 
     def test_run_pair_records_live_timing_and_phases_even_if_first_target_stops(self):
         spec = experiment()
-        for stop_early, targets in ((False, ("playwright", "kitsune")), (True, ("playwright", "kitsune")),
-                                    (False, ("kitsune", "playwright"))):
-            with self.subTest(stop_early=stop_early), tempfile.TemporaryDirectory() as folder:
+        page = {"innerWidth": 1280, "innerHeight": 720, "outerWidth": 1280, "outerHeight": 805, "devicePixelRatio": 1}
+        synthetic = {"playwright": [page, page], "kitsune": [dict(page, innerHeight=635, outerHeight=720)]}
+        for stop_early, targets, reports in ((False, ("playwright", "kitsune"), None), (True, ("playwright", "kitsune"), None),
+                                             (False, ("kitsune", "playwright"), None), (False, ("playwright", "kitsune"), synthetic),
+                                             (True, ("kitsune", "playwright"), {"kitsune": []})):
+            with self.subTest(stop_early=stop_early, reports=bool(reports)), tempfile.TemporaryDirectory() as folder:
                 root = Path(folder)
                 for filename in ("project/extension/manifest.json", "node_modules/.bin/web-ext",
                                  "node_modules/@playwright/mcp/cli.js", "firefox"):
@@ -59,6 +63,7 @@ class SmokeTests(unittest.TestCase):
                 def fake_run(server, task, model, **kwargs):
                     run_dir = Path(kwargs["output_root"]) / server.id
                     run_dir.mkdir(parents=True)
+                    write_json(run_dir / "manifest.json", {"server": server.id, "viewport": kwargs["viewport"]})
                     records = [{"kind": "setup_completed", "duration_sec": 2},
                                {"kind": "rpc_completed", "role": "agent", "method": "tools/call",
                                 "duration_sec": .5}]
@@ -86,26 +91,54 @@ class SmokeTests(unittest.TestCase):
                         patch("kitsune_benchmark.smoke.os.environ", {}):
                     summary = run_pair(execute=True, kitsune_project=str(root / "project"),
                                        experiment_spec=spec, task_for_target=lambda target: Task("test", "test"),
-                                       evaluate=lambda target, result: evaluation, targets=targets)
+                                       evaluate=lambda target, result: evaluation, targets=targets,
+                                       viewport_reports=reports and reports.get, equalize_kitsune_viewport=bool(reports))
                 saved = json.loads((Path(summary["pair_dir"]) / "pair-summary.json").read_text())
                 manifest = json.loads((Path(summary["pair_dir"]) / "pair-manifest.json").read_text())
+                runs = {target: json.loads((Path(result["run_dir"]) / "manifest.json").read_text())
+                        for target, result in saved["results"].items()}
                 self.assertEqual(manifest["targets"], list(targets))
                 self.assertEqual([call.args[0].id for call in run.call_args_list], list(targets)[:1] if stop_early else list(targets))
-                self.assertEqual(manifest["viewport"], saved["viewport"])
                 self.assertEqual(manifest["viewport"]["playwright"]["configured"]["viewport_size"], {"width": 1280, "height": 720})
-                self.assertEqual(manifest["viewport"]["kitsune"]["configured"]["window_size"], {"width": 1280, "height": 720})
+                height = 805 if reports else 720
+                self.assertEqual(manifest["viewport"]["kitsune"]["configured"]["window_size"], {"width": 1280, "height": height})
+                self.assertIn("--args=--height=" + str(height), popen.call_args_list[1].args[0])
                 self.assertTrue(manifest["viewport"]["kitsune"]["configured"]["headless"])
+                # Both manifests are finalized with the summaries' observed records after the runs.
+                self.assertEqual(manifest["viewport"], saved["viewport"])
                 for target, result in saved["results"].items():
-                    self.assertEqual(result["viewport"], manifest["viewport"][target])
-                    self.assertIsNone(result["viewport"]["effective"])
-                    self.assertFalse(result["viewport"]["content_viewport_equality_asserted"])
+                    self.assertEqual(result["viewport"], saved["viewport"][target])
+                    self.assertEqual(runs[target], {"server": target, "viewport": result["viewport"]})
+                for target, record in saved["viewport"].items():
+                    if target not in saved["results"]:
+                        self.assertEqual((record["effective"], record["effective_unavailable_reason"]), (None, "not_observed"))
+                    elif reports is None:
+                        self.assertEqual((record["effective"], record["effective_unavailable_reason"]),
+                                         (None, "track_pages_do_not_report"))
+                    elif not reports[target]:
+                        self.assertEqual((record["effective"], record["effective_unavailable_reason"]),
+                                         (None, "no_report_received"))
+                    else:
+                        self.assertEqual(record["effective"]["innerHeight"], reports[target][0]["innerHeight"])
+                        self.assertEqual(record["effective"]["reports"], len(reports[target]))
+                    if record["effective"] is None:
+                        self.assertFalse(record["content_viewport_equality_asserted"])
+                if reports == synthetic:
+                    self.assertTrue(saved["viewport"]["playwright"]["content_viewport_equality_asserted"])
+                    self.assertFalse(saved["viewport"]["kitsune"]["content_viewport_equality_asserted"])
+                self.assertEqual(manifest["viewport"]["kitsune"]["configured"]["content_viewport_construction"],
+                                 {"content_size": {"width": 1280, "height": 720}, "firefox_chrome_height": 85}
+                                 if reports else None)
                 for call in run.call_args_list:
-                    self.assertEqual(call.kwargs["viewport"], manifest["viewport"][call.args[0].id])
+                    # The run started with only configured geometry; observed values land beside it.
+                    self.assertIsNone(call.kwargs["viewport"]["effective"])
+                    self.assertEqual(call.kwargs["viewport"]["effective_unavailable_reason"], "not_observed")
+                    self.assertEqual(call.kwargs["viewport"]["configured"], manifest["viewport"][call.args[0].id]["configured"])
                 self.assertEqual(saved["timing"], {"kitsune_cold_start_setup_sec": 4})
                 self.assertEqual(saved["resource_phases"]["kitsune"], {"setup": setup, "ready": ready})
                 self.assertEqual(popen.call_count, 2)
                 self.assertEqual(run.call_count, 1 if stop_early else 2)
-                self.assertEqual(set(saved["results"]), {"playwright"} if stop_early else {"playwright", "kitsune"})
+                self.assertEqual(set(saved["results"]), set(targets[:1] if stop_early else targets))
                 for result in saved["results"].values():
                     self.assertEqual(result["timing"], {"relay_setup_sec": 2, "elapsed_minus_relay_setup_sec": 8,
                                                         "agent_native_rpc_sec": .5})
@@ -122,12 +155,54 @@ class SmokeTests(unittest.TestCase):
         self.assertEqual(kit["configured"]["window_size"], {"width": 900, "height": 650})
         for record in (pw, kit, viewport_record("kitsune")):
             self.assertIsNone(record["effective"])
-            self.assertEqual(record["effective_unavailable_reason"], "not_observable_without_agent_visible_calls")
+            self.assertEqual(record["effective_unavailable_reason"], "not_observed")
         self.assertIsNone(viewport_record("playwright")["configured"])
         conflicting = ("--width=1280", "--height=720", "--height=900")
         record = viewport_record("kitsune", (), conflicting)
         self.assertIsNone(record["configured"])
         self.assertEqual(record["configured_args"], list(conflicting))
+
+    def test_observed_viewport_from_synthetic_reports(self):
+        page = {"innerWidth": 1280, "innerHeight": 720, "outerWidth": 1280, "outerHeight": 805, "devicePixelRatio": 1}
+        record = viewport_record("kitsune", (), ("-headless", "--width=1280", "--height=805"), equalized=True)
+        for reports, reason in ((None, "track_pages_do_not_report"), ([], "no_report_received")):
+            with self.subTest(reason=reason):
+                missing = observed_viewport(record, reports)
+                self.assertIsNone(missing["effective"])
+                self.assertEqual(missing["effective_unavailable_reason"], reason)
+                self.assertFalse(missing["content_viewport_equality_asserted"])
+                self.assertEqual(missing["configured"], record["configured"])
+        matched = observed_viewport(record, [page, page])
+        self.assertEqual(matched["effective"], {**page, "source": "fixture_page_load_report", "reports": 2,
+                                                "later_reports_differed": False})
+        self.assertIsNone(matched["effective_unavailable_reason"])
+        self.assertEqual(matched["reference"], REFERENCE)
+        self.assertTrue(matched["content_viewport_equality_asserted"])
+        self.assertEqual(matched["configured"]["window_size"], {"width": 1280, "height": 805})
+        # Mismatched targets: unequalized Kitsune (window 1280x720) shows 1280x635 content.
+        short = observed_viewport(viewport_record("kitsune", (), ("--width=1280", "--height=720")),
+                                  [dict(page, innerHeight=635, outerHeight=720)])
+        self.assertEqual(short["effective"]["innerHeight"], 635)
+        self.assertFalse(short["content_viewport_equality_asserted"])
+        self.assertFalse(observed_viewport(record, [dict(page, devicePixelRatio=2)])["content_viewport_equality_asserted"])
+        # The first report is recorded; a later different page withholds the assertion.
+        later = observed_viewport(record, [page, dict(page, innerWidth=1265)])
+        self.assertEqual(later["effective"]["innerWidth"], 1280)
+        self.assertTrue(later["effective"]["later_reports_differed"])
+        self.assertFalse(later["content_viewport_equality_asserted"])
+
+    def test_report_script_and_parser(self):
+        script, digest = report_script("http://127.0.0.1:1/t/x/viewport-report")
+        self.assertEqual(script, 'navigator.sendBeacon("http://127.0.0.1:1/t/x/viewport-report",new URLSearchParams('
+                                 '{innerWidth,innerHeight,outerWidth,outerHeight,devicePixelRatio}))')
+        self.assertRegex(digest, r"^'sha256-[A-Za-z0-9+/]{43}='$")
+        values = {"innerWidth": "1280", "innerHeight": "720", "outerWidth": "1280", "outerHeight": "805",
+                  "devicePixelRatio": "1.5"}
+        self.assertEqual(parse_report(values), {"innerWidth": 1280, "innerHeight": 720, "outerWidth": 1280,
+                                                "outerHeight": 805, "devicePixelRatio": 1.5})
+        for bad in (dict(values, innerWidth="-1"), dict(values, innerWidth="NaN"), {**values, "extra": "1"},
+                    {k: v for k, v in values.items() if k != "devicePixelRatio"}):
+            self.assertIsNone(parse_report(bad))
 
     def test_cli_smoke_default_is_safe(self):
         output = io.StringIO()

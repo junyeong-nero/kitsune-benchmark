@@ -26,7 +26,7 @@ from .cost_metrics import observation_volume, pair_resource_phases, rpc_records,
 from .adapter import (API_HARNESSES, PINNED_CODEX_VERSION, claude_budget, harness_environment, harness_pins, harness_preflight,
                       resolve, run, terminate_group, write_json)
 from .resources import ResourceCollector, ResourceRoot
-from .viewport import viewport_record
+from .viewport import CONTENT_HEIGHT, CONTENT_WIDTH, FIREFOX_CHROME_HEIGHT, observed_viewport, viewport_record
 from .specs import Server, Task, identifier, load_task, positive_int
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -110,6 +110,13 @@ def tool_surface(metadata_path: Path, enabled_tools: tuple[str, ...]) -> dict | 
             "missing": [name for name in enabled if name not in published]}
 
 
+def rewrite_json(path: Path, value: dict) -> None:
+    """Replace a private JSON record written earlier with write_json."""
+    temporary = path.with_name(path.name + ".tmp")
+    write_json(temporary, value)
+    os.replace(temporary, path)
+
+
 def benchmark_source() -> dict:
     """This repository's revision and nearest frozen taskset tag (e.g. taskset-v1-3-gabc1234-dirty)."""
     taskset = subprocess.run(["git", "-C", str(ROOT), "describe", "--tags", "--match", "taskset-*", "--dirty"],
@@ -135,12 +142,16 @@ def run_pair(*, execute: bool = False, kitsune_project: str | None = None,
              targets: tuple[str, ...] = TARGETS,
              kitsune_env: dict[str, str] | None = None,
              kitsune_firefox_args: tuple[str, ...] = (),
-             kitsune_firefox_prefs: dict[str, str] | None = None) -> dict:
+             kitsune_firefox_prefs: dict[str, str] | None = None,
+             viewport_reports: Callable[[str], list[dict] | None] | None = None,
+             equalize_kitsune_viewport: bool = False) -> dict:
     """kitsune_preset sets KITSUNE_TOOL_PRESET for the Kitsune server (A/B of its tool surface).
     targets restricts which MCPs run, e.g. Kitsune-only A/B arms.
     kitsune_env adds KITSUNE_* settings (e.g. KITSUNE_PROTECT_USER_TABS) for the Kitsune server;
     kitsune_firefox_args/prefs extend the web-ext Firefox launch (the coexistence track's user
-    channel). The defaults leave every existing track's launch unchanged."""
+    channel). viewport_reports returns a target's fixture page viewport reports after its run;
+    equalize_kitsune_viewport adds Firefox's chrome height to the Kitsune window so its content
+    viewport matches Playwright's. The defaults leave every existing track's launch unchanged."""
     if not targets or len(set(targets)) != len(targets) or set(targets) - set(TARGETS):
         raise ValueError("targets must be a non-empty subset of playwright, kitsune.")
     if kitsune_preset is not None and not re.fullmatch(r"[a-z][a-z0-9_-]{0,31}", kitsune_preset):
@@ -208,7 +219,7 @@ def run_pair(*, execute: bool = False, kitsune_project: str | None = None,
     specs = {
         "playwright": Server("playwright", "node", (
             str(playwright_cli), "--browser", "firefox", "--isolated", "--headless",
-            "--viewport-size", "1280x720"),
+            "--viewport-size", f"{CONTENT_WIDTH}x{CONTENT_HEIGHT}"),
             ("PLAYWRIGHT_BROWSERS_PATH", "PLAYWRIGHT_SKIP_BROWSER_GC", "PWTEST_SOCKETS_DIR"), 60, 45),
         "kitsune": Server("kitsune", "uv", ("run", "--locked", "--project", str(project), "kitsune"),
             kitsune_vars, 60, 45),
@@ -216,8 +227,10 @@ def run_pair(*, execute: bool = False, kitsune_project: str | None = None,
     specs = {target: specs[target] for target in targets}
     if enabled_tools is not None:
         specs = {target: replace(server, enabled_tools=enabled_tools[target]) for target, server in specs.items()}
-    firefox_args = ("-headless", "--width=1280", "--height=720", *kitsune_firefox_args)
-    viewports = {target: viewport_record(target, server.args, firefox_args) for target, server in specs.items()}
+    window_height = CONTENT_HEIGHT + (FIREFOX_CHROME_HEIGHT if equalize_kitsune_viewport else 0)
+    firefox_args = ("-headless", f"--width={CONTENT_WIDTH}", f"--height={window_height}", *kitsune_firefox_args)
+    viewports = {target: viewport_record(target, server.args, firefox_args, equalized=equalize_kitsune_viewport)
+                 for target, server in specs.items()}
     manifest = {
         "viewport": viewports,
         "experiment": spec, "harness": harness, "model": model, "reasoning_effort": effort,
@@ -231,7 +244,8 @@ def run_pair(*, execute: bool = False, kitsune_project: str | None = None,
         "extension_patch": patch_info,
         "http_port": http_port, "ws_port": ws_port,
         "limitations": ["One caller-ordered smoke pair, not benchmark evidence.",
-                        "Firefox window size is not a content viewport measurement; equivalence is not asserted.",
+                        "Configured Firefox window size is not a content viewport measurement; observed values,"
+                        " when fixture pages report them, are in viewport.effective once each run finishes.",
                         "External success evaluation not implemented." if evaluate is None
                         else "External per-target evaluator attached; inspect its track/integrity limits."],
     }
@@ -289,7 +303,10 @@ def run_pair(*, execute: bool = False, kitsune_project: str | None = None,
                              output_root=str(pair_dir / "runs"), confirm_isolated_browser=True,
                              resource_roots=external, resource_observer=resources, viewport=viewports[target],
                              harness=harness, effort=effort, max_budget_usd=max_budget_usd)
-                result["viewport"] = viewports[target]
+                result["viewport"] = observed_viewport(viewports[target],
+                                                       viewport_reports(target) if viewport_reports else None)
+                run_manifest = Path(result["run_dir"]) / "manifest.json"
+                rewrite_json(run_manifest, {**json.loads(run_manifest.read_text()), "viewport": result["viewport"]})
                 result["observation_volume"] = observation_volume(rpc_records(pair_dir, target))
                 result["timing"] = run_timing(pair_dir, target, result)
                 if evaluate is not None:
@@ -317,8 +334,11 @@ def run_pair(*, execute: bool = False, kitsune_project: str | None = None,
                     os.environ.pop(key, None)
                 else:
                     os.environ[key] = value
+    observed = {target: results[target]["viewport"] if target in results else record
+                for target, record in viewports.items()}
+    rewrite_json(pair_dir / "pair-manifest.json", {**manifest, "viewport": observed})
     summary = {"pair_dir": str(pair_dir), "harness": harness, "model": model, "results": results,
-               "task_success": None, "viewport": viewports,
+               "task_success": None, "viewport": observed,
                "evaluation": "per_target_external_evaluator" if evaluate else "not_implemented",
                "resource_summary_path": str(pair_dir / "resource-summary.json"),
                "resource_phases": pair_resource_phases(resources.summary, specs),

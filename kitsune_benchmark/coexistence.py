@@ -272,7 +272,7 @@ def run_coexistence(*, execute: bool = False, task_ids: list[str] | None = None,
                 harness=harness, targets=targets,
                 kitsune_env={"KITSUNE_PROTECT_USER_TABS": "1"} if protect_user_tabs else None,
                 kitsune_firefox_args=(f"--remote-debugging-port={port}", "--remote-allow-system-access"),
-                kitsune_firefox_prefs=USER_CHANNEL_PREFS)
+                kitsune_firefox_prefs=USER_CHANNEL_PREFS, equalize_kitsune_viewport=True)
         pair.update(coexistence_task=task["id"], variant=variant, protect_user_tabs=protect_user_tabs,
                     kitsune_source_after=source_revision(project))
         write_json(Path(pair["pair_dir"]) / "coexistence-summary.json", pair)

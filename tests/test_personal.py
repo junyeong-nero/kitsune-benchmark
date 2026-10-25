@@ -631,7 +631,7 @@ for line in sys.stdin:
 
 
 @contextmanager
-def isolated_kitsune(folder):
+def isolated_kitsune(folder, height=720):
     """Match the paired runner's isolated Firefox/extension setup, without Codex."""
     import secrets
     import subprocess
@@ -657,7 +657,7 @@ def isolated_kitsune(folder):
         browser = spawn([str(ROOT / "node_modules/.bin/web-ext"), "run", "--no-config-discovery", "--no-input",
             "--source-dir", str(destination), "--artifacts-dir", str(Path(folder) / "web-ext"),
             "--firefox", binary, "--no-reload", "--start-url", "about:blank", "--args=-headless",
-            "--args=--width=1280", "--args=--height=720"], "firefox.log")
+            "--args=--width=1280", f"--args=--height={height}"], "firefox.log")
         await_bridge(http_port, env["KITSUNE_TOKEN"], browser, extension=True)
         with patch.dict(os.environ, env):
             yield ["uv", "run", "--locked", "--project", str(project), "kitsune"]
