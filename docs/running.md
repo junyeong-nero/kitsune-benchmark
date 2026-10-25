@@ -218,7 +218,7 @@ PERSONAL_BROWSER_TEST=1 PERSONAL_KITSUNE_TEST=1 KITSUNE_PROJECT=../kitsune \
   uv run --locked python -m unittest discover -s tests -p test_taskset_v3.py -k Native
 ```
 
-`taskset-v3` is pending its owner-created tag. It adds four long-page personal
+`taskset-v3` (tag at `4d73130`) adds four long-page personal
 tasks (28 total); gallery's benchmark ID remains v2, and the seeded-tab custody
 contract is unchanged. Compare only reruns on the same v3 freeze, never v3
 scores with v1.x/v2. Personal summaries report success, tokens and existing
