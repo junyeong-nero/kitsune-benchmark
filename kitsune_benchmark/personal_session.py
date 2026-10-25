@@ -163,7 +163,36 @@ class NativeSession:
             result = self.request("tools/call", {"name": name, "arguments": arguments})
             self.evidence["harness_calls"] += 1
             if "error" in result or result.get("result", {}).get("isError"):
-                raise ValueError("Harness browser tool failed.")
+                fields = {"stage": "tools/call", "duration_sec": time.monotonic() - started}
+                if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_-]{0,63}", name):
+                    fields["tool"] = name
+                native = result.get("result", {})
+                sources = [result.get("error"), native.get("structuredContent")]
+                for item in native.get("content", []):
+                    if item.get("type") == "text":
+                        try:
+                            sources.append(json.loads(item.get("text", "")))
+                        except ValueError:
+                            pass
+                for source in list(sources):
+                    if isinstance(source, dict):
+                        sources.extend(source.get(key) for key in ("error", "data"))
+                for source in sources:
+                    if not isinstance(source, dict):
+                        continue
+                    for key in ("stage", "tool", "code"):
+                        value = source.get(key)
+                        if ((key == "code" and type(value) is int)
+                                or (isinstance(value, str)
+                                    and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_-]{0,63}", value)
+                                    and not value.lower().startswith(("sk-", "bearer", "token", "secret", "ghp_")))):
+                            fields[key] = value
+                    for key in ("duration", "duration_ms", "duration_sec", "durationMs"):
+                        value = source.get(key)
+                        if type(value) in (int, float) and 0 <= value < float("inf"):
+                            fields[key] = value
+                self.evidence["native_error"] = fields
+                raise ValueError("Harness browser tool failed: " + json.dumps(fields, sort_keys=True))
             return result["result"]
         finally:
             self.evidence["harness_seconds"] += time.monotonic() - started

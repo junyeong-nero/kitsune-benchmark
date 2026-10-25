@@ -293,7 +293,10 @@ def run(
         argv = claude_harness.command(path, server, model, COMMON_INSTRUCTIONS, effort,
                                       api=api, max_budget_usd=max_budget_usd, bare=harness == "claude-api")
         versions = {"harness": "claude_code", "claude_code_version": claude_harness.PINNED_CLAUDE_VERSION,
-                    "auth_policy": "anthropic_api_key_from_env_file" if api else "claude_ai_subscription_only"}
+                    "auth_policy": "anthropic_api_key_from_env_file" if api else "claude_ai_subscription_only",
+                    "mcp_startup": {"connection_nonblocking": False,
+                                    "timeout_ms": int(env["MCP_TIMEOUT"]),
+                                    "tool_timeout_ms": int(env["MCP_TOOL_TIMEOUT"])}}
         if api:
             # Workspace IDs are not secrets; record which workspace is billed.
             header = env.get("ANTHROPIC_CUSTOM_HEADERS", "")

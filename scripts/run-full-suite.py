@@ -1,7 +1,8 @@
 """Run every graded track (personal 24×3 variants, gallery 21×3×2 layouts, MiniWoB) under one total budget.
 
 Each track command gets the remaining budget via --budget-usd, so the suite as a whole never starts a pair
-whose worst case would exceed it. A failed or stopped command is logged and the next one still runs.
+whose worst case would exceed it. A failed, stopped, malformed or incomplete track stops the suite
+with exit 3 after the active target processes settle; ordinary scorable task failures do not.
 
 By default the personal and gallery tracks run Playwright and Kitsune as two concurrent processes (--targets
 playwright / --targets kitsune), each with its own fixture server, ports, profiles and half the remaining budget.
@@ -127,12 +128,15 @@ def main() -> int:
                     result = json.loads((out / f"{label}.json").read_text())
                 except (OSError, ValueError):
                     result = {}
+                if not isinstance(result, dict):
+                    result = {}
                 cost = result.get("estimated_cost_usd")
                 if cost is None and name == "miniwob" and api:
                     cost = worst_pair  # not reported by the MiniWoB runner; count its worst case
                 spent += cost or 0.0
                 entries.append({"name": name, **({"target": label.rsplit("-", 1)[1]} if parallel else {}),
-                                "exit": code, "seconds": round(time.time() - started, 1),
+                                "exit": code, "summary_valid": bool(result),
+                                "seconds": round(time.time() - started, 1),
                                 "cost_usd": cost, "spent_usd": round(spent, 6),
                                 "attempted_pairs": result.get("attempted_pairs"),
                                 "requested_pairs": result.get("requested_pairs"),
@@ -143,6 +147,16 @@ def main() -> int:
             print(json.dumps(entry), flush=True)
             with log.open("a") as handle:
                 handle.write(json.dumps(entry) + "\n")
+        # Wait for the active track's peers above, but never consume more model
+        # usage on later tracks after an invalid execution. MiniWoB reports a
+        # single pair (no suite counts); its nonzero exit signals unscorability.
+        failed = [entry for entry in entries if not entry.get("skipped") and (
+            entry.get("exit") != 0 or not entry.get("summary_valid") or entry.get("stopped_reason") or
+            (name != "miniwob" and (entry.get("requested_pairs") is None or
+             entry.get("completed_pairs") != entry.get("requested_pairs"))))]
+        if failed:
+            print(f"stopped: incomplete track {name}; no later tracks started", flush=True)
+            return 3
     print(f"done; estimated spend ${spent:.2f} of ${args.budget_usd:.2f}" if api
           else "done; subscription harness (usage counts against the plan's limits, not API credit)", flush=True)
     return 0

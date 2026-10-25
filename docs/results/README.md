@@ -10,6 +10,9 @@ For the same reports grouped by Kitsune revision, see
 
 | Date | Report | Model | Scope and outcome |
 | --- | --- | --- | --- |
+| 2026-10-25 | [v0.4.1 issue candidates: 40 additional model runs](2026-10-25-v0.4.1-model-validation.md) | `claude-opus-5-5`, medium (Claude Code subscription) | Separate targeted cohort, all scorable: incremental deletion PW 3/3 vs K 0/3; newline 3/3 vs 2/3 with disclosed fixture caveats; tables both 8/8, K input +4.4% crowded / +27.3% isolated; tabs and slider both 3/3. After review: Kitsune #267 and benchmark #11 filed; four existing issues received evidence comments |
+| 2026-10-25 | [Kitsune v0.4.1 full suite + coexistence, subscription](2026-10-25-opus-subscription-v0.4.1.md) | `claude-opus-5-5`, medium (Claude Code subscription; blocking MCP startup) | 448 selected scorable runs after one explicit setup retry (449 attempts). Personal PW 72/72 vs K 69/72, both 72/72 on v2; crowded both 63/63; isolated 63/63 vs 62/63; MiniWoB both pass. Coexistence view left initial tab: 22 vs 0; typing misdirected characters: 36 vs 0. Separate cohort from v0.4.0 API |
+| 2026-10-25 | [Kitsune v0.4.1 subscription attempt — incomplete](2026-10-25-opus-subscription-v0.4.1-incomplete.md) | `claude-opus-5-5`, medium (Claude Code subscription) | Stopped on MCP startup error; personal v0 PW 24/24 successes, Kitsune 2 successes + 1 unscorable out of 3 attempted. No full-suite score or comparison with the API cohort |
 | 2026-10-24 | [Opus full suite, Kitsune v0.4.0 + coexistence](2026-10-24-opus-full-v0.4.0.md) | `claude-opus-5-5`, medium (Claude Code API, bare) | `taskset-v1.2`, 398 scorable runs, $29.14: personal 72/72 PW vs 69/72 Kitsune (71/72 on contract v2), crowded 63/63 vs 62/63, isolated 62/63 vs 60/63; Kitsune now 0.83–0.93× cost of Playwright on joint successes (v0.3.1: 0.90–1.25×), screenshots 470 → 106; **regression: `fill_form` checkbox blocked under core caps** (kitsune#236); collapsed table rows unreachable (kitsune#237); coexistence v3 user view 2/24 PW vs 23/24 Kitsune at 0.84× cost |
 | 2026-10-23 | [Coexistence draft: user-seeded + typing user](2026-10-23-coexistence-user-seeded.md) | `claude-opus-5-5`, medium (Claude Code API, bare) | Draft track, 50 valid scorable runs, $2.83: 24 personal tasks user-seeded v1 24/24 both, **v3 user view 2/24 PW vs 24/24 Kitsune**; `co-typing-01` 87 vs 0 misdirected keystrokes; Kitsune 1.19× cost, 1.37× calls; first typing pair invalid (content BiDi input broke Juggler; fixed) |
 | 2026-10-23 | [Opus full suite, Kitsune v0.3.1](2026-10-23-opus-full-v0.3.1.md) | `claude-opus-5-5`, medium (Claude Code API, bare) | `taskset-v1.2` (same 23-tool allowlist), 398 scorable runs, $31.67: personal 72/72 PW vs 71/72 Kitsune; crowded 63/63 vs 61/63, isolated 62/63 vs 60/63; Kitsune 1.3–1.7× calls on joint successes; snapshot lacks text/link URLs, Playwright selector syntax unsupported, hover does not scroll |
@@ -41,8 +44,9 @@ Each new report should identify:
   credentials, session tokens, real page contents or unreviewed raw logs.
 
 The six-task personal pilot is recorded, **only for variant 0 with one attempt
-per MCP**. The later reports include 24-task model evaluations. No real-account experiment,
-repeated/counterbalanced comparison or WebArena result has been recorded. Native-browser
+per MCP**. Later reports include 24-task model evaluations and targeted repeated,
+counterbalanced trials; their scope and limitations are recorded in each report.
+No real-account experiment or WebArena result has been recorded. Native-browser
 fixture tests and the TTL cache intervention use no model and must not be counted
 as LLM benchmark runs. See [optimization findings](../optimization-findings.md)
 for the evidence and precise observability limits.

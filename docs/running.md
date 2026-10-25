@@ -85,6 +85,14 @@ each MCP tool description in full. Reports up to 2026-10-24 used `--harness clau
 compare versions within one harness, never across. `--harness codex` (ChatGPT login)
 remains available.
 
+The Claude harness forces `MCP_CONNECTION_NONBLOCKING=false`: Claude Code
+`2.1.303` otherwise may start inference while a slow fixture's MCP catalog is
+still pending. `MCP_TIMEOUT` alone does not make connection blocking. Each run
+manifest records this startup policy and its timeouts. A missing/empty initial
+tool catalog or a pending/failed MCP connection is a harness error, not a task
+failure. This startup correction is a harness change; keep pre-fix incomplete
+attempts separate from corrected runs.
+
 **API-key billing is opt-in (`--harness claude-api`, `claude-api-full`).** These
 spend `ANTHROPIC_API_KEY` credit from the repository `.env` and refuse to execute
 without **`--allow-api-billing`**. Same Claude Code isolation, authenticated only by
@@ -128,6 +136,11 @@ suite log has one entry per target). `--sequential` restores paired,
 Playwright-first runs in one process. A Playwright-only process starts no Kitsune
 bridge or browser. `scripts/analyze-per-tool.py <out>` compares the two targets
 tool by tool (calls, errors, latency, response size, grouped error texts).
+The full-suite driver exits **3** after an invalid/incomplete track (nonzero exit,
+stopped reason, malformed summary, or incomplete coverage), once its active
+target processes have settled. It does not start later tracks or retry. Ordinary
+scorable task failures still allow the suite to continue. Use a fresh output
+directory for each attempt; do not overwrite previous evidence.
 
 ```sh
 # Subscription (default): no API credit, no dollar cap.
@@ -178,11 +191,13 @@ Isolation: `--setting-sources ""` (no user/project settings or hooks),
 `--strict-mcp-config` with the single `browser` server, `--tools ""` (no
 built-in tools), `--permission-mode dontAsk`, no session persistence. Because
 `--allowedTools` only pre-approves, `mcp_tool_filter.py` hides non-allowlisted
-tools from `tools/list`, matching Codex `enabled_tools`. The stream-json audit
-reports `input_tokens` as total input (`cached_input_tokens` = cache reads, a
-subset) and `list_price_cost_usd`, which is Claude Code's list-price estimate,
-not the subscription charge. Results from different harnesses/models are
-separate experiments, not one leaderboard.
+tools from `tools/list`, matching Codex `enabled_tools`. Upstream exit or stdout
+EOF closes the relay even while client stdin stays open, preserving upstream
+failure status; cleanup escalates from stdin EOF to terminate and then kill.
+The stream-json audit reports `input_tokens` as total input
+(`cached_input_tokens` = cache reads, a subset) and `list_price_cost_usd`, which
+is Claude Code's list-price estimate, not the subscription charge. Results
+from different harnesses/models are separate experiments, not one leaderboard.
 
 ### Personal browsing: recommended starting point
 

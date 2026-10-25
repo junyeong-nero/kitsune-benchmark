@@ -12,7 +12,9 @@ when model, harness and tasks match.
 
 | Kitsune | Revisions | Reports |
 | --- | --- | --- |
-| **v0.3.1** | `4ad65ee` (tag) | Opus full suite (2026-10-23; `taskset-v1.2`) |
+| **v0.4.1** | `83acfe9` (tag) | Subscription full suite + coexistence (2026-10-25), completed after startup correction and one explicit setup retry; earlier incomplete attempt retained |
+| v0.4.0 | `a03df44` (tag) | Opus full suite + coexistence (2026-10-24; API harness) |
+| v0.3.1 | `4ad65ee` (tag) | Opus full suite (2026-10-23; `taskset-v1.2`) |
 | v0.3.0 | `99a90d2` (tag); `d616c50` = v0.3.0 + docs/agents only (`server.py` comment change) | Opus full suite (2026-10-23; `taskset-v1`), 2026-10-22 rerun, disclosure, target view, Sonnet/Opus, integrated startup, tool usage |
 | v0.2.1 → v0.3.0 (main) | `9d36c57`, `1045a5e`, `cf24851`, `56bd5d9`, `753406b` | 2026-10-21 personal 24, token efficiency, gallery |
 | v0.1.0 → v0.2.0 (main) | `967dfdf`, `68f7e97` | 2026-10-18 smoke and MiniWoB, 2026-10-19 personal pilots |
@@ -79,6 +81,19 @@ together with the next Kitsune release:
 
 Steps 1 and 3 are observations; a claim that the release is better on some metric
 still goes through a `hypothesis` issue.
+
+## v0.4.1
+
+`83acfe92272cd5bb0909785d7d821d05136710d0`. Checkbox/core capability and early-refusal
+fixes (#242), collapsed-row reachability (#243), selector forms (#245). Subscription
+results below are a separate cohort, **not** a version-performance comparison
+with the earlier API cohort. The first attempt's startup problem was corrected
+by forcing blocking MCP connection in the benchmark harness.
+
+| Date | Report | Model / harness | Kitsune revision | Notes |
+| --- | --- | --- | --- | --- |
+| 2026-10-25 | [Full suite + coexistence, subscription](2026-10-25-opus-subscription-v0.4.1.md) | `claude-opus-5-5`, Claude Code subscription | `83acfe9` (`v0.4.1`) | 448 selected scorable runs after one explicit setup retry; personal 72/72 PW vs 69/72 K (v2 both 72/72), crowded both 63/63, isolated 63/63 vs 62/63; coexistence v3 view 2/24 vs 23/24 |
+| 2026-10-25 | [Subscription attempt — incomplete](2026-10-25-opus-subscription-v0.4.1-incomplete.md) | `claude-opus-5-5`, Claude Code subscription | `83acfe9` (`v0.4.1`) | Personal v0: PW 24 successes; Kitsune 2 successes + 1 unscorable, then stopped. MCP still pending with no tools at inference start; no full-suite score |
 
 ## v0.4.0
 
