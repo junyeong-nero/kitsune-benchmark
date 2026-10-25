@@ -10,6 +10,7 @@ from unittest.mock import Mock, patch
 
 from kitsune_benchmark.adapter import command, plan, run, settings, preflight, terminate_group
 from kitsune_benchmark.audit import audit_events
+from kitsune_benchmark.viewport import viewport_record
 from kitsune_benchmark.runtime import API_ENV, codex_environment, find_codex
 from kitsune_benchmark.specs import Server, Task, load_server, load_task, toml_value
 
@@ -123,7 +124,8 @@ sys.exit(1 if {mode!r}=='error' else 0)
     def test_successful_fake_run_is_unscored_and_private(self):
         path = self.fake_codex()
         with patch.dict(os.environ, {"OPENAI_API_KEY": "NEVER_PASS_THIS"}):
-            result = self.execute(path)
+            viewport = viewport_record("playwright", ("--viewport-size", "1280x720"))
+            result = self.execute(path, viewport=viewport)
         self.assertEqual(result["execution_status"], "completed_unscored")
         self.assertIsNone(result["task_success"])
         self.assertEqual(result["evaluation"], "not_implemented")
@@ -143,6 +145,7 @@ sys.exit(1 if {mode!r}=='error' else 0)
         manifest = json.loads((run_dir / "manifest.json").read_text())
         self.assertEqual(manifest["codex_version"], "0.163.0")
         self.assertEqual(manifest["environment_reset"], "not_implemented")
+        self.assertEqual(manifest["viewport"], viewport)
 
     def test_requires_browser_confirmation_before_preflight(self):
         with self.assertRaises(ValueError):

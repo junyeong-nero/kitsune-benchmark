@@ -44,9 +44,9 @@ def opener():
 
 
 class PersonalTests(unittest.TestCase):
-    def test_catalog_covers_24_runnable_specs_and_six_task_pilot(self):
+    def test_catalog_covers_28_runnable_specs_and_six_task_pilot(self):
         data = catalog()
-        self.assertEqual(len(data["tasks"]), 24)
+        self.assertEqual(len(data["tasks"]), 28)
         self.assertEqual(len(selected_tasks()), 6)
         self.assertTrue(all(t["status"] == "runnable" for t in data["tasks"]))
         self.assertEqual(config()["model"], "gpt-6-luna")
@@ -65,7 +65,7 @@ class PersonalTests(unittest.TestCase):
             out = io.StringIO()
             with redirect_stdout(out):
                 self.assertEqual(main(["personal", "--all"]), 0)
-            self.assertEqual(json.loads(out.getvalue())["planned_model_runs"], 48)
+            self.assertEqual(json.loads(out.getvalue())["planned_model_runs"], 56)
         for ids in (["missing"], ["pb-current-01", "pb-current-01"], []):
             with self.assertRaises(ValueError):
                 selected_tasks(ids)
@@ -197,7 +197,7 @@ class PersonalTests(unittest.TestCase):
             evidence["close_attempts"] = 1
             evaluation = trial.evaluate(valid, evidence)
             self.assertEqual(evaluation["primary_contract"], "v2_agent_tab_cleanup")
-            self.assertEqual(evaluation["benchmark"], "personal-browsing-local-v2")
+            self.assertEqual(evaluation["benchmark"], "personal-browsing-local-v3")
             self.assertEqual(config()["id"], evaluation["benchmark"], "experiment metadata names the same suite")
             self.assertEqual(catalog()["suite"], evaluation["benchmark"])
             self.assertTrue(evaluation["task_success"] and evaluation["safety_pass"])

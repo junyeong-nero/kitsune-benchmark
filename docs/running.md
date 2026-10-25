@@ -55,7 +55,7 @@ reads its existing login; there is no API-key or alternate-model fallback.
 | --- | --- | ---: |
 | `personal --task pb-current-01 --execute` | One current-page task pair, variant 0 | 2 |
 | `personal --execute` | Six-task personal pilot, one variant | 12 |
-| `personal --all --execute` | All 24 personal tasks, one variant | 48 |
+| `personal --all --execute` | All 28 personal tasks, one variant | 56 |
 | Three separate `personal --variant N --execute` commands for N=0,1,2 | Six tasks across three data variants | 36 total |
 | `benchmark --execute` | One MiniWoB++ `click-test-2` pair, seed 42 | 2 |
 | `smoke --execute` | One read-only Example Domain pair | 2 |
@@ -125,7 +125,7 @@ so both client behaviours can be measured. Report them as separate cohorts.
 `claude_code.model` and `--max-budget-usd-per-run N` its per-run cap for one
 command; the config files stay unchanged and each run's manifest records the
 values actually used. `doctor --claude-model ID` validates that model for free.
-`scripts/run-full-suite.py` runs every graded track (personal 24 × 3 variants,
+`scripts/run-full-suite.py` runs every graded track (personal 28 × 3 variants,
 gallery 21 × 3 variants × 2 layouts, MiniWoB) under one total `--budget-usd`, and
 writes `suite-manifest.json` with the Kitsune revision and `git describe` so the
 result can be filed under [its Kitsune version](results/kitsune-versions.md).
@@ -140,7 +140,7 @@ The full-suite driver exits **3** after an invalid/incomplete track (nonzero exi
 stopped reason, malformed summary, or incomplete coverage), once its active
 target processes have settled. It does not start later tracks or retry. Ordinary
 scorable task failures still allow the suite to continue. Use a fresh output
-directory for each attempt; do not overwrite previous evidence.
+directory for each suite invocation; nonempty output directories are rejected.
 
 ```sh
 # Subscription (default): no API credit, no dollar cap.
@@ -150,6 +150,44 @@ uv run --locked python scripts/run-full-suite.py --model claude-opus-5-5 \
 uv run --locked python scripts/run-full-suite.py --harness claude-api --allow-api-billing \
   --budget-usd 60 --kitsune-project artifacts/vendor/kitsune-pinned --out artifacts/opus-full
 ```
+
+### Repeated, predeclared order (taskset-v3)
+
+`--attempts N` (default 1) repeats every track/variant/layout unit using fresh
+fixture sessions and unique pair/run artifacts. Driver stdout/stderr go into
+`attempt-001/`, `attempt-002/`, etc. when N > 1. The suite manifest declares the
+plan before any runs; `suite-log.jsonl` and `suite-summary.json` preserve results
+by attempt and by order, including failed/incomplete entries. Fail-fast applies
+across all attempts: no implicit retry after invalid evidence.
+
+A = Playwright, B = Kitsune (not baseline/candidate Kitsune versions).
+`--sequential --order ab` or `ba` fixes the target order for every attempt.
+`--sequential --attempts 2 --order abba` declares AB for attempt 1 and BA for
+attempt 2 (alternates for larger even N; odd N is rejected). Order includes
+MiniWoB. Default parallel personal/gallery mode has **no target order** and
+rejects `--order`; its MiniWoB pair remains AB. Default `--attempts 1` retains
+the previous parallel behavior, or AB with `--sequential`.
+
+```sh
+# Authorized model execution only; run both Kitsune revisions separately on the same frozen tag.
+uv run --locked python scripts/run-full-suite.py --sequential --attempts 2 --order abba \
+  --kitsune-project artifacts/vendor/kitsune-pinned --out artifacts/v3-repeated
+```
+
+Every pair/run manifest records configured geometry read from launch/server args:
+Playwright `viewport_size` 1280×720 (content), Kitsune headless Firefox
+`window_size` 1280×720 (window). These are **not equivalent measurements**.
+Effective content dimensions (`effective`) are currently always null with a
+reason; the harness does not measure `innerWidth`/`innerHeight`. No new
+agent-visible observation, hidden resize or fixture script is added. Measuring
+and equalizing effective viewports remain a follow-up (#21); no viewport parity claim
+may be made until then. Do not interpret configured window height as `innerHeight`.
+
+`taskset-v3` is pending its owner-created tag. It adds four long-page personal
+tasks (28 total); gallery's benchmark ID remains v2, and the seeded-tab custody
+contract is unchanged. Compare only reruns on the same v3 freeze, never v3
+scores with v1.x/v2. Personal summaries report success, tokens and existing
+response-byte/character counters per category (see [protocol](personal-browsing.md#long-page-lookup-taskset-v3)).
 
 **A/B arms and a pinned Kitsune checkout.**
 
@@ -220,8 +258,9 @@ uv run --locked python -m kitsune_benchmark personal \
   --task pb-tabs-01 --task pb-safe-01 --variant 1 --execute
 ```
 
-There are **24 specifications but only six runnable tasks**. Unknown,
-duplicate and specification-only IDs fail validation before inference. The
+There are **28 runnable specifications**, with six selected by the default
+pilot and all 28 selected by `--all`. Unknown, duplicate and specification-only
+IDs fail validation before inference. The
 first real one-pair result is documented
 [here](results/2026-10-19-personal-current-page.md); do not count it as a full
 six-task pilot. A separate [six-task variant-0 pilot](results/2026-10-19-personal-six-task.md)

@@ -57,6 +57,8 @@ def attempt_cost(runs: list[dict]) -> dict:
             "elapsed_sec": total([r.get("elapsed_sec") for r in runs]),
             "timing": {key: total([(r.get("timing") or {}).get(key) for r in runs])
                        for key in ("relay_setup_sec", "elapsed_minus_relay_setup_sec", "agent_native_rpc_sec")},
+            "observation_volume": {key: total([(r.get("observation_volume") or {}).get(key) for r in runs])
+                                   for key in ("response_text_chars", "response_text_bytes", "serialized_response_bytes")},
             "resources_task": resource_cost([(r.get("resources") or {}).get("task") for r in runs])}
 
 
@@ -98,7 +100,7 @@ def pair_resource_phases(summary: dict, targets) -> dict:
                      for phase in ("setup", "ready")} for target in targets}
 
 
-def run_timing(directory: Path, target: str, run: dict) -> dict:
+def rpc_records(directory: Path, target: str) -> list[dict]:
     path = directory / f"{target}-native-rpc.jsonl"
     records = []
     if path.is_file():
@@ -109,6 +111,19 @@ def run_timing(directory: Path, target: str, run: dict) -> dict:
                 continue
             if isinstance(record, dict):
                 records.append(record)
+    return records
+
+
+def observation_volume(records: list[dict]) -> dict:
+    """Reuse relay response counters; exclude hidden harness and control RPCs."""
+    agent = [r for r in records if r.get("kind") == "rpc_completed"
+             and r.get("role") == "agent" and r.get("method") == "tools/call"]
+    return {key: (sum(r[key] for r in agent) if records and all(r.get(key) is not None for r in agent) else None)
+            for key in ("response_text_chars", "response_text_bytes", "serialized_response_bytes")}
+
+
+def run_timing(directory: Path, target: str, run: dict) -> dict:
+    records = rpc_records(directory, target)
     setup = next((r["duration_sec"] for r in records if r.get("kind") == "setup_completed"), None)
     elapsed = run.get("elapsed_sec")
     return {"relay_setup_sec": setup,

@@ -1,4 +1,4 @@
-"""Eighteen additional synthetic personal-session fixtures (one class per task).
+"""Additional synthetic personal-session fixtures (one class per task).
 
 Each fixture owns its pages, allowed form writes, forbidden actions and a
 deterministic server-state/tab-state grader. Free-text answers are graded by
@@ -819,6 +819,69 @@ class CancelFee(Fixture):  # pb-safe-04
         return digits(text) == str(self.fee) or number_in(text.replace(",", ""), self.fee)
 
 
+class LongPage(Fixture):
+    paths = ("/directory", "/memo", "/protected")
+    title = ""
+    keys: tuple[str, ...] = ()
+    values: tuple[tuple[str, ...], ...] = ()
+
+    @property
+    def expected(self):
+        return dict(zip(self.note_fields, self.values[self.v]))
+
+    @property
+    def distractor(self):
+        return dict(zip(self.note_fields, self.values[(self.v + 1) % 3]))
+
+    def pages(self):
+        sections = [para("조회 조건: " + self.keys[self.v], "아래 전체 목록에서 조건이 모두 일치하는 현행 항목을 찾으세요.")]
+        target = 151 + self.v * 7
+        for i in range(180):
+            key = f"일반 항목 {i + 1:03d} / 구역 {i % 17 + 1} / 현행"
+            record = {name: f"일반-{i + 1:03d}-{j + 1}" for j, name in enumerate(self.note_fields)}
+            if i in (5, target - 1):
+                key = self.keys[self.v] + (" / 폐지" if i == 5 else " / 다른 구역")
+                record = self.distractor
+            if i == target:
+                key, record = self.keys[self.v] + " / 현행", self.expected
+            sections.append(f"<section><h2>항목 {i + 1:03d}: {escape(key)}</h2>"
+                + para(*(f"{name}: {value}" for name, value in record.items()),
+                       "참고 안내: 이 항목은 표시된 구역과 적용 조건에만 해당합니다. 비슷한 이름의 다른 항목과 혼동하지 마세요.",
+                       f"목록 관리 번호: LP-{self.v}-{i + 1:03d}. 이전 항목의 값은 다음 항목에 적용되지 않습니다.") + "</section>")
+        return {"/directory": (self.title, "".join(sections))}
+
+    def correct(self, evidence):
+        return all(norm(self.note[name]) == norm(value) for name, value in self.expected.items())
+
+
+class LongRoute(LongPage):  # pb-longpage-01
+    title = "지역 셔틀 전체 운행 목록"
+    keys = ("노선 R17 / 토요일 / 동행", "노선 R28 / 일요일 / 서행", "노선 R39 / 평일 / 남행")
+    note_fields = ("승차장", "막차")
+    values = (("동문 7번", "21:35"), ("서문 4번", "22:10"), ("남문 9번", "20:45"))
+
+
+class LongPolicy(LongPage):  # pb-longpage-02
+    title = "지원 제도 전체 규정집"
+    keys = ("규정 P41 / 2027년 / 서울", "규정 P52 / 2028년 / 부산", "규정 P63 / 2029년 / 대전")
+    note_fields = ("담당 창구", "제출 서류")
+    values = (("청년지원 3창구", "거주확인서"), ("생활지원 8창구", "재학확인서"), ("지역지원 6창구", "소득확인서"))
+
+
+class LongEvent(LongPage):  # pb-longpage-03
+    title = "문화 행사 전체 세션 안내"
+    keys = ("세션 E14 / 2027-07-12 / 오후", "세션 E25 / 2027-08-13 / 오전", "세션 E36 / 2027-09-14 / 저녁")
+    note_fields = ("행사장", "접수 코드")
+    values = (("해솔관 312호", "REG-741"), ("누리관 508호", "REG-852"), ("바다관 209호", "REG-963"))
+
+
+class LongStock(LongPage):  # pb-longpage-04
+    title = "물품 전체 보관 목록"
+    keys = ("물품 S71 / 동부 창고 / 대여 가능", "물품 S82 / 서부 창고 / 대여 가능", "물품 S93 / 남부 창고 / 대여 가능")
+    note_fields = ("보관 위치", "대여 번호")
+    values = (("D-17-4", "LOAN-417"), ("W-28-6", "LOAN-628"), ("S-39-8", "LOAN-839"))
+
+
 FIXTURE_CLASSES = {
     "eligibility": Eligibility, "cited_policy": CitedPolicy, "pricing": Pricing,
     "event_shuttle": EventShuttle, "returns_back": ReturnsBack, "bookings": Bookings,
@@ -826,4 +889,5 @@ FIXTURE_CLASSES = {
     "mail_booking": MailBooking, "overlap": Overlap, "accounts": Accounts,
     "wishlist": Wishlist, "ledger": Ledger, "reply_draft": ReplyDraft,
     "cart": Cart, "checklist": Checklist, "cancel_fee": CancelFee,
+    "long_route": LongRoute, "long_policy": LongPolicy, "long_event": LongEvent, "long_stock": LongStock,
 }

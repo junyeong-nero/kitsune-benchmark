@@ -1,4 +1,4 @@
-# Personal browsing MCP taskset v1
+# Personal browsing MCP taskset v3 (pending tag)
 
 [Documentation index](README.md) · [Running guide](running.md) ·
 [Six-task pilot](results/2026-10-19-personal-six-task.md) · [Optimization/log analysis](optimization-findings.md)
@@ -11,12 +11,13 @@ for the setup sequence and the dated report for actual measurements.
 Compare Playwright MCP and Kitsune MCP on **continuing work inside an existing
 browser session**, not just opening an empty browser and following a URL.
 
-- **24 specifications:** six categories, four tasks each, in
+- **28 specifications:** seven categories, four tasks each, in
   [`tasks/personal/catalog.json`](../tasks/personal/catalog.json).
-- **All 24 tasks are runnable local fixtures.** The original six (one per
-  category) form the default pilot; `personal --all` selects all 24. The 18
+- **All 28 tasks are runnable local fixtures.** The original six (one per
+  original category) form the default pilot; `personal --all` selects all 28. The 22
   newer fixtures live in `kitsune_benchmark/personal_fixtures.py`, grade
-  free-text answers by required facts, and open in-page links in new tabs.
+  free-text answers by required facts (exact field values for the long-page family),
+  and open in-page links in new tabs.
 - **Three deterministic data variants** (`0`, `1`, `2`) per runnable task.
   These are different inputs, not three identical repeated trials.
 - Configuration: [`configs/benchmarks/personal.json`](../configs/benchmarks/personal.json),
@@ -30,7 +31,7 @@ browser session**, not just opening an empty browser and following a URL.
   All 24 tasks, variant 0, were run on Claude Code + `claude-haiku-5-5` on
   2026-10-21: 21/24 Playwright vs 23/24 Kitsune
   ([report](results/2026-10-21-personal-24-claude-haiku.md)).
-  Variants 1/2 still have no recorded model evaluation; fixture tests are separate.
+  These historical runs predate v3; no v3 model evaluation is claimed.
 
 This is an original, synthetic **personal-browsing local track**. It is not a
 WebArena, WebVoyager, AssistantBench, MiniWoB++, or standard BrowserGym score.
@@ -63,7 +64,7 @@ enterprise work is not the focus; MiniWoB remains a separate low-level pilot.
 
 Every specification includes a natural-language request, initial state,
 success conditions, safety constraints, reset procedure, variation plan and
-provenance. All 24 have implemented fixtures and graders.
+provenance. All 28 have implemented fixtures and graders.
 
 | Category | Task | Description | Status |
 | --- | --- | --- | --- |
@@ -91,6 +92,42 @@ provenance. All 24 have implemented fixtures and graders.
 | Safe mutation | `pb-safe-02` | Add only the requested SKU to a cart without purchasing | Runnable |
 | Safe mutation | `pb-safe-03` | Change one checklist item while preserving all unrelated records | Runnable |
 | Safe mutation | `pb-safe-04` | Determine cancellation fees without cancelling the reservation | Runnable |
+| Long-page lookup | `pb-longpage-01` | Find the matching current shuttle stop and last departure | Runnable |
+| Long-page lookup | `pb-longpage-02` | Find the matching current policy desk and required document | Runnable |
+| Long-page lookup | `pb-longpage-03` | Find the matching current event room and registration code | Runnable |
+| Long-page lookup | `pb-longpage-04` | Find the matching current stock location and loan number | Runnable |
+
+## Long-page lookup (taskset-v3)
+
+`pb-longpage-01..04` add shuttle, policy, event and stock lookups to the original
+24 tasks. Each has 180 sections, a requested record after section 150, and early
+obsolete/near-miss records. Three deterministic variants change the conditions,
+answer and location; repeated attempts are separate from these variants. The
+request names both memo fields and asks for the displayed values only. Grading
+uses saved server-side memo state (whitespace/case ignored, otherwise exact),
+never final chat text. Each target/attempt starts with a fresh empty memo.
+
+The personal benchmark/config/catalog/evaluation ID is
+`personal-browsing-local-v3`; gallery stays `component-gallery-v2`. Existing 24
+tasks and their graders, and `seeded_tab_custody`/`v2_agent_tab_cleanup`, are
+unchanged in behavior. Use the `taskset-v2` checkout to reproduce v2 results;
+never compare v3 totals with v1.x/v2 scores. Rerun both Kitsune versions on the
+same frozen v3 checkout, model, harness and declared attempt/order plan.
+
+Personal summaries expose `by_category.long_page_lookup.<target>` with success,
+tokens and `cost_metrics.all_attempts.observation_volume`: response text
+characters/UTF-8 bytes and serialized response bytes, each with reported/missing
+run counts. These sum the existing native relay counters for **agent tools/call
+responses only**, not setup inventories or control RPCs. Missing diagnostics are
+null, not zero. Bytes/characters are not tokens; screenshots and protocol
+serialization differ from provider context accounting.
+
+Configured geometry is recorded in every pair/run manifest: Playwright's
+`--viewport-size` is a content viewport, while headless Firefox's `--width` and
+`--height` configure a window, not necessarily its content area. Effective
+`innerWidth`/`innerHeight` are currently unobserved (`effective: null`); no extra
+agent-visible calls, resize or page instrumentation are added. Equality is not
+asserted. Construction/measurement of equal content viewports remains a follow-up (#21).
 
 ## Fair starting state and reset
 
@@ -229,10 +266,10 @@ uv run --locked python -m kitsune_benchmark personal \
   --task pb-tabs-01 --task pb-safe-01 --execute
 ```
 
-The default is six tasks, **not all 24**. All three variants of the runnable
-pilot would be 6 tasks × 3 variants × 2 MCPs = **36 agent runs**. Implementing the
-full catalog would make a one-variant pass 48 runs and a three-variant pass 144.
-24 is a coverage target, not a power analysis or guarantee of statistical
+The default is six tasks, **not all 28**. All three variants of the runnable
+pilot would be 6 tasks × 3 variants × 2 MCPs = **36 agent runs**. The
+full catalog makes a one-variant pass 56 runs and a three-variant pass 168.
+28 is a coverage target, not a power analysis or guarantee of statistical
 sufficiency. Do not claim significance from a small score difference.
 
 Wall-clock budget: 180 seconds per agent run. **No token-budget stopping or
@@ -303,7 +340,7 @@ PERSONAL_BROWSER_TEST=1 PERSONAL_KITSUNE_TEST=1 \
   uv run --locked python -m unittest discover -s tests -p 'test_personal.py' -v
 ```
 
-Tests cover 24-spec consistency, all six fixtures and all three variants via
+Tests cover 28-spec consistency, all six fixtures and all three variants via
 HTTP, cookie/session separation, reset isolation, malformed/forbidden writes,
 missing evidence, safety overriding correct answers, native inventory parsing,
 relay schema/result preservation, quota-stop behavior and usage aggregation.

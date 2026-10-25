@@ -21,7 +21,7 @@ import time
 from urllib.parse import parse_qs, urlsplit
 
 from .adapter import with_claude_overrides
-from .smoke import ROOT, run_pair
+from .smoke import ROOT, TARGETS, run_pair
 from .specs import Task
 
 # taskset-v1.2: Kitsune v0.3.1 publishes Playwright MCP 0.0.83's 25 default tools under the same names, so both
@@ -247,7 +247,7 @@ class BenchmarkServer:
 def run_benchmark(*, execute: bool = False, fetch: bool = False,
                   kitsune_project: str | None = None, executable: str = "codex",
                   harness: str = "codex", claude_model: str | None = None,
-                  max_budget_usd_per_run: float | None = None) -> dict:
+                  max_budget_usd_per_run: float | None = None, targets: tuple[str, ...] = TARGETS) -> dict:
     spec = with_claude_overrides(config(), claude_model, max_budget_usd_per_run)
     source = fetch_source(spec) if fetch else ROOT / spec["source_directory"]
     if not execute:
@@ -257,7 +257,7 @@ def run_benchmark(*, execute: bool = False, fetch: bool = False,
     with BenchmarkServer(source, spec) as benchmark:
         result = run_pair(execute=True, kitsune_project=kitsune_project, executable=executable,
             experiment_spec=spec, artifact_scope="miniwob", task_for_target=benchmark.begin,
-            evaluate=benchmark.evaluate, enabled_tools=UI_TOOLS, harness=harness)
+            evaluate=benchmark.evaluate, enabled_tools=UI_TOOLS, harness=harness, targets=targets)
     result["benchmark_config"] = spec
     result["upstream_task_sha256"] = hashlib.sha256(
         (source / "miniwob/html/miniwob" / (spec["task_id"] + ".html")).read_bytes()).hexdigest()

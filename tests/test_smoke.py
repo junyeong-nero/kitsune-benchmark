@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 
 from kitsune_benchmark.__main__ import main
 from kitsune_benchmark.specs import Task
+from kitsune_benchmark.viewport import viewport_record
 from kitsune_benchmark.smoke import ROOT, WS_SETTING, benchmark_source, copy_extension, tool_surface, experiment, private_ports, run_pair
 
 
@@ -41,7 +42,8 @@ class SmokeTests(unittest.TestCase):
 
     def test_run_pair_records_live_timing_and_phases_even_if_first_target_stops(self):
         spec = experiment()
-        for stop_early in (False, True):
+        for stop_early, targets in ((False, ("playwright", "kitsune")), (True, ("playwright", "kitsune")),
+                                    (False, ("kitsune", "playwright"))):
             with self.subTest(stop_early=stop_early), tempfile.TemporaryDirectory() as folder:
                 root = Path(folder)
                 for filename in ("project/extension/manifest.json", "node_modules/.bin/web-ext",
@@ -84,8 +86,21 @@ class SmokeTests(unittest.TestCase):
                         patch("kitsune_benchmark.smoke.os.environ", {}):
                     summary = run_pair(execute=True, kitsune_project=str(root / "project"),
                                        experiment_spec=spec, task_for_target=lambda target: Task("test", "test"),
-                                       evaluate=lambda target, result: evaluation)
+                                       evaluate=lambda target, result: evaluation, targets=targets)
                 saved = json.loads((Path(summary["pair_dir"]) / "pair-summary.json").read_text())
+                manifest = json.loads((Path(summary["pair_dir"]) / "pair-manifest.json").read_text())
+                self.assertEqual(manifest["targets"], list(targets))
+                self.assertEqual([call.args[0].id for call in run.call_args_list], list(targets)[:1] if stop_early else list(targets))
+                self.assertEqual(manifest["viewport"], saved["viewport"])
+                self.assertEqual(manifest["viewport"]["playwright"]["configured"]["viewport_size"], {"width": 1280, "height": 720})
+                self.assertEqual(manifest["viewport"]["kitsune"]["configured"]["window_size"], {"width": 1280, "height": 720})
+                self.assertTrue(manifest["viewport"]["kitsune"]["configured"]["headless"])
+                for target, result in saved["results"].items():
+                    self.assertEqual(result["viewport"], manifest["viewport"][target])
+                    self.assertIsNone(result["viewport"]["effective"])
+                    self.assertFalse(result["viewport"]["content_viewport_equality_asserted"])
+                for call in run.call_args_list:
+                    self.assertEqual(call.kwargs["viewport"], manifest["viewport"][call.args[0].id])
                 self.assertEqual(saved["timing"], {"kitsune_cold_start_setup_sec": 4})
                 self.assertEqual(saved["resource_phases"]["kitsune"], {"setup": setup, "ready": ready})
                 self.assertEqual(popen.call_count, 2)
@@ -97,8 +112,22 @@ class SmokeTests(unittest.TestCase):
                     self.assertEqual(result["benchmark_evaluation"], evaluation)
                     self.assertEqual(json.loads((Path(result["run_dir"]) / "evaluation.json").read_text()), evaluation)
                 self.assertEqual([call.args[0] for call in collector.set_phase.call_args_list],
-                                 ["setup", "ready", "task_playwright"]
-                                 + ([] if stop_early else ["task_kitsune"]) + ["cleanup", "cleanup", "cleanup"])
+                                 ["setup", "ready"] + ["task_" + t for t in (targets[:1] if stop_early else targets)]
+                                 + ["cleanup", "cleanup", "cleanup"])
+
+    def test_viewport_records_parse_actual_args_and_do_not_guess(self):
+        pw = viewport_record("playwright", ("--viewport-size", "900x600"))
+        kit = viewport_record("kitsune", (), ("-headless", "--width=900", "--height=650"))
+        self.assertEqual(pw["configured"]["viewport_size"], {"width": 900, "height": 600})
+        self.assertEqual(kit["configured"]["window_size"], {"width": 900, "height": 650})
+        for record in (pw, kit, viewport_record("kitsune")):
+            self.assertIsNone(record["effective"])
+            self.assertEqual(record["effective_unavailable_reason"], "not_observable_without_agent_visible_calls")
+        self.assertIsNone(viewport_record("playwright")["configured"])
+        conflicting = ("--width=1280", "--height=720", "--height=900")
+        record = viewport_record("kitsune", (), conflicting)
+        self.assertIsNone(record["configured"])
+        self.assertEqual(record["configured_args"], list(conflicting))
 
     def test_cli_smoke_default_is_safe(self):
         output = io.StringIO()

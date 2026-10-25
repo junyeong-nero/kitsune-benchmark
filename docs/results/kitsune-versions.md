@@ -31,14 +31,17 @@ git tags of this repository:
 | `taskset-v1` (`f1ff9fa`) | First freeze | 2026-10-23 Opus full suite |
 | `taskset-v1.1` | Requests of `pb-research-02` (both evidence links) and `pb-account-03` (overlapping titles only) now state what their graders check. Graders, fixtures and gallery unchanged | None |
 | `taskset-v1.2` | Harness only, for Kitsune v0.3.1's Playwright-named core tools: both targets get the same allowlist, Playwright MCP 0.0.83's 25 default tools minus `browser_evaluate` and `browser_run_code_unsafe` (23). Setup reads Kitsune's index-addressed `browser_tabs` (`current` = Playwright's `(current)`). Tasks, graders and fixtures as v1.1 | Opus full suite on v0.3.1 |
-| **`taskset-v2`** (`39b58c3`, current) | Three changes vs v1.2. (1) #8: `pb-research-02` asks for the actual Saturday operating hours as an interval, "실제 운영 시간(시작–종료)", and its memo field is renamed `개장 시간` → `운영 시간`; the `Hours` grader still requires both times. (2) #9: ownership-aware cleanup (`contracts.v2_agent_tab_cleanup`) is the primary `task_success`/`safety_pass` in personal and gallery evaluations (`benchmark` and config ids `personal-browsing-local-v2`, `component-gallery-v2`) and the base of the coexistence v3 contracts. It follows each starting tab by identity (`seeded_tab_custody`, from the relay's new `tab_calls` record), so closing an original or navigating it to another URL fails, even if refused and even while a duplicate stays open; a reload is allowed and counted. Custody is `kept`, `violated` (with separate `attempted` and `lost`) or `unknown` (ambiguous alignments, misaligned call records, alignment budget); unknown is neither a violation nor unscorable, leaves a functional success without a primary verdict (`null`) and is counted as `custody_unknown`. Strict v1 stays in `contracts.v1_strict_close` with its URL rule, and `close_only_failure` marks a functionally successful v2 pass that v1 failed only for closing a tab; summaries add `successes_v1_strict_close`, `safety_failures_v1_strict_close`, `v1_close_only_failures` and `functional_successes`. (3) #10: gallery `mm-text` (distorted, CAPTCHA-like code) is replaced by `mm-label` (serial number on a product-label photo), and gallery evaluations add `failure_class`. Harness as v1.2; the relay only adds the hidden `tab_calls` record | None |
+| `taskset-v2` (`39b58c3`, latest tag) | Three changes vs v1.2. (1) #8: `pb-research-02` asks for the actual Saturday operating hours as an interval, "실제 운영 시간(시작–종료)", and its memo field is renamed `개장 시간` → `운영 시간`; the `Hours` grader still requires both times. (2) #9: ownership-aware cleanup (`contracts.v2_agent_tab_cleanup`) is the primary `task_success`/`safety_pass` in personal and gallery evaluations (`benchmark` and config ids `personal-browsing-local-v2`, `component-gallery-v2`) and the base of the coexistence v3 contracts. It follows each starting tab by identity (`seeded_tab_custody`, from the relay's new `tab_calls` record), so closing an original or navigating it to another URL fails, even if refused and even while a duplicate stays open; a reload is allowed and counted. Custody is `kept`, `violated` (with separate `attempted` and `lost`) or `unknown` (ambiguous alignments, misaligned call records, alignment budget); unknown is neither a violation nor unscorable, leaves a functional success without a primary verdict (`null`) and is counted as `custody_unknown`. Strict v1 stays in `contracts.v1_strict_close` with its URL rule, and `close_only_failure` marks a functionally successful v2 pass that v1 failed only for closing a tab; summaries add `successes_v1_strict_close`, `safety_failures_v1_strict_close`, `v1_close_only_failures` and `functional_successes`. (3) #10: gallery `mm-text` (distorted, CAPTCHA-like code) is replaced by `mm-label` (serial number on a product-label photo), and gallery evaluations add `failure_class`. Harness as v1.2; the relay only adds the hidden `tab_calls` record | None |
+| **`taskset-v3` (pending owner-created tag)** | Preparation for #16: personal `pb-longpage-01..04` × 3 deterministic variants, saved-note grading, per-category observation bytes/chars alongside success/tokens; personal ID `personal-browsing-local-v3`, gallery ID stays v2. Full-suite `--attempts` and predeclared AB/BA (`--order abba`) with fresh evidence and per-order/attempt reporting. Manifests record actual configured Playwright content-viewport vs Firefox window-size args, with unobserved effective content dimensions explicitly null; equality remains a follow-up. Original 24 tasks/graders and taskset-v2 seeded-tab custody unchanged | None; no v3 model runs yet |
 
 Earlier reports predate the tags and ran on earlier task/grader code. Scores on
 v1 and v1.1 are not compared directly: the two personal tasks changed their
 requests, so their recorded v1 notes cannot be re-graded as v1.1 answers.
 Likewise v1.x and v2 scores are never compared directly: v2 changes a request,
 the primary safety rule and one gallery task. Rerun every Kitsune version being
-compared on `taskset-v2`. A v1.x report's `task_success` is strict v1; a v2
+compared on the same frozen taskset. v3 scores likewise must never be compared
+with v1.x/v2: rerun every compared Kitsune version on `taskset-v3` after its
+owner creates the tag. A v1.x report's `task_success` is strict v1; a v2
 report's is ownership-aware v2, with strict v1 under `contracts`.
 Pair manifests record `benchmark_source.taskset` (e.g. `taskset-v1.1-2-gabc1234`;
 a `-dirty` suffix means uncommitted changes).
@@ -69,24 +72,24 @@ Rules:
 
 ### Upgrading with the next Kitsune release
 
-v1 has a ceiling: Haiku already reaches 23/24 personal and 21/21 isolated gallery,
-and there is one attempt per task in a fixed order. `taskset-v2` (above) only
-bundles the validity fixes of #8, #9 and #10. The harder taskset planned here
-moves to a later version, provisionally `taskset-v3`:
+`taskset-v3` preparation above adds the long-page family and repeated,
+counterbalanced full-suite planning. The tag is **pending**, not created by this
+change. There are no v3 scores yet, and no claim of equal effective viewports.
 
-1. Run the new release on the current taskset first, for continuity with this table.
-2. Freeze `taskset-v3` (harder tasks, repeated trials, counterbalanced order).
-   The draft [coexistence track](../coexistence.md) is its candidate content for
-   Kitsune's own promises: user-owned seeding and view telemetry over the personal
-   tasks, a typing user, and specified delegation/recovery tasks. It imports the
-   personal fixtures, graders and relay without changing them. `smoke.run_pair` gained
-   opt-in `kitsune_env`/`kitsune_firefox_args`/`kitsune_firefox_prefs` arguments
-   whose defaults leave every v1 launch unchanged.
-3. Run both the previous release and the new one on the new taskset, so it has
-   its own baseline.
+1. Review/freeze this preparation and have the owner create `taskset-v3`.
+2. Rerun both the previous and new Kitsune release on that exact tag with the
+   same model, harness, caps and predeclared attempt/order plan (for example,
+   `--sequential --attempts 2 --order abba`). Keep each revision's output in a
+   fresh directory. Do not reuse historical v1.x/v2 scores as a v3 baseline.
+3. Report success and tokens together with response bytes/chars for the new
+   long-page category, per-order/per-attempt results, and the manifests' viewport
+   uncertainty. Equal content viewport construction/measurement is still open;
+   configured Firefox window size is not a measured content viewport.
 
-Steps 1 and 3 are observations; a claim that the release is better on some metric
-still goes through a `hypothesis` issue.
+These are observations; a release-improvement claim still goes through a
+`hypothesis` issue. The [coexistence track](../coexistence.md) remains a separate
+draft, not new content silently added to the full suite. The taskset-v2
+user-seeded tab custody contract is retained unchanged.
 
 ## v0.4.1
 
