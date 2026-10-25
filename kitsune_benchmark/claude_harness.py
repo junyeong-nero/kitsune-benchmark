@@ -177,6 +177,11 @@ def claude_environment(
     env["PATH"] = str(Path(executable).absolute().parent) + os.pathsep + env.get("PATH", os.defpath)
     env.update({"NO_COLOR": "1", "DISABLE_AUTOUPDATER": "1", "DISABLE_TELEMETRY": "1",
                 "DISABLE_ERROR_REPORTING": "1", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"})
+    # Claude Code 2.1.303 defaults to nonblocking MCP connection. A slow
+    # fixture seed/tools-list can otherwise leave the first inference with no
+    # tools even though MCP_TIMEOUT has not expired. Own this switch rather
+    # than inheriting it: both subscription and API cohorts must await startup.
+    env["MCP_CONNECTION_NONBLOCKING"] = "false"
     if server is not None:
         env["MCP_TIMEOUT"] = str(server.startup_timeout_sec * 1000)
         env["MCP_TOOL_TIMEOUT"] = str(server.tool_timeout_sec * 1000)
@@ -414,7 +419,9 @@ def audit_events(path: Path, *, allowed_tools: tuple[str, ...] | None = None,
                     if expected_key_source is not None and event.get("apiKeySource") != expected_key_source:
                         violations.add("unexpected_auth_source")
                     tools = event.get("tools")
-                    init_tools = set(tools) if isinstance(tools, list) else set()
+                    init_tools = {t for t in tools if isinstance(t, str)} if isinstance(tools, list) else set()
+                    if not init_tools:
+                        harness_error = True
                     if not isinstance(tools, list) or any(
                             not isinstance(t, str) or not t.startswith(MCP_PREFIX) for t in tools):
                         violations.add("unexpected_builtin_tools")
@@ -529,7 +536,7 @@ def audit_events(path: Path, *, allowed_tools: tuple[str, ...] | None = None,
     return {
         "events": events,
         "turn_completed": completed,
-        "harness_error": harness_error,
+        "harness_error": harness_error or init_tools is None,
         "mcp_calls": len(calls),
         "completed_mcp_calls": len(completed_calls),
         "failed_mcp_calls": len(failed_calls),

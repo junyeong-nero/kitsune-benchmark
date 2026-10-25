@@ -74,6 +74,27 @@ class ClaudeHarnessTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             claude_environment("/opt/claude", ("ANTHROPIC_BASE_URL",), {"ANTHROPIC_BASE_URL": "x"})
 
+    def test_mcp_startup_blocks_and_cannot_be_overridden(self):
+        source = {"PATH": "/usr/bin", "MCP_CONNECTION_NONBLOCKING": "true", "MCP_TIMEOUT": "1"}
+        for key in (None, "explicit-api-key"):
+            env = claude_environment("/opt/claude", source=source, server=SERVER, api_key=key)
+            self.assertEqual(env["MCP_CONNECTION_NONBLOCKING"], "false")
+            self.assertEqual(env["MCP_TIMEOUT"], "30000")
+            self.assertEqual(env["MCP_TOOL_TIMEOUT"], "45000")
+        with self.assertRaises(ValueError):
+            claude_environment("/opt/claude", ("MCP_CONNECTION_NONBLOCKING",), source, SERVER)
+
+    def test_missing_pending_and_empty_catalog_are_harness_errors(self):
+        for status in ("pending", "failed", "connected"):
+            init = {**INIT, "tools": [], "mcp_servers": [{"name": "browser", "status": status}]}
+            result = audit(init, RESULT)
+            self.assertTrue(result["harness_error"])
+            self.assertEqual(result["mcp_calls"], 0)
+        self.assertTrue(audit(RESULT)["harness_error"])
+        # Malformed tool entries must not crash the audit (dicts are unhashable).
+        bad = audit({**INIT, "tools": [{"name": "browser_tabs"}]}, RESULT)
+        self.assertIn("unexpected_builtin_tools", bad["violations"])
+
     def test_successful_trace_usage_and_failed_calls(self):
         result = audit(INIT, tool_use("a"), tool_result("a"), tool_use("b", "mcp__browser__browser_click"),
                        tool_result("b", True), {"type": "rate_limit_event"}, RESULT)
@@ -284,7 +305,7 @@ print({chr(10).join(json.dumps(e) for e in events)!r}.replace('@SOURCE@', source
             result = run(server, Task("t", "prompt"), "claude-haiku-5-5", executable=path,
                          output_root=str(self.root / "runs"), confirm_isolated_browser=True,
                          harness="claude-api", max_budget_usd=0.5)
-        self.assertEqual(result["execution_status"], "incomplete", result)  # no MCP calls in the fake trace
+        self.assertEqual(result["execution_status"], "harness_error", result)  # empty MCP catalog
         self.assertEqual(result["violations"], [])
         self.assertEqual(result["list_price_cost_usd"], 0.004)
         seen = json.loads(observed.read_text())
@@ -296,6 +317,9 @@ print({chr(10).join(json.dumps(e) for e in events)!r}.replace('@SOURCE@', source
         manifest = json.loads((Path(result["run_dir"]) / "manifest.json").read_text())
         self.assertEqual(manifest["auth_policy"], "anthropic_api_key_from_env_file")
         self.assertEqual(manifest["api_cost"]["max_budget_usd_per_run"], 0.5)
+        self.assertEqual(manifest["mcp_startup"], {
+            "connection_nonblocking": False, "timeout_ms": server.startup_timeout_sec * 1000,
+            "tool_timeout_ms": server.tool_timeout_sec * 1000})
         with self.assertRaisesRegex(ValueError, "dollar cap"):
             run(server, Task("t", "p"), "m", executable=path, confirm_isolated_browser=True, harness="claude-api")
 
