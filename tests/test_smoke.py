@@ -4,9 +4,10 @@ from pathlib import Path
 import tempfile
 import unittest
 from contextlib import redirect_stdout
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from kitsune_benchmark.__main__ import main
+from kitsune_benchmark.specs import Task
 from kitsune_benchmark.smoke import ROOT, WS_SETTING, benchmark_source, copy_extension, tool_surface, experiment, private_ports, run_pair
 
 
@@ -37,6 +38,67 @@ class SmokeTests(unittest.TestCase):
             result = run_pair()
         self.assertFalse(result["model_invoked"])
         self.assertEqual(result["mode"], "smoke_plan_only")
+
+    def test_run_pair_records_live_timing_and_phases_even_if_first_target_stops(self):
+        spec = experiment()
+        for stop_early in (False, True):
+            with self.subTest(stop_early=stop_early), tempfile.TemporaryDirectory() as folder:
+                root = Path(folder)
+                for filename in ("project/extension/manifest.json", "node_modules/.bin/web-ext",
+                                 "node_modules/@playwright/mcp/cli.js", "firefox"):
+                    path = root / filename
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.touch()
+                collector = MagicMock()
+                collector.__enter__.return_value = collector
+                setup, ready = {"duration_sec": 4}, {"duration_sec": 1}
+                collector.summary = {"metrics": {"phase/setup/owner/kitsune": setup,
+                                                  "phase/ready/owner/kitsune": ready}}
+                def fake_run(server, task, model, **kwargs):
+                    run_dir = Path(kwargs["output_root"]) / server.id
+                    run_dir.mkdir(parents=True)
+                    records = [{"kind": "setup_completed", "duration_sec": 2},
+                               {"kind": "rpc_completed", "role": "agent", "method": "tools/call",
+                                "duration_sec": .5}]
+                    (run_dir.parent.parent / f"{server.id}-native-rpc.jsonl").write_text(
+                        "\n".join(json.dumps(r) for r in records) + '\n{"truncated":')
+                    return {"run_dir": str(run_dir), "elapsed_sec": 10,
+                            "execution_status": "error" if stop_early else "completed_unscored"}
+                evaluation = {"scorable": True, "task_success": True}
+                with patch("kitsune_benchmark.smoke.ROOT", root), \
+                        patch("kitsune_benchmark.smoke.resolve", return_value="fake-codex"), \
+                        patch("kitsune_benchmark.smoke.harness_environment", return_value={}), \
+                        patch("kitsune_benchmark.smoke.harness_preflight"), \
+                        patch("kitsune_benchmark.smoke.copy_extension", return_value={}), \
+                        patch("kitsune_benchmark.smoke.source_revision", return_value={}), \
+                        patch("kitsune_benchmark.smoke.benchmark_source", return_value={}), \
+                        patch("kitsune_benchmark.smoke.private_ports", return_value=(51234, 51235)), \
+                        patch("kitsune_benchmark.smoke.subprocess.run", return_value=MagicMock(stdout=str(root / "firefox"))), \
+                        patch("kitsune_benchmark.smoke.subprocess.Popen") as popen, \
+                        patch("kitsune_benchmark.smoke.await_bridge"), \
+                        patch("kitsune_benchmark.smoke.terminate_group"), \
+                        patch("kitsune_benchmark.smoke.ResourceCollector", return_value=collector), \
+                        patch("kitsune_benchmark.smoke.time.monotonic", side_effect=[100, 104]), \
+                        patch("kitsune_benchmark.smoke.time.sleep"), \
+                        patch("kitsune_benchmark.smoke.run", side_effect=fake_run) as run, \
+                        patch("kitsune_benchmark.smoke.os.environ", {}):
+                    summary = run_pair(execute=True, kitsune_project=str(root / "project"),
+                                       experiment_spec=spec, task_for_target=lambda target: Task("test", "test"),
+                                       evaluate=lambda target, result: evaluation)
+                saved = json.loads((Path(summary["pair_dir"]) / "pair-summary.json").read_text())
+                self.assertEqual(saved["timing"], {"kitsune_cold_start_setup_sec": 4})
+                self.assertEqual(saved["resource_phases"]["kitsune"], {"setup": setup, "ready": ready})
+                self.assertEqual(popen.call_count, 2)
+                self.assertEqual(run.call_count, 1 if stop_early else 2)
+                self.assertEqual(set(saved["results"]), {"playwright"} if stop_early else {"playwright", "kitsune"})
+                for result in saved["results"].values():
+                    self.assertEqual(result["timing"], {"relay_setup_sec": 2, "elapsed_minus_relay_setup_sec": 8,
+                                                        "agent_native_rpc_sec": .5})
+                    self.assertEqual(result["benchmark_evaluation"], evaluation)
+                    self.assertEqual(json.loads((Path(result["run_dir"]) / "evaluation.json").read_text()), evaluation)
+                self.assertEqual([call.args[0] for call in collector.set_phase.call_args_list],
+                                 ["setup", "ready", "task_playwright"]
+                                 + ([] if stop_early else ["task_kitsune"]) + ["cleanup", "cleanup", "cleanup"])
 
     def test_cli_smoke_default_is_safe(self):
         output = io.StringIO()

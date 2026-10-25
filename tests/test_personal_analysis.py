@@ -84,3 +84,24 @@ class PersonalAnalysisTests(unittest.TestCase):
                 self.assertEqual(data["both_successful_input_tokens"], 100)
                 self.assertEqual(data["diagnostic_runs"], 0)
                 self.assertEqual(data["totals"]["noncached_input_tokens"], 30)
+                self.assertEqual(data["both_successful_uncached_input_tokens"], 30)
+                self.assertEqual(data["cost_metrics"]["same_successful_tasks"]["usage"]["input_tokens"]["total"], 100)
+                self.assertIsNone(data["totals"]["setup_sec"])
+                self.assertEqual(data["totals_coverage"]["setup_sec"]["missing_runs"], 1)
+
+    def test_claude_raw_uncached_and_missing_costs_survive_analysis(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            pair, result = self.fixture(root)
+            result["usage"].update(cache_creation_input_tokens=10, uncached_input_tokens=20)
+            pair["results"]["playwright"] = {**result, "usage": {}, "benchmark_evaluation": {"scorable": False}}
+            path = root / "suite.json"
+            path.write_text(json.dumps({"pairs": [pair]}))
+            analysis = analyze_suite(path)
+            kitsune = analysis["by_target"]["kitsune"]
+            self.assertEqual(kitsune["totals"]["uncached_input_tokens"], 20)
+            self.assertIsNone(kitsune["both_successful_uncached_input_tokens"])
+            missing = analysis["by_target"]["playwright"]["cost_metrics"]["all_attempts"]
+            self.assertEqual(missing["usage"]["uncached_input_tokens"],
+                             {"total": None, "reported_runs": 0, "missing_runs": 1})
+            self.assertIsNone(missing["resources_task"]["observed_cpu_sec"]["total"])

@@ -18,6 +18,7 @@ import sys
 import threading
 from urllib.parse import parse_qs, urlsplit
 
+from .cost_metrics import aggregate_costs, normalized_usage
 from .adapter import claude_budget, harness_pins, with_claude_overrides, write_json
 from .miniwob import UI_TOOLS
 from .personal_fixtures import FIXTURE_CLASSES
@@ -559,6 +560,7 @@ def sum_attribution(runs: list[dict]) -> dict | None:
 def aggregate_results(pairs: list[dict]) -> dict:
     """Keep failures, missing usage and successful-run costs distinct."""
     totals = {}
+    costs = aggregate_costs(pairs)
     for target in ("playwright", "kitsune"):
         runs = [pair["results"][target] for pair in pairs if target in pair["results"]]
         scorable = [r for r in runs if r.get("benchmark_evaluation", {}).get("scorable")]
@@ -568,8 +570,8 @@ def aggregate_results(pairs: list[dict]) -> dict:
         def strict(r):
             return r["benchmark_evaluation"].get("contracts", {}).get("v1_strict_close", {})
         def sum_usage(items):
-            return {key: sum(r.get("usage", {}).get(key, 0) for r in items)
-                    for key in sorted({k for r in items for k in r.get("usage", {})})}
+            return {key: sum(normalized_usage(r).get(key, 0) for r in items)
+                    for key in sorted({k for r in items for k in normalized_usage(r)})}
         # Primary (v2) success/safety; functional success and strict v1 are separate dimensions. A functional
         # success with unknown custody has no primary verdict: it is reported, not counted as a pass or fail.
         known = [r for r in scorable if r["benchmark_evaluation"].get("task_success") is not None]
@@ -583,6 +585,7 @@ def aggregate_results(pairs: list[dict]) -> dict:
             "successes_v1_strict_close": sum(strict(r).get("task_success") is True for r in scorable),
             "safety_failures_v1_strict_close": sum(strict(r).get("safety_pass") is False for r in scorable),
             "v1_close_only_failures": sum(strict(r).get("close_only_failure") is True for r in scorable),
+            "cost_metrics": costs[target],
             "reported_usage_all_runs": sum_usage(usage_runs), "runs_with_usage": len(usage_runs),
             "reported_usage_successful_runs": sum_usage(success_usage), "successful_runs_with_usage": len(success_usage),
             "agent_calls_successful_runs": sum(r.get("mcp_calls", 0) for r in successes),

@@ -79,6 +79,7 @@ class FullSuiteTests(unittest.TestCase):
         self.assertEqual(len(launched), 4)
         self.assertEqual(len(waited), 4)
         self.assertEqual(entries[-1]["name"], "next")
+        self.assertEqual(entries[-1]["by_target"], result["by_target"])
 
 
 if __name__ == "__main__":
