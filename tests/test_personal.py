@@ -663,6 +663,15 @@ def isolated_kitsune(folder, height=720):
             yield ["uv", "run", "--locked", "--project", str(project), "kitsune"]
 
 
+def agent_tool(session, name: str, arguments: dict) -> dict:
+    """Send a tool call through the relay's agent path, which records the inventory and tab call the
+    custody grader aligns, as in a model run."""
+    emitted = []
+    session.forward({"jsonrpc": "2.0", "id": len(session.evidence["tab_calls"]) + 1000, "method": "tools/call",
+                     "params": {"name": name, "arguments": arguments}}, emitted.append)
+    return emitted[0]["result"]
+
+
 @unittest.skipUnless(os.environ.get("PERSONAL_KITSUNE_TEST") == "1", "opt-in isolated Kitsune/Firefox MCP test; no model calls")
 class NativeKitsuneTests(unittest.TestCase):
     def test_six_fixtures_seed_and_solve_via_real_kitsune_ui(self):
@@ -683,18 +692,17 @@ class NativeKitsuneTests(unittest.TestCase):
                         session.prepare()
                         source = {"policy": "/policy/current", "orders": "/order/2"}.get(task["fixture"])
                         if source:
-                            session.tool("browser_tabs", {"action": "new", "url": trial.url(source)})
+                            agent_tool(session, "browser_tabs", {"action": "new", "url": trial.url(source)})
                         draft = task["fixture"] in {"calendar", "contact"}
                         path = {"article": "/article", "products": "/compare", "policy": "/search", "orders": "/orders",
                                 "calendar": "/calendar", "contact": "/contact"}[task["fixture"]]
                         tab = next(t for t in session.inventory() if t["url"] == trial.url(path))
                         # Kitsune >= 0.3.1 publishes Playwright MCP's core tools: index-addressed tabs, `target`.
-                        session.tool("browser_tabs", {"action": "select", "index": tab["id"]})
+                        agent_tool(session, "browser_tabs", {"action": "select", "index": tab["id"]})
                         values = trial.expected if draft else {"메모": trial.expected["answer"]}
                         for label, value in values.items():
-                            session.tool("browser_type", {"target": f'input[name="{label}"]', "text": value})
-                        session.tool("browser_click", {"target": "form > button:first-of-type"})
-                        session.evidence["snapshots"].append(session.inventory())
+                            agent_tool(session, "browser_type", {"target": f'input[name="{label}"]', "text": value})
+                        agent_tool(session, "browser_click", {"target": "form > button:first-of-type"})
                         evaluation = trial.evaluate({"execution_status": "completed_unscored"}, session.evidence)
                         self.assertTrue(evaluation["task_success"], evaluation)
                     finally:
@@ -728,25 +736,24 @@ class NativeBrowserTests(unittest.TestCase):
                         # Read-only tasks explicitly open their evidence source in a new tab.
                         source = {"policy": "/policy/current", "orders": "/order/2"}.get(task["fixture"])
                         if source:
-                            session.tool("browser_tabs", {"action": "new", "url": trial.url(source)})
+                            agent_tool(session, "browser_tabs", {"action": "new", "url": trial.url(source)})
                         draft = task["fixture"] in {"calendar", "contact"}
                         path = {"article": "/article", "products": "/compare", "policy": "/search", "orders": "/orders",
                                 "calendar": "/calendar", "contact": "/contact"}[task["fixture"]]
                         tab = next(t for t in session.inventory() if t["url"] == trial.url(path))
-                        session.tool("browser_tabs", {"action": "select", "index": tab["id"]})
-                        response = session.tool("browser_snapshot", {})
+                        agent_tool(session, "browser_tabs", {"action": "select", "index": tab["id"]})
+                        response = agent_tool(session, "browser_snapshot", {})
                         snapshot = "\n".join(i.get("text", "") for i in response["content"])
                         values = trial.expected if draft else {"메모": trial.expected["answer"]}
                         for label, value in values.items():
                             match = re.search(r'textbox "' + re.escape(label) + r'" \[ref=([^\]]+)\]', snapshot)
                             self.assertIsNotNone(match, snapshot[:3000])
-                            session.tool("browser_type", {"target": match[1], "element": label, "text": value})
+                            agent_tool(session, "browser_type", {"target": match[1], "element": label, "text": value})
                         button = "초안 저장" if task["fixture"] == "calendar" else "임시저장" if draft else "저장"
-                        snapshot = "\n".join(i.get("text", "") for i in session.tool("browser_snapshot", {})["content"])
+                        snapshot = "\n".join(i.get("text", "") for i in agent_tool(session, "browser_snapshot", {})["content"])
                         match = re.search(r'button "' + button + r'" \[ref=([^\]]+)\]', snapshot)
                         self.assertIsNotNone(match, snapshot[:3000])
-                        session.tool("browser_click", {"target": match[1], "element": button})
-                        session.evidence["snapshots"].append(session.inventory())
+                        agent_tool(session, "browser_click", {"target": match[1], "element": button})
                         evaluation = trial.evaluate({"execution_status": "completed_unscored"}, session.evidence)
                         self.assertTrue(evaluation["task_success"], evaluation)
                     finally:

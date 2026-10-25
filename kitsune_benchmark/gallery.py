@@ -802,7 +802,8 @@ def run_gallery(*, execute: bool = False, task_ids: list[str] | None = None, cat
                 variant: int = 0, layout: str = "crowded", kitsune_project: str | None = None,
                 executable: str = "codex", harness: str = "codex", budget_usd: float | None = None,
                 kitsune_preset: str | None = None, targets: tuple[str, ...] = ("playwright", "kitsune"),
-                claude_model: str | None = None, max_budget_usd_per_run: float | None = None) -> dict:
+                claude_model: str | None = None, max_budget_usd_per_run: float | None = None,
+                codex_model: str | None = None) -> dict:
     from .adapter import claude_budget, harness_pins, with_claude_overrides
     from .miniwob import UI_TOOLS
     from .personal import aggregate_results, pair_complete
@@ -810,7 +811,7 @@ def run_gallery(*, execute: bool = False, task_ids: list[str] | None = None, cat
     if layout not in LAYOUTS or type(variant) is not int or variant not in range(3):
         raise ValueError("layout must be crowded|isolated and variant 0, 1 or 2.")
     tasks = select(task_ids, category)
-    spec = with_claude_overrides(config(), claude_model, max_budget_usd_per_run)
+    spec = with_claude_overrides(config(), claude_model, max_budget_usd_per_run, codex_model)
     model, _ = harness_pins(spec, harness)
     per_run = claude_budget(spec, harness)
     targets = tuple(targets)

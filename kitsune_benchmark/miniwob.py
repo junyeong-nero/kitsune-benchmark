@@ -247,8 +247,9 @@ class BenchmarkServer:
 def run_benchmark(*, execute: bool = False, fetch: bool = False,
                   kitsune_project: str | None = None, executable: str = "codex",
                   harness: str = "codex", claude_model: str | None = None,
-                  max_budget_usd_per_run: float | None = None, targets: tuple[str, ...] = TARGETS) -> dict:
-    spec = with_claude_overrides(config(), claude_model, max_budget_usd_per_run)
+                  max_budget_usd_per_run: float | None = None, targets: tuple[str, ...] = TARGETS,
+                  codex_model: str | None = None) -> dict:
+    spec = with_claude_overrides(config(), claude_model, max_budget_usd_per_run, codex_model)
     source = fetch_source(spec) if fetch else ROOT / spec["source_directory"]
     if not execute:
         return {"mode": "benchmark_plan_only", "model_invoked": False, "config": spec,

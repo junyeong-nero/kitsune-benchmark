@@ -125,6 +125,9 @@ so both client behaviours can be measured. Report them as separate cohorts.
 `claude_code.model` and `--max-budget-usd-per-run N` its per-run cap for one
 command; the config files stay unchanged and each run's manifest records the
 values actually used. `doctor --claude-model ID` validates that model for free.
+With `--harness codex`, `--codex-model ID` overrides the config's Codex `model` the
+same way; `scripts/run-full-suite.py --harness codex --model ID` passes it to every
+track and records it in `suite-manifest.json` (default: the config's Codex model).
 `scripts/run-full-suite.py` runs every graded track (personal 28 × 3 variants,
 gallery 21 × 3 variants × 2 layouts, MiniWoB) under one total `--budget-usd`, and
 writes `suite-manifest.json` with the Kitsune revision and `git describe` so the

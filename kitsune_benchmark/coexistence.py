@@ -224,13 +224,13 @@ def run_coexistence(*, execute: bool = False, task_ids: list[str] | None = None,
                     kitsune_project: str | None = None, executable: str = "codex", harness: str = "codex",
                     budget_usd: float | None = None, protect_user_tabs: bool = False,
                     targets: tuple[str, ...] = TARGETS, claude_model: str | None = None,
-                    max_budget_usd_per_run: float | None = None) -> dict:
+                    max_budget_usd_per_run: float | None = None, codex_model: str | None = None) -> dict:
     if type(variant) is not int or variant not in range(3):
         raise ValueError("Variant must be 0, 1 or 2.")
     tasks = selected_tasks(task_ids)
     spec = with_claude_overrides({**personal_config(), "id": "coexistence-v0-draft", "catalog": str(CATALOG.relative_to(ROOT)),
                                   "purpose": "User-seeded personal tasks and simulated-user coexistence fixtures; draft, not frozen"},
-                                 claude_model, max_budget_usd_per_run)
+                                 claude_model, max_budget_usd_per_run, codex_model)
     model, _ = harness_pins(spec, harness)
     per_run = claude_budget(spec, harness)
     targets = tuple(targets)
