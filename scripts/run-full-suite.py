@@ -68,7 +68,8 @@ def git_identity(project: str | Path, match: str | None = None) -> dict:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model", default="claude-opus-5-5", help="Claude model (default: claude-opus-5-5)")
+    parser.add_argument("--model", help="Model ID (default: claude-opus-5-5 for Claude harnesses, the config's "
+                                         "Codex model for --harness codex)")
     parser.add_argument("--budget-usd", type=float, help="API-key harnesses only: total suite cap")
     parser.add_argument("--max-budget-usd-per-run", type=float,
                         help="API-key harnesses only: per-run cap (default: the model's entry in "
@@ -90,6 +91,13 @@ def main() -> int:
     except ValueError as exc:
         parser.error(str(exc))
     api = args.harness in ("claude-api", "claude-api-full")
+    if args.model is None:
+        if args.harness == "codex":
+            sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+            from kitsune_benchmark.personal import config as personal_config
+            args.model = personal_config()["model"]
+        else:
+            args.model = "claude-opus-5-5"
     if api and not args.allow_api_billing:
         parser.error(f"--harness {args.harness} bills API credit; pass --allow-api-billing, or use the default "
                      "--harness claude (subscription).")
@@ -132,7 +140,7 @@ def main() -> int:
                 entries = [{"name": name, "skipped": "budget", "spent_usd": spent}]
             else:
                 base = [sys.executable, "-m", "kitsune_benchmark", *argv, "--harness", args.harness,
-                        *(["--claude-model", args.model] if args.harness != "codex" else []),
+                        *(["--claude-model", args.model] if args.harness != "codex" else ["--codex-model", args.model]),
                         *(["--max-budget-usd-per-run", str(args.max_budget_usd_per_run), "--allow-api-billing"] if api else []),
                         "--kitsune-project", args.kitsune_project, "--execute"]
                 parallel = not args.sequential and name != "miniwob"

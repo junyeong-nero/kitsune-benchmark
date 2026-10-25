@@ -634,11 +634,12 @@ def run_personal(*, execute: bool = False, task_ids: list[str] | None = None, va
                  kitsune_project: str | None = None, executable: str = "codex",
                  harness: str = "codex", budget_usd: float | None = None,
                  kitsune_preset: str | None = None, targets: tuple[str, ...] = TARGETS,
-                 claude_model: str | None = None, max_budget_usd_per_run: float | None = None) -> dict:
+                 claude_model: str | None = None, max_budget_usd_per_run: float | None = None,
+                 codex_model: str | None = None) -> dict:
     if type(variant) is not int or variant not in range(3):
         raise ValueError("Variant must be 0, 1 or 2.")
     tasks = selected_tasks(task_ids)
-    spec = with_claude_overrides(config(), claude_model, max_budget_usd_per_run)
+    spec = with_claude_overrides(config(), claude_model, max_budget_usd_per_run, codex_model)
     model, _ = harness_pins(spec, harness)
     per_run = claude_budget(spec, harness)
     targets = tuple(targets)

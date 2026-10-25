@@ -55,6 +55,17 @@ class CLITests(unittest.TestCase):
                 self.assertEqual(result["model"], "claude-opus-5-5")
                 self.assertEqual(result["worst_case_usd"], result["planned_model_runs"] * 5.0)
 
+    def test_codex_model_override_reaches_plans(self):
+        for command in (["personal", "--all"], ["gallery"], ["coexistence"], ["benchmark"]):
+            with self.subTest(command=command[0]):
+                out = io.StringIO()
+                with redirect_stdout(out):
+                    self.assertEqual(main([*command, "--harness", "codex", "--codex-model", "gpt-6.1-sol"]), 0)
+                result = json.loads(out.getvalue())
+                self.assertEqual(result.get("model") or result["config"]["model"], "gpt-6.1-sol")
+        with redirect_stdout(io.StringIO()), self.assertRaises(SystemExit):
+            main(["personal", "--harness", "claude", "--codex-model", "gpt-6.1-sol"])
+
     def test_claude_overrides_rejected_for_codex(self):
         with redirect_stdout(io.StringIO()), self.assertRaises(SystemExit):
             main(["personal", "--harness", "codex", "--claude-model", "claude-opus-5-5"])

@@ -127,8 +127,11 @@ def harness_environment(harness: str, path: str, server: Server | None = None,
 
 
 def with_claude_overrides(spec: dict, model: str | None = None,
-                          max_budget_usd_per_run: float | None = None) -> dict:
-    """Copy of spec with CLI overrides of its claude_code model/per-run cap; the config file stays unchanged."""
+                          max_budget_usd_per_run: float | None = None, codex_model: str | None = None) -> dict:
+    """Copy of spec with CLI overrides of its claude_code model/per-run cap and Codex model; the config file
+    stays unchanged."""
+    if codex_model is not None:
+        spec = {**spec, "model": text(codex_model, "codex_model")}
     if model is None and max_budget_usd_per_run is None:
         return spec
     pins = dict(spec.get("claude_code") or {})

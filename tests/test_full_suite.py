@@ -14,6 +14,12 @@ suite = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(suite)
 
 
+
+def suite_config_model():
+    from kitsune_benchmark.personal import config
+    return config()["model"]
+
+
 class FullSuiteTests(unittest.TestCase):
     def invoke(self, results, *, sequential=False, first="personal-v0", extra=(), tracks=None):
         launched = []
@@ -111,6 +117,17 @@ class FullSuiteTests(unittest.TestCase):
                 self.assertCountEqual(self.outputs, outputs + ["suite-manifest.json", "suite-summary.json"])
                 self.assertEqual(self.manifest["attempts"], 1)
                 self.assertTrue(all(entry["attempt"] == 1 for entry in entries))
+
+    def test_codex_harness_passes_and_records_its_model(self):
+        result = {"requested_pairs": 1, "completed_pairs": 1, "results": {"kitsune": {}}}
+        for extra, model in ((("--harness", "codex", "--model", "gpt-6.1-sol"), "gpt-6.1-sol"),
+                             (("--harness", "codex"), suite_config_model())):
+            with self.subTest(extra=extra):
+                code, launched, _, _ = self.invoke([(0, result)] * 19, tracks=suite.commands(), extra=extra)
+                self.assertEqual(code, 0)
+                self.assertTrue(all(cmd[cmd.index("--codex-model") + 1] == model and "--claude-model" not in cmd
+                                    for cmd in launched))
+                self.assertEqual(self.manifest["model"], model)
 
     def test_attempt_plan_and_invalid_parallel_order(self):
         self.assertEqual(suite.attempt_plan(1, None, False), [{"attempt": 1, "order": None}])

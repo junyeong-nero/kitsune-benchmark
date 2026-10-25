@@ -106,6 +106,8 @@ def main(argv: list[str] | None = None) -> int:
                            "(e.g. claude-opus-5-5); the override is recorded in each run's manifest")
         child.add_argument("--max-budget-usd-per-run", type=float,
                            help="claude-api harnesses only: override claude_code.max_budget_usd_per_run")
+        child.add_argument("--codex-model", help="Codex harness only: override the config's model "
+                           "(e.g. gpt-6.1-sol); the override is recorded in each run's manifest")
     doctor.add_argument("--claude-model", help="Model ID to validate with the claude-api harnesses")
     args = parser.parse_args(argv)
     claude = getattr(args, "harness", "codex").startswith("claude")
@@ -114,6 +116,10 @@ def main(argv: list[str] | None = None) -> int:
                  "max_budget_usd_per_run": getattr(args, "max_budget_usd_per_run", None)}
     if args.command != "doctor" and not claude and any(value is not None for value in overrides.values()):
         parser.error("--claude-model/--max-budget-usd-per-run need a Claude harness (--harness claude*).")
+    if getattr(args, "codex_model", None) is not None:
+        if claude:
+            parser.error("--codex-model needs --harness codex.")
+        overrides["codex_model"] = args.codex_model
     if (getattr(args, "execute", False) and getattr(args, "harness", None) in API_HARNESSES
             and not args.allow_api_billing):
         parser.error(f"--harness {args.harness} bills API credit (ANTHROPIC_API_KEY). The default --harness claude "
@@ -179,7 +185,7 @@ def main(argv: list[str] | None = None) -> int:
                 item.get("benchmark_evaluation", {}).get("scorable") for item in results.values()) else 3
         if args.command == "smoke":
             spec = with_claude_overrides(smoke_experiment(), overrides["claude_model"],
-                                         overrides["max_budget_usd_per_run"])
+                                         overrides["max_budget_usd_per_run"], overrides.get("codex_model"))
             if args.task_file:
                 load_task(args.task_file)  # validate before any process starts
                 spec = {**spec, "task": str(Path(args.task_file).resolve())}
