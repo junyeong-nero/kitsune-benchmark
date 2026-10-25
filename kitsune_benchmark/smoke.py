@@ -22,10 +22,11 @@ import urllib.error
 import urllib.request
 import uuid
 
-from .cost_metrics import pair_resource_phases, run_timing
+from .cost_metrics import observation_volume, pair_resource_phases, rpc_records, run_timing
 from .adapter import (API_HARNESSES, PINNED_CODEX_VERSION, claude_budget, harness_environment, harness_pins, harness_preflight,
                       resolve, run, terminate_group, write_json)
 from .resources import ResourceCollector, ResourceRoot
+from .viewport import viewport_record
 from .specs import Server, Task, identifier, load_task, positive_int
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -212,10 +213,13 @@ def run_pair(*, execute: bool = False, kitsune_project: str | None = None,
         "kitsune": Server("kitsune", "uv", ("run", "--locked", "--project", str(project), "kitsune"),
             kitsune_vars, 60, 45),
     }
-    specs = {target: server for target, server in specs.items() if target in targets}
+    specs = {target: specs[target] for target in targets}
     if enabled_tools is not None:
         specs = {target: replace(server, enabled_tools=enabled_tools[target]) for target, server in specs.items()}
+    firefox_args = ("-headless", "--width=1280", "--height=720", *kitsune_firefox_args)
+    viewports = {target: viewport_record(target, server.args, firefox_args) for target, server in specs.items()}
     manifest = {
+        "viewport": viewports,
         "experiment": spec, "harness": harness, "model": model, "reasoning_effort": effort,
         "max_budget_usd_per_run": max_budget_usd, "kitsune_tool_preset": kitsune_preset,
         "targets": list(targets),
@@ -226,8 +230,8 @@ def run_pair(*, execute: bool = False, kitsune_project: str | None = None,
         "kitsune_source": source_revision(project), "benchmark_source": benchmark_source(),
         "extension_patch": patch_info,
         "http_port": http_port, "ws_port": ws_port,
-        "limitations": ["One fixed-order smoke pair, not benchmark evidence.",
-                        "Viewport equivalence not asserted for web-ext Firefox.",
+        "limitations": ["One caller-ordered smoke pair, not benchmark evidence.",
+                        "Firefox window size is not a content viewport measurement; equivalence is not asserted.",
                         "External success evaluation not implemented." if evaluate is None
                         else "External per-target evaluator attached; inspect its track/integrity limits."],
     }
@@ -261,8 +265,7 @@ def run_pair(*, execute: bool = False, kitsune_project: str | None = None,
             browser = spawn([str(web_ext), "run", "--no-config-discovery", "--no-input",
                 "--source-dir", str(pair_dir / "extension"), "--artifacts-dir", str(pair_dir / "web-ext"),
                 "--firefox", str(firefox), "--no-reload", "--start-url", "about:blank",
-                "--args=-headless", "--args=--width=1280", "--args=--height=720",
-                *("--args=" + arg for arg in kitsune_firefox_args),
+                *("--args=" + arg for arg in firefox_args),
                 *(f"--pref={key}={value}" for key, value in (kitsune_firefox_prefs or {}).items())],
                 "firefox.log", "browser_launcher")
             await_bridge(http_port, env["KITSUNE_TOKEN"], browser, extension=True)
@@ -284,8 +287,10 @@ def run_pair(*, execute: bool = False, kitsune_project: str | None = None,
                             ResourceRoot(browser.pid, "browser_launcher", "kitsune", True)) if target == "kitsune" else ()
                 result = run(server, task, model, executable=path, timeout=timeout,
                              output_root=str(pair_dir / "runs"), confirm_isolated_browser=True,
-                             resource_roots=external, resource_observer=resources,
+                             resource_roots=external, resource_observer=resources, viewport=viewports[target],
                              harness=harness, effort=effort, max_budget_usd=max_budget_usd)
+                result["viewport"] = viewports[target]
+                result["observation_volume"] = observation_volume(rpc_records(pair_dir, target))
                 result["timing"] = run_timing(pair_dir, target, result)
                 if evaluate is not None:
                     evaluation = evaluate(target, result)
@@ -313,7 +318,7 @@ def run_pair(*, execute: bool = False, kitsune_project: str | None = None,
                 else:
                     os.environ[key] = value
     summary = {"pair_dir": str(pair_dir), "harness": harness, "model": model, "results": results,
-               "task_success": None,
+               "task_success": None, "viewport": viewports,
                "evaluation": "per_target_external_evaluator" if evaluate else "not_implemented",
                "resource_summary_path": str(pair_dir / "resource-summary.json"),
                "resource_phases": pair_resource_phases(resources.summary, specs),

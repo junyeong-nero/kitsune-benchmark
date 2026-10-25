@@ -9,8 +9,8 @@ from kitsune_benchmark import integrated_experiment as experiment
 class IntegratedTests(unittest.TestCase):
     def test_schedule_is_complete_and_paired(self):
         rows=experiment.schedule()
-        self.assertEqual(len(rows),134)
-        self.assertEqual(len({r['unit'] for r in rows}),67)
+        self.assertEqual(len(rows),142)
+        self.assertEqual(len({r['unit'] for r in rows}),71)
         for i in range(0,len(rows),2):
             self.assertEqual(rows[i]['unit'],rows[i+1]['unit'])
             self.assertEqual({rows[i]['target'],rows[i+1]['target']},{'kitsune','playwright'})

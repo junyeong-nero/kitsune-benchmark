@@ -11,7 +11,7 @@ import json
 from pathlib import Path
 
 from .adapter import write_json
-from .cost_metrics import aggregate_costs, load_pair_resource_phases, normalized_usage, run_timing, total
+from .cost_metrics import aggregate_costs, load_pair_resource_phases, normalized_usage, observation_volume, run_timing, total
 
 
 def compact(value) -> str:
@@ -60,6 +60,7 @@ def analyze_run(pair: dict, target: str, result: dict) -> dict:
     elapsed = result.get("elapsed_sec")
     residual = (elapsed - setup_seconds - agent_seconds - control_seconds - inventory_seconds
                 if elapsed is not None and setup_seconds is not None else None)
+    volume = observation_volume(records)
     return {"task_id": pair.get("personal_task"), "target": target, "variant": pair.get("variant"),
         "pair_dir": str(directory), "run_dir": result["run_dir"],
         "execution_status": result.get("execution_status"), "scorable": evaluation.get("scorable"),
@@ -79,8 +80,8 @@ def analyze_run(pair: dict, target: str, result: dict) -> dict:
         "readiness_wait_sec": sum(r["duration_sec"] for r in records if r["kind"] == "readiness_wait") if records else None,
         "cached_setup_tab_reads": sum(r["tool"] == "browser_tabs" and r["cached"] for r in completed
             if setup and r["offset_sec"] < setup["offset_sec"]),
-        "agent_response_text_chars": sum(r["response_text_chars"] for r in agent) if records else None,
-        "agent_response_text_bytes": sum(r["response_text_bytes"] for r in agent) if records else None,
+        "agent_response_text_chars": volume["response_text_chars"],
+        "agent_response_text_bytes": volume["response_text_bytes"],
         "harness_calls": evaluation.get("harness_mcp_calls"),
         "harness_seconds": evaluation.get("harness_seconds"),
         "native_tool_count": len(native_tools) if metadata else None,

@@ -14,6 +14,7 @@ import tempfile
 import time
 import uuid
 
+from .viewport import viewport_record
 from . import claude_harness
 from .audit import audit_events
 from .doctor import diagnose
@@ -268,6 +269,7 @@ def run(
     confirm_isolated_browser: bool = False,
     resource_roots: tuple[ResourceRoot, ...] = (),
     resource_observer: ResourceCollector | None = None,
+    viewport: dict | None = None,
     harness: str = "codex", effort: str = "medium", max_budget_usd: float | None = None,
 ) -> dict:
     if harness not in HARNESSES:
@@ -307,6 +309,7 @@ def run(
                     "auth_policy": "chatgpt_subscription_only"}
     manifest = {
         "schema_version": 1, **versions,
+        "viewport": viewport if viewport is not None else viewport_record(server.id, server.args),
         "created_at": datetime.now(timezone.utc).isoformat(),
         "model": model, "reasoning_effort": effort,
         "server": asdict(server), "task": asdict(task),

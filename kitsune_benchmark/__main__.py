@@ -55,10 +55,11 @@ def main(argv: list[str] | None = None) -> int:
     benchmark.add_argument("--fetch", action="store_true", help="Download the pinned upstream source, without inference unless --execute")
     benchmark.add_argument("--codex", default="codex")
     benchmark.add_argument("--kitsune-project")
-    personal = subparsers.add_parser("personal", help="Personal browsing: 24 runnable local tasks (six-task pilot by default); plan by default")
+    benchmark.add_argument("--targets", default="playwright,kitsune")
+    personal = subparsers.add_parser("personal", help="Personal browsing: 28 runnable local tasks (six-task pilot by default); plan by default")
     personal.add_argument("--execute", action="store_true", help="Run selected pairs; consumes subscription quota")
     personal.add_argument("--task", action="append", dest="task_ids", help="Runnable task ID; repeat to select several; default: six pilot tasks")
-    personal.add_argument("--all", action="store_true", help="Select all 24 runnable tasks (48 agent runs with --execute)")
+    personal.add_argument("--all", action="store_true", help="Select all 28 runnable tasks (56 agent runs with --execute)")
     personal.add_argument("--variant", type=int, choices=(0, 1, 2), default=0)
     personal.add_argument("--codex", default="codex")
     personal.add_argument("--kitsune-project")
@@ -84,7 +85,7 @@ def main(argv: list[str] | None = None) -> int:
     coexistence.add_argument("--task", action="append", dest="task_ids",
                              help="Runnable co-* task, or a personal pb-* task to run user-seeded; repeatable; "
                                   "default: runnable co-* tasks")
-    coexistence.add_argument("--all-personal", action="store_true", help="All 24 personal tasks under the user-seeded condition")
+    coexistence.add_argument("--all-personal", action="store_true", help="All 28 personal tasks under the user-seeded condition")
     coexistence.add_argument("--protect-user-tabs", action="store_true",
                              help="Kitsune arm with KITSUNE_PROTECT_USER_TABS=1 (reported separately)")
     coexistence.add_argument("--variant", type=int, choices=(0, 1, 2), default=0)
@@ -169,12 +170,12 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "benchmark":
             result = run_benchmark(execute=args.execute, fetch=args.fetch,
                                    executable=executable, kitsune_project=args.kitsune_project,
-                                   harness=args.harness, **overrides)
+                                   harness=args.harness, targets=tuple(args.targets.split(",")), **overrides)
             print(json.dumps(result, indent=2, ensure_ascii=False))
             if not args.execute:
                 return 0
             results = result["results"]
-            return 0 if len(results) == 2 and all(
+            return 0 if set(results) == set(args.targets.split(",")) and all(
                 item.get("benchmark_evaluation", {}).get("scorable") for item in results.values()) else 3
         if args.command == "smoke":
             spec = with_claude_overrides(smoke_experiment(), overrides["claude_model"],

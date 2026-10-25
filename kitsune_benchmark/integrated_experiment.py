@@ -1,4 +1,4 @@
-"""Bounded Opus local phase: 67 units, native UI surface, both MCPs.
+"""Bounded Opus local phase: local task units, native UI surface, both MCPs.
 
 Online and revision-control phases are NOT implemented by this module. $20 of
 an approved $30 total is reserved here, leaving at least $10 for later phases.
