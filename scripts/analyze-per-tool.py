@@ -13,7 +13,11 @@ import collections
 import json
 import re
 import statistics
+import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from kitsune_benchmark.cost_metrics import aggregate_costs, load_pair_resource_phases, run_timing
 
 TARGETS = ("playwright", "kitsune")
 
@@ -46,6 +50,17 @@ def percentile(values, q):
     return values[min(len(values) - 1, int(q * len(values)))]
 
 
+def cost_report(recorded_pairs) -> dict:
+    grouped = collections.defaultdict(list)
+    for track, pair in recorded_pairs:
+        pair = load_pair_resource_phases(pair)
+        pair = {**pair, "results": {t: {**r, "timing": r.get("timing") or run_timing(Path(pair["pair_dir"]), t, r)}
+                                    for t, r in pair["results"].items()}}
+        grouped[track.rsplit("-v", 1)[0]].append(pair)
+    # Parallel targets have separate fixtures, not a paired same-success trial.
+    return {group: aggregate_costs(items) for group, items in grouped.items()}
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("suite_dir", type=Path)
@@ -55,7 +70,8 @@ def main() -> int:
                                              "runs": set(), "error_texts": collections.Counter()})
     outcomes = collections.defaultdict(lambda: collections.Counter())
     failures = []
-    for track, pair in pairs(args.suite_dir):
+    recorded_pairs = list(pairs(args.suite_dir))
+    for track, pair in recorded_pairs:
         task = pair.get("personal_task") or pair.get("gallery_task") or "miniwob"
         group = track.rsplit("-v", 1)[0]
         for target in TARGETS:
@@ -98,7 +114,7 @@ def main() -> int:
                             s["error_texts"][error_text(block)] += 1
     tools = sorted({name for _, name in stats}, key=lambda n: -sum(stats[(t, n)]["calls"] for t in TARGETS))
     report = {"outcomes": {group: {f"{t}:{s}": n for (t, s), n in counts.items()} for group, counts in outcomes.items()},
-              "failures": failures, "tools": {}}
+              "cost_metrics": cost_report(recorded_pairs), "failures": failures, "tools": {}}
     print(f"{'tool':28} {'target':10} {'calls':>6} {'runs':>5} {'err%':>6} {'p50 s':>7} {'p90 s':>7} {'p50 ch':>7} {'mean ch':>8}")
     for name in tools:
         for target in TARGETS:

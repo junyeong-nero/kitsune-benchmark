@@ -271,6 +271,8 @@ The CLI prints the summary. Raw evidence is private and gitignored:
 | Track | Artifact root | Main summaries |
 | --- | --- | --- |
 | Personal | `artifacts/personal/<pair-id>/` | `personal-summary.json`; `suite-summary.json` in the first attempted pair |
+| Gallery | `artifacts/gallery/<pair-id>/` | `gallery-summary.json`; `suite-summary.json` in the first attempted pair |
+| Coexistence | `artifacts/coexistence/<pair-id>/` | `coexistence-summary.json`; `suite-summary.json` in the first attempted pair |
 | MiniWoB | `artifacts/miniwob/<pair-id>/` | `benchmark-summary.json` |
 | Smoke | `artifacts/smoke/<pair-id>/` | `pair-summary.json` |
 
@@ -284,16 +286,43 @@ Read in this order:
    evidence or model/transport errors are not ordinary task failures.
 3. **Outcome:** external `task_success`, `functional_success` and `safety_pass`
    where available. Final chat claims do not establish success.
-4. **Usage:** `input_tokens`, `cached_input_tokens`, `output_tokens` and optional
-   `reasoning_output_tokens`. Cached input is a **subset of input**, not an extra
-   total. Missing usage is not zero consumption. Subscription-limit accounting
-   cannot be reconstructed from these fields.
-5. **Efficiency:** compare successful-run usage/calls with coverage visible;
-   failed early runs are not efficiency wins. Personal `by_target` aggregates
-   all-run and successful-run costs separately and records usage coverage.
+4. **Usage:** `input_tokens`, `uncached_input_tokens`, `cached_input_tokens`,
+   `output_tokens` and optional `reasoning_output_tokens`. Total input includes
+   cache reads and cache creation. Claude's `uncached_input_tokens` excludes
+   both; Codex's is derived as total minus cached input (and cache creation if
+   reported). Cache creation is reported separately, not silently counted as
+   Claude uncached input. Missing usage is not zero consumption. Subscription-limit
+   accounting cannot be reconstructed from these fields.
+5. **Efficiency:** personal/gallery/coexistence `by_target.cost_metrics` separates
+   `all_attempts`, `successful_tasks`, `same_successful_tasks`, `failed_attempts`
+   (explicit false verdict), and `unscored_or_unknown_attempts`. Same-success
+   means both targets succeeded **in the same pair**, not unrelated variants or
+   parallel single-target fixtures. `paired_attempts` counts pairs containing both
+   target results: zero means the same-success scope is not applicable; a positive
+   count with zero same-success attempts means no joint successes were observed.
+   Each scope includes total and uncached input
+   together in `usage`, `elapsed_sec`, `timing`, and `resources_task`. Scalar totals
+   have `reported_runs`/`missing_runs`; no observations yields null, not zero.
+   Partial totals are not complete costs. Successful-task resource means use
+   measured successful tasks only; failure and unknown costs remain separate.
+   The full-suite log retains `by_target`; `analyze-per-tool.py --json <new.json>`
+   also emits these cost aggregates by track. Existing summary totals remain for
+   compatibility; use the coverage-aware fields for reporting.
 6. **Instrumentation:** personal `harness_mcp_calls`/`harness_seconds` are hidden
    setup/readiness/inventory work, separate from agent calls. Raw elapsed time
-   includes that work and cleanup, and is not clean MCP latency.
+   includes that work and cleanup, and is not clean MCP latency. `pair_lifecycle`
+   separates Kitsune browser/bridge cold-start setup and warm-ready idle resources
+   from per-run task costs. Per-run `timing.relay_setup_sec` is taken from native
+   setup diagnostics; `elapsed_minus_relay_setup_sec` subtracts it **once**, but
+   still includes harness startup, model/network, inventory and cleanup. Agent RPC
+   is a nested diagnostic, not extra elapsed. Neither RPC durations nor readiness
+   sleeps should be added to setup or elapsed. See [resource limits](resources.md).
+7. **User interventions:** an intervention would be a human correction, approval,
+   or recovery action during an agent attempt. Synthetic personal/gallery/coexistence
+   tracks have no interactive human-in-the-loop protocol and report
+   `user_interventions: {count: 0, status: "none_by_protocol"}`. Fixture seeding,
+   scripted coexistence typing/view activity, and grader/harness calls are not
+   interventions; this is not a measured real-user burden estimate.
 
 CPU/RAM are local process observations, not remote inference or API charges.
 Summed RSS can double-count shared memory; see [resource methodology](resources.md).

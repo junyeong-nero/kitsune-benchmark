@@ -2,7 +2,7 @@
 
 [Documentation index](README.md) · [Running guide](running.md) · [Results](results/README.md)
 
-`run` and paired `smoke`, `benchmark`, and `personal` executions sample local
+`run` and paired `smoke`, `benchmark`, `personal`, `gallery`, and `coexistence` executions sample local
 resources with pinned psutil 7.2.2. This document covers process CPU/RAM, not
 model tokens or subscription billing; see the
 [usage inspection guide](running.md#inspect-outcomes-and-usage) for those fields.
@@ -56,6 +56,48 @@ means cover observed component windows, not a complete inferred process lifetime
 Existing processes' CPU counters are baselined when first observed; a newly born
 process's initial observed CPU is included. The `cpu_percent_one_core` value
 may exceed 100% for multithreaded work.
+
+## Suite cost aggregates
+
+Personal, gallery and coexistence all use the same pair/per-run collectors.
+`by_target.cost_metrics` in suite summaries (and offline analysis) reports task
+resources for all attempts, successful tasks, same-pair joint successes, explicit
+failures, and unscored/unknown attempts separately. `resources_task` contains:
+
+- `observed_cpu_sec`: summed user + system CPU deltas, with reporting coverage;
+  `observed_cpu_sec_per_measured_task` divides by measured tasks in that scope
+  (successful tasks in `successful_tasks`), not by unobserved attempts.
+- `sampled_peak_rss_bytes`: maximum of task-window sampled peaks;
+  `mean_task_sampled_peak_rss_bytes`: arithmetic mean of those task peaks.
+  Peaks are not summed across sequential tasks or divided by success count.
+- `time_weighted_mean_rss_bytes`: task means weighted by each observed
+  `duration_sec`, not a mean of means; `rss_observed_duration_sec` is its denominator.
+- Counts of missing resources and of runs with peak/mean RSS. No observations
+  yields null. Missing or zero-duration means are not zero memory consumption.
+
+`pair_lifecycle.setup` and `.ready` use owner-filtered pair phase buckets, never
+pair `all` or overlapping pair task phases. New pairs additionally record
+`timing.kitsune_cold_start_setup_sec` (launch/bridge/browser readiness wall time),
+aggregated as `pair_lifecycle.cold_start_setup_elapsed_sec` for Kitsune only,
+even when the pair stops before the Kitsune task runs.
+The one-second ready sleep is outside that setup timer; ready-phase sampled
+resources cover this idle wait and writing the first target's session config.
+Fixture seeding is part of per-run `relay_setup_sec`, inside the task window.
+An already-running browser/bridge therefore has nonzero measured warm-ready
+RSS/CPU, not a zero-cost assumption. Per-run task windows include those external
+roots while the agent runs, as well as harness/MCP/relay work.
+
+These are **not a cold-versus-reused-session experiment**: every pair starts a
+fresh private Kitsune browser/bridge. Playwright launches inside the per-run
+window; relay setup diagnostics capture fixture/browser preparation but do not
+isolate every launcher/startup cost. `timing.relay_setup_sec` and
+`elapsed_minus_relay_setup_sec` separate known relay setup from remaining elapsed
+only; the latter is not pure warm agent time. There are no existing general
+`setup_seconds`/`agent_seconds` run fields. Readiness sleeps and native RPC durations
+are nested diagnostics, never added to setup/elapsed totals. Task-window resources
+cannot currently be split at relay setup boundaries. Old runs without inline
+pair phases can be analyzed from their existing `resource-summary.json`; absent
+files/fields remain missing, and cold-start wall time is unavailable historically.
 
 ## Interpretation and limits
 

@@ -22,6 +22,7 @@ import urllib.error
 import urllib.request
 import uuid
 
+from .cost_metrics import pair_resource_phases, run_timing
 from .adapter import (API_HARNESSES, PINNED_CODEX_VERSION, claude_budget, harness_environment, harness_pins, harness_preflight,
                       resolve, run, terminate_group, write_json)
 from .resources import ResourceCollector, ResourceRoot
@@ -236,6 +237,7 @@ def run_pair(*, execute: bool = False, kitsune_project: str | None = None,
     with ExitStack() as stack:
         resources = stack.enter_context(ResourceCollector(pair_dir))
         resources.set_phase("setup")
+        setup_started = time.monotonic()
         # macOS Unix-domain socket paths are short; the repository artifact
         # path plus Playwright worker suffix exceeds that limit.
         env["PWTEST_SOCKETS_DIR"] = stack.enter_context(
@@ -264,6 +266,7 @@ def run_pair(*, execute: bool = False, kitsune_project: str | None = None,
                 *(f"--pref={key}={value}" for key, value in (kitsune_firefox_prefs or {}).items())],
                 "firefox.log", "browser_launcher")
             await_bridge(http_port, env["KITSUNE_TOKEN"], browser, extension=True)
+        setup_seconds = time.monotonic() - setup_started
         resources.set_phase("ready")
         time.sleep(1)
         # Scope these values to this Python process and its children only.
@@ -283,6 +286,7 @@ def run_pair(*, execute: bool = False, kitsune_project: str | None = None,
                              output_root=str(pair_dir / "runs"), confirm_isolated_browser=True,
                              resource_roots=external, resource_observer=resources,
                              harness=harness, effort=effort, max_budget_usd=max_budget_usd)
+                result["timing"] = run_timing(pair_dir, target, result)
                 if evaluate is not None:
                     evaluation = evaluate(target, result)
                     write_json(Path(result["run_dir"]) / "evaluation.json", evaluation)
@@ -311,6 +315,8 @@ def run_pair(*, execute: bool = False, kitsune_project: str | None = None,
     summary = {"pair_dir": str(pair_dir), "harness": harness, "model": model, "results": results,
                "task_success": None,
                "evaluation": "per_target_external_evaluator" if evaluate else "not_implemented",
-               "resource_summary_path": str(pair_dir / "resource-summary.json")}
+               "resource_summary_path": str(pair_dir / "resource-summary.json"),
+               "resource_phases": pair_resource_phases(resources.summary, specs),
+               "timing": {"kitsune_cold_start_setup_sec": setup_seconds if "kitsune" in specs else None}}
     write_json(pair_dir / "pair-summary.json", summary)
     return summary

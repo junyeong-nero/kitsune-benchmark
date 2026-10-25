@@ -142,7 +142,8 @@ def main() -> int:
                                 "requested_pairs": result.get("requested_pairs"),
                                 "completed_pairs": result.get("completed_pairs"),
                                 "stopped_reason": result.get("stopped_reason"),
-                                "suite_summary_path": result.get("suite_summary_path")})
+                                "suite_summary_path": result.get("suite_summary_path"),
+                                "by_target": result.get("by_target")})
         for entry in entries:
             print(json.dumps(entry), flush=True)
             with log.open("a") as handle:

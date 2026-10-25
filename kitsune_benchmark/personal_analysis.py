@@ -11,6 +11,7 @@ import json
 from pathlib import Path
 
 from .adapter import write_json
+from .cost_metrics import aggregate_costs, load_pair_resource_phases, normalized_usage, run_timing, total
 
 
 def compact(value) -> str:
@@ -51,7 +52,7 @@ def analyze_run(pair: dict, target: str, result: dict) -> dict:
     events = [json.loads(line) for line in events_path.read_text().splitlines() if line.strip()]
     calls = [e["item"] for e in events if e.get("type") == "item.completed" and e.get("item", {}).get("type") == "mcp_tool_call"]
     evaluation = result.get("benchmark_evaluation", {})
-    usage = result.get("usage", {})
+    usage = normalized_usage(result)
     setup_seconds = setup["duration_sec"] if setup else None
     agent_seconds = sum(r["duration_sec"] for r in agent) if records else None
     control_seconds = sum(r["duration_sec"] for r in completed if r["role"] == "agent" and r["method"] != "tools/call") if records else None
@@ -64,8 +65,9 @@ def analyze_run(pair: dict, target: str, result: dict) -> dict:
         "execution_status": result.get("execution_status"), "scorable": evaluation.get("scorable"),
         "task_success": evaluation.get("task_success"), "functional_success": evaluation.get("functional_success"),
         "safety_pass": evaluation.get("safety_pass"), "seeded_tabs_preserved": evaluation.get("seeded_tabs_preserved"),
-        "usage": usage, "noncached_input_tokens": usage["input_tokens"] - usage["cached_input_tokens"]
-            if "input_tokens" in usage and "cached_input_tokens" in usage else None,
+        "usage": usage, "uncached_input_tokens": usage.get("uncached_input_tokens"),
+        "noncached_input_tokens": usage.get("uncached_input_tokens"),
+        "resources": result.get("resources"), "timing": result.get("timing") or run_timing(directory, target, result),
         "elapsed_sec": elapsed, "agent_calls": result.get("mcp_calls"),
         "agent_tool_sequence": [c.get("tool") for c in calls],
         "agent_result_errors": sum(native_error(c.get("result") or {}) for c in calls),
@@ -93,14 +95,18 @@ def analyze_run(pair: dict, target: str, result: dict) -> dict:
 
 def analyze_suite(path: Path) -> dict:
     suite = json.loads(path.read_text())
-    rows = [analyze_run(pair, target, result) for pair in suite["pairs"] for target, result in pair["results"].items()]
+    pairs = [load_pair_resource_phases(pair) for pair in suite["pairs"]]
+    pairs = [{**p, "results": {t: {**r, "timing": r.get("timing") or run_timing(Path(p["pair_dir"]), t, r)}
+                              for t, r in p["results"].items()}} for p in pairs]
+    costs = aggregate_costs(pairs)
+    rows = [analyze_run(pair, target, result) for pair in pairs for target, result in pair["results"].items()]
     totals = {}
     for target in sorted({row["target"] for row in rows}):
         runs = [r for r in rows if r["target"] == target]
         scorable = [r for r in runs if r["scorable"]]
         both_success = [r for r in runs if r["task_success"] and any(
-            other["task_id"] == r["task_id"] and other["target"] != target and other["task_success"] for other in rows)]
-        keys = ("elapsed_sec", "agent_calls", "noncached_input_tokens", "setup_sec", "agent_native_rpc_sec",
+            other["pair_dir"] == r["pair_dir"] and other["target"] != target and other["task_success"] for other in rows)]
+        keys = ("elapsed_sec", "agent_calls", "uncached_input_tokens", "noncached_input_tokens", "setup_sec", "agent_native_rpc_sec",
                 "post_setup_inventory_rpc_sec", "residual_non_rpc_sec", "readiness_wait_sec", "cached_setup_tab_reads",
                 "agent_response_text_chars", "agent_response_text_bytes", "harness_calls", "agent_result_errors")
         totals[target] = {"attempted": len(runs), "scorable": len(scorable),
@@ -108,12 +114,15 @@ def analyze_suite(path: Path) -> dict:
             "functional_successes": sum(r["functional_success"] is True for r in runs),
             "safety_failures": sum(r["safety_pass"] is False for r in runs),
             "diagnostic_runs": sum(r["native_diagnostics_available"] for r in runs),
-            "totals": {key: sum(r[key] for r in runs if r[key] is not None) for key in keys},
+            "cost_metrics": costs[target],
+            "totals": {key: total([r[key] for r in runs])["total"] for key in keys},
+            "totals_coverage": {key: total([r[key] for r in runs]) for key in keys},
             "usage": {key: sum(r["usage"].get(key, 0) for r in runs)
                       for key in sorted({k for r in runs for k in r["usage"]})},
             "both_successful_tasks": [r["task_id"] for r in both_success],
             "both_successful_elapsed_sec": sum(r["elapsed_sec"] for r in both_success),
-            "both_successful_input_tokens": sum(r["usage"].get("input_tokens", 0) for r in both_success)}
+            "both_successful_input_tokens": total([r["usage"].get("input_tokens") for r in both_success])["total"],
+            "both_successful_uncached_input_tokens": total([r["usage"].get("uncached_input_tokens") for r in both_success])["total"]}
     return {"schema_version": 1, "suite_path": str(path), "model": suite.get("model"),
             "requested_pairs": suite.get("requested_pairs"), "completed_pairs": suite.get("completed_pairs"),
             "by_target": totals, "runs": rows,
@@ -122,7 +131,11 @@ def analyze_suite(path: Path) -> dict:
                        "Native RPC includes client/transport/server work, not an isolated backend timer.",
                        "Residual time includes model/network/Codex/startup/cleanup/logging; it is not pure model time.",
                        "Setup includes hidden RPC and readiness sleep; do not add nested durations together.",
-                       "Totals with missing diagnostics are partial; check diagnostic_runs and null per-run fields.",
+                       "Totals with missing diagnostics are partial; check totals_coverage and cost_metrics coverage.",
+                       "Relay setup, readiness waits and RPC are nested in elapsed; never add them to elapsed.",
+                       "Pair setup/ready resources and per-run task resources are separate windows; overlapping pair task data is not added.",
+                       "Summed RSS is not PSS/USS; sampled CPU/RSS exclude remote inference.",
+                       "elapsed_minus_relay_setup_sec is not a measured reused-session warm task.",
                        "Single fixed-order variant; safety/format failures can confound efficiency comparisons."]}
 
 
