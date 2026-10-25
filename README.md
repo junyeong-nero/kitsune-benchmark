@@ -9,6 +9,12 @@ CPU/RAM measurements.
 
 ## Current focus and status
 
+Latest release check: [Kitsune v0.4.1 on Opus subscription, full suite + coexistence](docs/results/2026-10-25-opus-subscription-v0.4.1.md).
+448 selected scorable runs after a harness startup correction and one explicitly
+recorded fixture-setup retry. Personal: Playwright 72/72 vs Kitsune 69/72 (both
+72/72 under agent-tab cleanup); crowded gallery both 63/63, isolated 63/63 vs
+62/63. This is a separate cohort from the earlier API/`--bare` reports.
+
 The primary track evaluates **personal browsing**: continuing work in existing
 tabs and a pre-established test session, gathering information, transferring it
 to drafts, and respecting do-not-submit/preserve-context boundaries.
