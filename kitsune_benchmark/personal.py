@@ -24,6 +24,7 @@ from .miniwob import UI_TOOLS
 from .personal_fixtures import FIXTURE_CLASSES
 from .smoke import ROOT, TARGETS, run_pair, source_revision
 from .specs import Server, Task
+from .viewport import REPORT_PATH, parse_report, report_script
 
 CATEGORIES = ("current_page", "existing_tabs", "research", "account_lookup", "handoff_draft", "safe_mutation", "long_page_lookup")
 PILOT_FIXTURES = ("article", "products", "policy", "orders", "calendar", "contact")
@@ -34,6 +35,7 @@ INTEGRITY = ("Synthetic local apps, test-cookie authentication and server-state 
              "Tab inventories are sampled after each agent tool call, not continuous browser telemetry.")
 PRIMARY_CONTRACT = "v2_agent_tab_cleanup"
 CUSTODY_BUDGET = 4096  # readings x candidate alignments per checkpoint; beyond this custody is unknown
+CSP = "default-src 'none'; form-action 'self'; base-uri 'none'"
 
 
 def close_only_failure(close_attempts: int, v2_success: bool | None) -> bool | None:
@@ -218,6 +220,7 @@ class PersonalTrial:
     forbidden: list[str] = field(default_factory=list)
     visits: list[str] = field(default_factory=list)
     mutations: list[str] = field(default_factory=list)
+    viewport_reports: list[dict] = field(default_factory=list)
     impl: object = None
 
     def __post_init__(self):
@@ -407,10 +410,12 @@ class PersonalTrial:
 
 
 class PersonalServer:
-    def __init__(self, task: dict, variant: int):
+    def __init__(self, task: dict, variant: int, *, report_viewport: bool = False):
+        """report_viewport: every page of a personal-browsing-local-v3 run reports the content viewport
+        (#21); other experiments reusing these fixtures serve taskset-v2's pages unchanged."""
         if type(variant) is not int or variant not in range(3):
             raise ValueError("Variant must be 0, 1 or 2.")
-        self.task, self.variant = task, variant
+        self.task, self.variant, self.report_viewport = task, variant, report_viewport
         self.trials: dict[str, PersonalTrial] = {}
         self.by_target: dict[str, str] = {}
         self.evidence_paths: dict[str, Path] = {}
@@ -423,12 +428,12 @@ class PersonalServer:
             def log_message(self, *args):
                 pass
 
-            def reply(self, status, payload=b"", **headers):
+            def reply(self, status, payload=b"", csp=CSP, **headers):
                 self.send_response(status)
                 self.send_header("Content-Type", "text/html; charset=utf-8")
                 self.send_header("Content-Length", str(len(payload)))
                 self.send_header("Cache-Control", "no-store")
-                self.send_header("Content-Security-Policy", "default-src 'none'; form-action 'self'; base-uri 'none'")
+                self.send_header("Content-Security-Policy", csp)
                 for name, value in headers.items():
                     self.send_header(name.replace("_", "-"), value)
                 self.end_headers()
@@ -458,10 +463,16 @@ class PersonalServer:
                         return
                     trial.visits.append(path)
                     title, body = page
-                    html = (f'<!doctype html><html lang="ko"><meta charset="utf-8"><title>{escape(title)}</title>'
+                    head, csp = "", CSP
+                    if controller.report_viewport:
+                        # In <head>: no rendered text, accessibility node or body textContent.
+                        script, digest = report_script(trial.url(REPORT_PATH))
+                        head = f"<script>{script}</script>"
+                        csp = f"default-src 'none'; script-src {digest}; connect-src 'self'; form-action 'self'; base-uri 'none'"
+                    html = (f'<!doctype html><html lang="ko"><meta charset="utf-8"><title>{escape(title)}</title>{head}'
                             f'<body><h1>{escape(title)}</h1>{body}</body></html>').encode()
                     cookie = {"Set_Cookie": f"pb_session={trial.token}; HttpOnly; SameSite=Strict; Path=/t/{trial.token}/"} if path == "/start" else {}
-                    self.reply(200, html, **cookie)
+                    self.reply(200, html, csp=csp, **cookie)
 
             def do_POST(self):
                 with controller.lock:
@@ -481,12 +492,23 @@ class PersonalServer:
                         values = parse_qs(self.rfile.read(length).decode(), keep_blank_values=True, max_num_fields=10)
                         if any(len(v) != 1 for v in values.values()):
                             raise ValueError()
-                        dest = trial.mutate(path, {k: v[0] for k, v in values.items()})
+                        fields = {k: v[0] for k, v in values.items()}
+                        if path == REPORT_PATH and controller.report_viewport:
+                            # A measurement, not a page action: never a visit, mutation or forbidden write.
+                            report = parse_report(fields)
+                            if report is None:
+                                raise ValueError()
+                            trial.viewport_reports.append(report)
+                            dest = "reported"
+                        else:
+                            dest = trial.mutate(path, fields)
                     except (ValueError, UnicodeError):
                         self.reply(400)
                         return
                     if dest is None:
                         self.reply(400)
+                    elif dest == "reported":
+                        self.reply(204)
                     elif dest == "forbidden":
                         self.reply(403, b"Forbidden operation recorded; no external action occurred.")
                     else:
@@ -525,6 +547,11 @@ class PersonalServer:
             "diagnostics_path": str(pair_dir / (target + "-native-rpc.jsonl")),
             "metadata_path": str(pair_dir / (target + "-native-metadata.json"))})
         return replace(server, command=sys.executable, args=(str(ROOT / "kitsune_benchmark/personal_session.py"), str(path)))
+
+    def viewport_reports(self, target: str) -> list[dict] | None:
+        """The target trial's content viewport reports; None when its pages do not report."""
+        with self.lock:
+            return list(self.trials[self.by_target[target]].viewport_reports) if self.report_viewport else None
 
     def evaluate(self, target: str, result: dict) -> dict:
         try:
@@ -647,11 +674,12 @@ def run_personal(*, execute: bool = False, task_ids: list[str] | None = None, va
             break
         experiment = {**spec, "selected_task": task, "variant": variant,
                       "catalog_sha256": hashlib.sha256((ROOT / spec["catalog"]).read_bytes()).hexdigest()}
-        with PersonalServer(task, variant) as fixture:
+        with PersonalServer(task, variant, report_viewport=True) as fixture:
             pair = run_pair(execute=True, kitsune_project=kitsune_project, executable=executable,
                 experiment_spec=experiment, artifact_scope="personal", task_for_target=fixture.begin,
                 prepare_server=fixture.prepare_server, evaluate=fixture.evaluate, enabled_tools=UI_TOOLS,
-                harness=harness, kitsune_preset=kitsune_preset, targets=targets)
+                harness=harness, kitsune_preset=kitsune_preset, targets=targets,
+                viewport_reports=fixture.viewport_reports, equalize_kitsune_viewport=True)
         pair["personal_task"] = task["id"]
         pair["variant"] = variant
         pair["kitsune_source_after"] = source_revision(project)

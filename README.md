@@ -119,7 +119,9 @@ PERSONAL_BROWSER_TEST=1 PERSONAL_KITSUNE_TEST=1 \
   subscription charges/remaining quota from token counts.
 - Personal elapsed time includes hidden setup/readiness/inventory calls;
   these are counted separately from agent calls. Startup asymmetry, cache effects
-  and unverified effective viewport equivalence remain confounders.
+  and effective viewport equivalence outside the personal track's measured
+  runs (gallery and coexistence are equalized by construction but unmeasured)
+  remain confounders.
 - Local summed RSS is not unique physical memory; remote inference is not measured.
 - The personal catalog is newly authored with benchmark design references, not
   imported WebArena/WebVoyager/AssistantBench tasks or official upstream scores.

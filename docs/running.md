@@ -175,13 +175,48 @@ uv run --locked python scripts/run-full-suite.py --sequential --attempts 2 --ord
 ```
 
 Every pair/run manifest records configured geometry read from launch/server args:
-Playwright `viewport_size` 1280×720 (content), Kitsune headless Firefox
-`window_size` 1280×720 (window). These are **not equivalent measurements**.
-Effective content dimensions (`effective`) are currently always null with a
-reason; the harness does not measure `innerWidth`/`innerHeight`. No new
-agent-visible observation, hidden resize or fixture script is added. Measuring
-and equalizing effective viewports remain a follow-up (#21); no viewport parity claim
-may be made until then. Do not interpret configured window height as `innerHeight`.
+Playwright `viewport_size` 1280×720 (content) and the Kitsune headless Firefox
+`window_size` (a window, not a content area). Configured window height is never
+`innerHeight`: the native check below measured 85 CSS px of Firefox toolbars.
+
+**Effective content viewport (#21).** Every page of a `personal-browsing-local-v3`
+run (`kitsune_benchmark personal`, all 28 tasks including the default pilot)
+serves one inline `<head>` script, allowed only by its CSP hash, that
+`navigator.sendBeacon`s `innerWidth`, `innerHeight`, `outerWidth`, `outerHeight`
+and `devicePixelRatio` to the fixture server on every page load. It renders
+nothing and adds no accessibility node or snapshot text; the server keeps the
+reports apart from visits, form writes and forbidden actions, so grading is
+unchanged. No agent-visible call or resize is involved. Apart from that script
+and its CSP header, the 24 original tasks serve the same pages as `taskset-v2`;
+reproduce v2 results from the `taskset-v2` checkout. Gallery, MiniWoB, coexistence
+and the experiments that reuse personal fixtures serve uninstrumented pages and
+are not measured. The personal, gallery and coexistence tracks launch Kitsune's
+window at 1280×805 (720 + 85) so its content viewport is 1280×720 by construction
+(verified per run only on personal pages); MiniWoB and the older experiments keep
+the 1280×720 window. Pair manifests show `content_viewport_construction`.
+
+After each run, `viewport.effective` (first report, `reports`,
+`later_reports_differed`) is written beside the unchanged `configured` record into
+the run's `manifest.json`, `<target>-summary.json`, `pair-manifest.json`,
+`pair-summary.json` and the personal summaries. A target that never ran keeps
+`effective: null` (`not_observed`). Without observations the reason is
+`no_report_received` (a personal run) or `track_pages_do_not_report` (gallery and
+every other track: an unsupported measurement, not a parity result).
+`content_viewport_equality_asserted` is true only when every report in the run
+agrees and equals the shared `reference` (1280×720 at `devicePixelRatio` 1) that
+both targets are measured against. A cohort parity claim needs it true on the
+personal runs of both targets; it says nothing about tracks without reports.
+
+Native no-model check (Kitsune `v0.4.1-15-g2110a32`, Playwright MCP 0.0.83 Firefox build 1553,
+headless, macOS): Playwright `--viewport-size 1280x720` → inner 1280×720,
+outer 1280×805, DPR 1. Kitsune `--width=1280 --height=720` → inner 1280×635,
+outer 1280×720, DPR 1. Kitsune `--height=805` → inner 1280×720, outer
+1280×805, DPR 1. Rerun it after a Firefox or Kitsune upgrade:
+
+```sh
+PERSONAL_BROWSER_TEST=1 PERSONAL_KITSUNE_TEST=1 KITSUNE_PROJECT=../kitsune \
+  uv run --locked python -m unittest discover -s tests -p test_taskset_v3.py -k Native
+```
 
 `taskset-v3` is pending its owner-created tag. It adds four long-page personal
 tasks (28 total); gallery's benchmark ID remains v2, and the seeded-tab custody

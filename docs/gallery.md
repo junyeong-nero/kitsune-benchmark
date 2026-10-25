@@ -5,7 +5,8 @@
 A local site that packs modern web components, multimodal puzzles and one
 judgement task onto a page. It checks whether a browser MCP lets an agent do
 each task correctly, and at what token cost. The personal track's fixtures are
-deliberately plain HTML forms with no JavaScript. This track covers what they
+deliberately plain HTML forms with no page JavaScript (only an invisible
+viewport-report beacon, #21). This track covers what they
 cannot: custom widgets, portals, shadow DOM, iframes, async content, media.
 
 Code: `kitsune_benchmark/gallery.py` (tasks, server, graders),
@@ -107,4 +108,10 @@ dependency. Without ffmpeg/espeak the media tests are skipped.
 One synthetic site; components are hand-written, not taken from real UI
 libraries. Graders trust the page's own scripts (UI-only tools cannot reach the
 state endpoint directly, but this is not hardened against a malicious agent).
-Video and audio playback in headless Firefox varies by codec support.
+Video and audio playback in headless Firefox varies by codec support. Gallery
+pages do not report their content viewport (#21): run records keep
+`viewport.effective: null` with `track_pages_do_not_report`. The Kitsune window
+is sized 1280×805, the same construction as the personal track, whose pages
+measured 1280×720 content on both targets (1280×635 for Kitsune at 1280×720).
+Gallery equality is by construction, not measured per run, so
+`content_viewport_equality_asserted` stays false here. Pages and graders are unchanged.
