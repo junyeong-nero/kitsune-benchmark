@@ -391,13 +391,15 @@ class BenchmarkProtocolTests(unittest.TestCase):
             trial = server.trials[server.by_target["kitsune"]]
             trial.note = trial.expected["answer"]
             tabs = [{"id": i, "url": trial.url(p), "active": i == 0} for i, p in enumerate(trial.paths)]
-            extra = {"id": 9, "url": trial.url("/article"), "active": False}
-            evidence = {"setup_complete": True, "initial_tabs": tabs, "snapshots": [tabs, tabs + [extra], tabs], "close_attempts": 1}
+            opened = [dict(tabs[0], active=False), tabs[1], {"id": 2, "url": trial.url("/article"), "active": True}]
+            evidence = {"setup_complete": True, "initial_tabs": tabs, "snapshots": [tabs, opened, tabs], "close_attempts": 1,
+                        "tab_calls": [{"tool": "browser_tabs", "action": "new"}, {"tool": "browser_tabs", "action": "close", "index": 2}]}
             e = trial.evaluate({"execution_status": "completed_unscored"}, evidence)
-            self.assertFalse(e["task_success"])
+            self.assertTrue(e["task_success"], "v2 is primary since taskset-v2 (#9)")
             self.assertFalse(e["contracts"]["v1_strict_close"]["task_success"])
             self.assertTrue(e["contracts"]["v2_agent_tab_cleanup"]["task_success"])
             evidence["snapshots"].append(tabs[1:])  # a starting tab disappeared
+            evidence["tab_calls"].append({"tool": "browser_click"})
             self.assertFalse(trial.evaluate({"execution_status": "completed_unscored"}, evidence)
                              ["contracts"]["v2_agent_tab_cleanup"]["task_success"])
 

@@ -14,7 +14,7 @@ from unittest.mock import patch
 from kitsune_benchmark.personal import PILOT_FIXTURES, PersonalServer, catalog
 from kitsune_benchmark.personal_session import NativeSession
 from kitsune_benchmark.smoke import ROOT
-from kitsune_benchmark.personal_fixtures import FIXTURE_CLASSES, date_in, has, time_in
+from kitsune_benchmark.personal_fixtures import FIXTURE_CLASSES, Hours, date_in, has, time_in
 
 VALID = {"execution_status": "completed_unscored"}
 
@@ -25,12 +25,13 @@ def new_tasks():
 
 def initial_evidence(trial):
     tabs = [{"id": i, "url": trial.url(path), "active": i == trial.active_index} for i, path in enumerate(trial.paths)]
-    return {"setup_complete": True, "initial_tabs": tabs, "snapshots": [copy.deepcopy(tabs)]}
+    return {"setup_complete": True, "initial_tabs": tabs, "snapshots": [copy.deepcopy(tabs)], "tab_calls": []}
 
 
 def solved_evidence(trial):
     evidence = initial_evidence(trial)
     evidence["snapshots"].append(trial.impl.solved_tabs(evidence["initial_tabs"]))
+    evidence["tab_calls"].append({"tool": "browser_click"})
     return evidence
 
 
@@ -162,6 +163,7 @@ class NewFixtureTests(unittest.TestCase):
         perform(session(cited), cited, [("GET", "/refund/summary")])
         evidence = initial_evidence(cited)
         evidence["snapshots"].append(evidence["initial_tabs"] + [{"id": 9, "url": cited.url("/refund/summary"), "active": True}])
+        evidence["tab_calls"].append({"tool": "browser_tabs", "action": "new"})
         self.assertFalse(cited.evaluate(VALID, evidence)["task_success"])
 
     def test_wrong_but_plausible_answers_fail(self):
@@ -199,9 +201,26 @@ class NewFixtureTests(unittest.TestCase):
 
     def test_requests_state_the_grader_contract(self):
         # taskset-v1.1: the request must ask for what Hours/Overlap grade (two links; titles only).
+        # taskset-v2 (#8): Hours grades the whole interval, so the request and memo field say 운영 시간(시작–종료).
         requests = {t["id"]: t["request"] for t in catalog()["tasks"]}
         self.assertIn("시설 안내와 운영 공지 링크를 모두", requests["pb-research-02"])
+        self.assertIn("실제 운영 시간(시작–종료)", requests["pb-research-02"])
+        self.assertNotIn("개장 시간", requests["pb-research-02"])
+        self.assertEqual(Hours.note_fields, ("운영 시간", "근거 링크"))
         self.assertIn("제목만", requests["pb-account-03"])
+
+    def test_hours_grader_still_needs_the_whole_interval(self):
+        task = next(t for t in new_tasks() if t["fixture"] == "hours")
+        for variant in range(3):
+            for note_time, success in (("opening", False), ("interval", True)):
+                with self.subTest(variant=variant, note=note_time), PersonalServer(task, variant) as server:
+                    server.begin("kitsune")
+                    trial = server.trials[server.by_target["kitsune"]]
+                    note = dict(trial.impl.expected)
+                    if note_time == "opening":
+                        note["운영 시간"] = Hours.EXCEPTION[variant][0]
+                    perform(session(trial), trial, [s for s in trial.impl.solution() if s[0] == "GET"] + [("POST", "/note", note)])
+                    self.assertEqual(trial.evaluate(VALID, solved_evidence(trial))["task_success"], success)
 
     def test_normalizers(self):
         self.assertTrue(time_in("2027-06-18 15:00", "15:00"))

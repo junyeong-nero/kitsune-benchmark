@@ -1,4 +1,4 @@
-"""Deterministic multimodal puzzle media for the gallery track. No model calls.
+"""Deterministic multimodal media for the gallery track. No model calls.
 
 Answers exist only in pixels or audio: callers must never put them in HTML,
 URLs, file names or alt text. Images use Pillow; video/audio encoding uses
@@ -87,6 +87,28 @@ def distorted_code(code: str, seed: int, size: tuple[int, int] = (420, 140)) -> 
         x, y = rng.randrange(width), rng.randrange(height)
         rows.putpixel((x, y), tuple(rng.randint(0, 255) for _ in range(3)))
     return png(rows.filter(ImageFilter.GaussianBlur(0.6)))
+
+
+def product_label(product: str, fields: list[tuple[str, str]], seed: int, size: tuple[int, int] = (480, 300)) -> bytes:
+    """Photo of a printed product label: clean text fields and a decorative barcode, slightly rotated."""
+    rng = random.Random(seed)
+    width, height = size
+    bg = (rng.randint(150, 180), rng.randint(130, 160), rng.randint(105, 135))  # cardboard
+    label = Image.new("RGB", (380, 230), (250, 250, 246))
+    draw = ImageDraw.Draw(label)
+    draw.rectangle((0, 0, 379, 229), outline=(40, 40, 40), width=3)
+    draw.text((18, 12), product, font=font(24), fill=(20, 20, 20))
+    for row, (name, value) in enumerate(fields):
+        draw.text((18, 50 + 28 * row), f"{name}: {value}", font=font(19), fill=(25, 25, 25))
+    x = 18
+    while x < 300:  # barcode stripes encode nothing
+        bar = rng.randint(1, 4)
+        draw.rectangle((x, 172, x + bar - 1, 214), fill=(15, 15, 15))
+        x += bar + rng.randint(1, 4)
+    label = label.rotate(rng.uniform(-3, 3), resample=Image.BICUBIC, expand=True, fillcolor=bg)
+    photo = Image.new("RGB", size, bg)
+    photo.paste(label, ((width - label.width) // 2, (height - label.height) // 2))
+    return png(photo)
 
 
 SHAPES = ("triangle", "circle", "square", "diamond")

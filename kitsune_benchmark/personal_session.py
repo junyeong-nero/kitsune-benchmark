@@ -67,7 +67,7 @@ class NativeSession:
         self.tab_indexed = False
         self.started_mono = time.monotonic()
         self.metadata = {"enabled_tools": config.get("enabled_tools", []), "tools_pages": []}
-        self.evidence = {"setup_complete": False, "initial_tabs": [], "snapshots": [],
+        self.evidence = {"setup_complete": False, "target": config.get("target"), "initial_tabs": [], "snapshots": [], "tab_calls": [],
                          "harness_calls": 0, "harness_seconds": 0.0,
                          "close_attempts": 0, "outside_navigation": 0}
 
@@ -289,6 +289,13 @@ class NativeSession:
             # Inventory isn't sent to the model. Explicit separate harness counts
             # prevent attributing these calls to the agent's tool-use efficiency.
             self.evidence["snapshots"].append(self.inventory())
+            # The call behind each snapshot, so graders can follow starting tabs by identity.
+            call = {"tool": name, "error": "error" in result or result.get("result", {}).get("isError") is True}
+            for key in ("action", "index", "tab_id", "url"):
+                value = arguments.get(key)
+                call[key] = int(value) if isinstance(value, float) and value.is_integer() else value
+            self.evidence["tab_calls"].append(call)
+            self.evidence["tab_ids"] = "index" if self.config["target"] == "playwright" or self.tab_indexed else "stable"
             self.save()
         emit({**result, "id": message["id"]})
 

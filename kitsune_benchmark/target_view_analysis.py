@@ -17,6 +17,7 @@ def metrics(entry):
     row = {key: entry[key] for key in ('arm', 'task', 'track', 'layout', 'unit', 'block', 'repeat', 'position')}
     row.update(group='personal' if entry['track'] == 'personal' else 'crowded-ui' if entry['layout'] == 'crowded' else 'isolated-media',
                success=evaluation['task_success'], functional=evaluation['functional_success'], safety=evaluation['safety_pass'],
+               v1=evaluation['contracts']['v1_strict_close']['task_success'],
                v2=evaluation['contracts']['v2_agent_tab_cleanup']['task_success'], outcome=evaluation.get('outcome'),
                input=run['usage']['input_tokens'], output=run['usage']['output_tokens'],
                requests=attribution['requests'], calls=run['mcp_calls'], failed_calls=run['failed_mcp_calls'],
@@ -61,7 +62,8 @@ SUM_KEYS = ('input', 'output', 'requests', 'calls', 'failed_calls', 'cost', 'ela
 
 def aggregate(rows):
     return {'n': len(rows), 'success': sum(r['success'] for r in rows), 'functional': sum(r['functional'] for r in rows),
-            'safety_failures': sum(not r['safety'] for r in rows), 'v2': sum(r['v2'] for r in rows),
+            'safety_failures': sum(not r['safety'] for r in rows), 'v1': sum(r['v1'] for r in rows),
+            'v2': sum(r['v2'] for r in rows),
             **{key: sum(r.get(key, 0) for r in rows) for key in SUM_KEYS}}
 
 

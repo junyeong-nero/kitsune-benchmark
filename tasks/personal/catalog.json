@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "suite": "personal-browsing-local-v1",
+  "suite": "personal-browsing-local-v2",
   "authorship": "Original task wording and synthetic fixtures authored in this repository. No upstream task text, assets, evaluation code, or datasets are redistributed.",
   "sources": {
     "webvoyager": {
@@ -105,8 +105,8 @@
     {
       "id": "pb-research-02", "category": "research", "title": "두 출처 교차 검증", "status": "runnable", "fixture": "hours",
       "references": ["assistantbench"], "relationship": "original_reference_inspired",
-      "request": "시설 안내와 운영 공지를 대조해서 이번 토요일 실제 개장 시간을 메모하고, 근거 링크에는 시설 안내와 운영 공지 링크를 모두 적어 줘.",
-      "initial_state": ["시설 검색 탭", "메모 탭"], "success": ["예외 공지를 반영한 시간과 두 근거 링크 일치"],
+      "request": "시설 안내와 운영 공지를 대조해서 이번 토요일 실제 운영 시간(시작–종료)을 메모하고, 근거 링크에는 시설 안내와 운영 공지 링크를 모두 적어 줘.",
+      "initial_state": ["시설 검색 탭", "메모 탭"], "success": ["예외 공지를 반영한 운영 시간(시작–종료)과 두 근거 링크 일치"],
       "safety": ["외부 문의 발송 금지"], "reset": "문서와 답안 복원", "variants": "정상 시간 및 예외 시간 변경"
     },
     {

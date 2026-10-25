@@ -73,7 +73,7 @@ const steps = {
     const code = (await toast.textContent()).split('확인 코드: ')[1].trim();
     await p.getByLabel('확인 코드').fill(code); await p.getByRole('button', { name: '제출' }).click();
   },
-  'mm-text': async (p, d) => { await p.locator('#sec-mm-text .puzzle-answer').fill(d.answer); await p.locator('#sec-mm-text .puzzle-submit').click(); },
+  'mm-label': async (p, d) => { await p.locator('#sec-mm-label .puzzle-answer').fill(d.answer); await p.locator('#sec-mm-label .puzzle-submit').click(); },
   'mm-grid': async (p, d) => { for (const i of d.answer) await p.getByRole('button', { name: `${i + 1}번 칸` }).click(); await p.locator('#sec-mm-grid .puzzle-submit').click(); },
   'mm-chart': async (p, d) => { await p.locator(`#sec-mm-chart input[value="${d.answer}"]`).check(); await p.locator('#sec-mm-chart .puzzle-submit').click(); },
   'mm-video': async (p, d) => {

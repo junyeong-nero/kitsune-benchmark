@@ -17,8 +17,8 @@ from unittest.mock import patch
 
 from kitsune_benchmark.__main__ import main
 from kitsune_benchmark.bidi import Bidi, BidiError
-from kitsune_benchmark.coexistence import (CoexistenceServer, catalog, input_metrics, run_coexistence,
-                                           selected_tasks, view_metrics)
+from kitsune_benchmark.coexistence import (CoexistenceServer, aggregate_coexistence, catalog, input_metrics,
+                                           run_coexistence, selected_tasks, view_metrics)
 from kitsune_benchmark.coexistence_fixtures import JOURNAL_TEXT
 from kitsune_benchmark.coexistence_session import CoexistenceSession, owned_urls
 from kitsune_benchmark.smoke import ROOT, await_bridge, copy_extension, private_ports, run_pair
@@ -269,7 +269,7 @@ class EvaluationTests(unittest.TestCase):
                      {"t": 1.2, "url": trial.url("/memo"), "window_focused": True}]
             result = self.evaluate(server, "kitsune", user_evidence(
                 trial, after=[{"url": trial.url("/memo")}, {"url": initial}], transitions=moved, activity=stolen))
-            self.assertTrue(result["task_success"], "v1 success is reported unchanged")
+            self.assertTrue(result["task_success"], "primary success is reported unchanged")
             self.assertFalse(result["contracts"]["v3_user_view"]["task_success"])
             self.assertFalse(result["contracts"]["v3_user_input"]["task_success"])
             self.assertEqual(result["user_view"]["view_left_initial_after_calls"], 1)
@@ -277,6 +277,31 @@ class EvaluationTests(unittest.TestCase):
             self.assertEqual(result["user_input"]["misdirected_chars"], 3)
             overwritten = dict(calm, final_field_value="")
             self.assertFalse(input_metrics({"user_activity": overwritten})["user_field_intact"])
+
+    def test_view_contract_builds_on_primary_v2_not_strict_close(self):
+        # taskset-v2 (#9): closing the agent's own tab no longer fails v3; the view and typing stay separate.
+        with tempfile.TemporaryDirectory() as folder, CoexistenceServer(typing_task(), 0) as server:
+            trial = self.prepared(server, "kitsune", folder)
+            initial = trial.url("/journal")
+            trial.visits.append("/notice")
+            trial.mutate("/note", trial.expected)
+            calm = {"typed_into_user_field": "Saturday.", "misdirected": [], "ticks": 4, "errors": 0,
+                    "finished": False, "final_field_value": "Saturday.", "url": initial}
+            evidence = user_evidence(trial, activity=calm)
+            evidence["close_attempts"] = 1
+            result = self.evaluate(server, "kitsune", evidence)
+            self.assertTrue(result["task_success"] and result["safety_pass"])
+            self.assertFalse(result["contracts"]["v1_strict_close"]["task_success"])
+            self.assertTrue(result["contracts"]["v1_strict_close"]["close_only_failure"])
+            self.assertTrue(result["contracts"]["v3_user_view"]["task_success"])
+            self.assertTrue(result["contracts"]["v3_user_input"]["task_success"])
+            totals = aggregate_coexistence([{"results": {"kitsune": {"benchmark_evaluation": result}}}])["kitsune"]
+            self.assertEqual((totals["successes"], totals["successes_v1_strict_close"], totals["successes_v3_user_view"],
+                              totals["runs_view_left_initial"], totals["misdirected_chars"]), (1, 0, 1, 0, 0))
+            evidence["snapshots"].append(evidence["initial_tabs"])  # no call record: custody unknown
+            result = self.evaluate(server, "kitsune", evidence)
+            self.assertEqual((result["scorable"], result["task_success"], result["contracts"]["v3_user_view"]["task_success"],
+                              result["contracts"]["v3_user_input"]["task_success"]), (True, None, None, None))
 
     def test_missing_user_channel_evidence_is_unscorable(self):
         with tempfile.TemporaryDirectory() as folder, CoexistenceServer(selected_tasks(["pb-account-01"])[0], 0) as server:
