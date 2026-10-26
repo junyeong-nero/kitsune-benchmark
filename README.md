@@ -9,11 +9,11 @@ CPU/RAM measurements.
 
 ## Current focus and status
 
-Latest release check: [Kitsune v0.4.1 on Opus subscription, full suite + coexistence](docs/results/2026-10-25-opus-subscription-v0.4.1.md).
-448 selected scorable runs after a harness startup correction and one explicitly
-recorded fixture-setup retry. Personal: Playwright 72/72 vs Kitsune 69/72 (both
-72/72 under agent-tab cleanup); crowded gallery both 63/63, isolated 63/63 vs
-62/63. This is a separate cohort from the earlier API/`--bare` reports.
+Latest release check: [Kitsune v0.7.0 on Opus subscription, full suite + coexistence](docs/results/2026-10-26-opus-subscription-v0.7.0.md),
+the first `taskset-v3` cohort: 480 scorable runs, no retries. Personal: Playwright
+83/84 vs Kitsune 84/84; crowded gallery 63/63 vs 62/63, isolated both 63/63. On
+joint successes Kitsune used 19% / 16% / 5% less input at about the same call count.
+Not comparable with the earlier v1.x/v2 reports.
 
 The primary track evaluates **personal browsing**: continuing work in existing
 tabs and a pre-established test session, gathering information, transferring it
@@ -21,7 +21,7 @@ to drafts, and respecting do-not-submit/preserve-context boundaries.
 
 | Track | Implemented scope | Actual model evidence |
 | --- | --- | --- |
-| **Personal browsing** | 28 original specifications, **all runnable** local tasks (six-task pilot default, `--all` for 28); three data variants each; taskset-v3 preparation, tag pending | 24 variant-0 pairs on Claude Code + `claude-haiku-5-5`: 21/24 Playwright, 23/24 Kitsune (2026-10-21). Earlier six-task Codex `gpt-6-luna` pilot: 3/6 vs 4/6 |
+| **Personal browsing** | 28 original specifications, **all runnable** local tasks (six-task pilot default, `--all` for 28); three data variants each; frozen as `taskset-v3` | Opus subscription on Kitsune v0.7.0, 28 × 3 (2026-10-26): 83/84 Playwright, 84/84 Kitsune ([report](docs/results/2026-10-26-opus-subscription-v0.7.0.md)). Earlier: 24 variant-0 Haiku pairs 21/24 vs 23/24; six-task Codex pilot 3/6 vs 4/6 |
 | Coexistence (draft) | The user is in the browser too: user-owned starting tabs, view telemetry, a typing user ([protocol](docs/coexistence.md)). 28 personal tasks user-seeded + `co-typing-01` runnable; 25 more specified | Opus, 2026-10-23: user-seeded v1 24/24 both, v3 user view 2/24 Playwright vs 24/24 Kitsune ([report](docs/results/2026-10-23-coexistence-user-seeded.md)) |
 | MiniWoB++ UI pilot | Only upstream `click-test-2`, seed 42 | One pair passed with historical `gpt-6.1-sol` on 2026-10-18 |
 | Read-only smoke | Example Domain, no external task-success grader | One completed historical `gpt-6.1-sol` pair on 2026-10-18 |

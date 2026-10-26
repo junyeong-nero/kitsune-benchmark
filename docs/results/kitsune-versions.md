@@ -12,7 +12,8 @@ when model, harness and tasks match.
 
 | Kitsune | Revisions | Reports |
 | --- | --- | --- |
-| **v0.4.1** | `83acfe9` (tag) | Subscription full suite + coexistence (2026-10-25), completed after startup correction and one explicit setup retry; earlier incomplete attempt retained |
+| **v0.7.0** | `1dea68e` (tag) | Subscription full suite + coexistence (2026-10-26; first `taskset-v3` cohort) |
+| v0.4.1 | `83acfe9` (tag) | Subscription full suite + coexistence (2026-10-25), completed after startup correction and one explicit setup retry; earlier incomplete attempt retained |
 | v0.4.0 | `a03df44` (tag) | Opus full suite + coexistence (2026-10-24; API harness) |
 | v0.3.1 | `4ad65ee` (tag) | Opus full suite (2026-10-23; `taskset-v1.2`) |
 | v0.3.0 | `99a90d2` (tag); `d616c50` = v0.3.0 + docs/agents only (`server.py` comment change) | Opus full suite (2026-10-23; `taskset-v1`), 2026-10-22 rerun, disclosure, target view, Sonnet/Opus, integrated startup, tool usage |
@@ -32,7 +33,7 @@ git tags of this repository:
 | `taskset-v1.1` | Requests of `pb-research-02` (both evidence links) and `pb-account-03` (overlapping titles only) now state what their graders check. Graders, fixtures and gallery unchanged | None |
 | `taskset-v1.2` | Harness only, for Kitsune v0.3.1's Playwright-named core tools: both targets get the same allowlist, Playwright MCP 0.0.83's 25 default tools minus `browser_evaluate` and `browser_run_code_unsafe` (23). Setup reads Kitsune's index-addressed `browser_tabs` (`current` = Playwright's `(current)`). Tasks, graders and fixtures as v1.1 | Opus full suite on v0.3.1 |
 | `taskset-v2` (`39b58c3`) | Three changes vs v1.2. (1) #8: `pb-research-02` asks for the actual Saturday operating hours as an interval, "실제 운영 시간(시작–종료)", and its memo field is renamed `개장 시간` → `운영 시간`; the `Hours` grader still requires both times. (2) #9: ownership-aware cleanup (`contracts.v2_agent_tab_cleanup`) is the primary `task_success`/`safety_pass` in personal and gallery evaluations (`benchmark` and config ids `personal-browsing-local-v2`, `component-gallery-v2`) and the base of the coexistence v3 contracts. It follows each starting tab by identity (`seeded_tab_custody`, from the relay's new `tab_calls` record), so closing an original or navigating it to another URL fails, even if refused and even while a duplicate stays open; a reload is allowed and counted. Custody is `kept`, `violated` (with separate `attempted` and `lost`) or `unknown` (ambiguous alignments, misaligned call records, alignment budget); unknown is neither a violation nor unscorable, leaves a functional success without a primary verdict (`null`) and is counted as `custody_unknown`. Strict v1 stays in `contracts.v1_strict_close` with its URL rule, and `close_only_failure` marks a functionally successful v2 pass that v1 failed only for closing a tab; summaries add `successes_v1_strict_close`, `safety_failures_v1_strict_close`, `v1_close_only_failures` and `functional_successes`. (3) #10: gallery `mm-text` (distorted, CAPTCHA-like code) is replaced by `mm-label` (serial number on a product-label photo), and gallery evaluations add `failure_class`. Harness as v1.2; the relay only adds the hidden `tab_calls` record | None |
-| **`taskset-v3`** (`4d73130`, current) | Preparation for #16: personal `pb-longpage-01..04` × 3 deterministic variants, saved-note grading, per-category observation bytes/chars alongside success/tokens; personal ID `personal-browsing-local-v3`, gallery ID stays v2. Full-suite `--attempts` and predeclared AB/BA (`--order abba`) with fresh evidence and per-order/attempt reporting. Manifests record actual configured Playwright content-viewport vs Firefox window-size args. #21: every personal-browsing-local-v3 page reports `innerWidth`/`innerHeight`/`outerWidth`/`outerHeight`/`devicePixelRatio` on load (CSP-hashed inline beacon, invisible, not graded), recorded in each run/pair manifest and summary as `viewport.effective` with `content_viewport_equality_asserted` against 1280×720 @1x; the personal track sizes Kitsune's window 1280×805 (85 px Firefox toolbars), natively measured 1280×720 content on both targets (Kitsune `v0.4.1-15-g2110a32`; 1280×635 before). Gallery and coexistence use the same Kitsune window construction but are unmeasured (`track_pages_do_not_report`). Original 24 tasks' pages unchanged apart from that script and its CSP header; graders and taskset-v2 seeded-tab custody unchanged | None; no v3 model runs yet |
+| **`taskset-v3`** (`4d73130`, current) | Preparation for #16: personal `pb-longpage-01..04` × 3 deterministic variants, saved-note grading, per-category observation bytes/chars alongside success/tokens; personal ID `personal-browsing-local-v3`, gallery ID stays v2. Full-suite `--attempts` and predeclared AB/BA (`--order abba`) with fresh evidence and per-order/attempt reporting. Manifests record actual configured Playwright content-viewport vs Firefox window-size args. #21: every personal-browsing-local-v3 page reports `innerWidth`/`innerHeight`/`outerWidth`/`outerHeight`/`devicePixelRatio` on load (CSP-hashed inline beacon, invisible, not graded), recorded in each run/pair manifest and summary as `viewport.effective` with `content_viewport_equality_asserted` against 1280×720 @1x; the personal track sizes Kitsune's window 1280×805 (85 px Firefox toolbars), natively measured 1280×720 content on both targets (Kitsune `v0.4.1-15-g2110a32`; 1280×635 before). Gallery and coexistence use the same Kitsune window construction but are unmeasured (`track_pages_do_not_report`). Original 24 tasks' pages unchanged apart from that script and its CSP header; graders and taskset-v2 seeded-tab custody unchanged | Opus subscription full suite + coexistence on Kitsune v0.7.0 (2026-10-26) |
 
 Earlier reports predate the tags and ran on earlier task/grader code. Scores on
 v1 and v1.1 are not compared directly: the two personal tasks changed their
@@ -73,8 +74,8 @@ Rules:
 ### Upgrading with the next Kitsune release
 
 `taskset-v3` (above, tagged at `4d73130`) adds the long-page family and repeated,
-counterbalanced full-suite planning. There are no v3 scores yet; the first v3
-cohort is planned with the Kitsune v0.5.0 release. Effective content viewports are measured on
+counterbalanced full-suite planning. The first v3 cohort ran on Kitsune v0.7.0
+(2026-10-26); rerun earlier releases on v3 before comparing versions. Effective content viewports are measured on
 every personal run (#21). The Kitsune window is equalized (1280×805) for the
 personal, gallery and coexistence tracks; gallery and coexistence are equalized by
 construction but not measured.
@@ -94,6 +95,18 @@ These are observations; a release-improvement claim still goes through a
 `hypothesis` issue. The [coexistence track](../coexistence.md) remains a separate
 draft, not new content silently added to the full suite. The taskset-v2
 user-seeded tab custody contract is retained unchanged.
+
+## v0.7.0
+
+`1dea68e452dbe24755fc6a0801454e76bac4345c`. v0.5.0–v0.7.0 add a Python API on the
+shared bridge, move the tools into `kitsune.tools` and split the PyPI
+distributions (`kitsune-browser`, `kitsune-browser-mcp`). The benchmark launch
+command is unchanged. First cohort on `taskset-v3`; no earlier Kitsune version
+has v3 results yet, so this is an observation, not a release comparison.
+
+| Date | Report | Model / harness | Kitsune revision | Notes |
+| --- | --- | --- | --- | --- |
+| 2026-10-26 | [Full suite + coexistence, subscription](2026-10-26-opus-subscription-v0.7.0.md) | `claude-opus-5-5`, Claude Code subscription | `1dea68e` (`v0.7.0`) | 480 scorable runs, no retries; personal 83/84 PW vs 84/84 K, crowded 63/63 vs 62/63, isolated both 63/63; coexistence v3 view 2/28 vs 28/28. An earlier `gpt-6.1-sol`/Codex attempt stopped on model timeouts and is not pooled |
 
 ## v0.4.1
 
