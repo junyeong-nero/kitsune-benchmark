@@ -12,7 +12,7 @@ when model, harness and tasks match.
 
 | Kitsune | Revisions | Reports |
 | --- | --- | --- |
-| **v0.7.0** | `1dea68e` (tag) | Subscription full suite + coexistence (2026-10-26; first `taskset-v3` cohort) |
+| **v0.7.0** | `1dea68e` (tag); `5425050` = v0.7.0 + 4 commits; `dbc84f8` = + 8; `bbe6adb` = + 11 (unmerged branch) | Subscription full suite + coexistence at tag (2026-10-26; first `taskset-v3` cohort); separate model-free `stress-v1` observation at +4; model-free A/B of `bbe6adb` vs `dbc84f8` (2026-10-28) |
 | v0.4.1 | `83acfe9` (tag) | Subscription full suite + coexistence (2026-10-25), completed after startup correction and one explicit setup retry; earlier incomplete attempt retained |
 | v0.4.0 | `a03df44` (tag) | Opus full suite + coexistence (2026-10-24; API harness) |
 | v0.3.1 | `4ad65ee` (tag) | Opus full suite (2026-10-23; `taskset-v1.2`) |
@@ -71,6 +71,33 @@ Rules:
   failure (same task failing on every variant) is filed as a Kitsune `bug`, and a
   grader or fixture defect as a taskset change here.
 
+### Independent performance protocols (not taskset-v3.1)
+
+The shared-browser load track is **`stress-v1`**, fixed profile **`release-v1`**,
+with the `single-table-v1` resource probe. It changes no task requests, fixtures,
+graders or model settings, so its addition does **not** warrant `taskset-v3.1`.
+Taskset version, stress protocol/profile, actual benchmark source/hash and Kitsune
+version are separate identifiers. No new taskset tag has been created for it.
+
+`scripts/run-full-suite.py` includes the stress profile once, alone before model
+tracks; `--skip-stress` records an explicit omission. Its separate result never
+changes graded success denominators, and historical full-suite reports are not
+retroactively relabeled as including stress. Changed stress workload/measurement
+contracts get a new stress protocol; changed load schedules/safety limits get a
+new profile, not a personal taskset bump. The first implementation's pre-publication
+probe diagnostic is retained but excluded from the published cohort; match probe
+identity and hashes, not only its then-proposed protocol label.
+
+For each later release, run both builds with the same profile, probe, browser,
+runtime and host; retain all repeats and report throughput, latency, CPU/RSS,
+errors and measurement caveats separately. See [stress protocol](../stress.md).
+
+For Kitsune vs Playwright shared-browser deployments, use independent
+**`stress-compare-v1` / `shared-browser-v1`**: fresh paired arms, HTTP sessions,
+two-tab topology proof and counter-ordered repeats. `--stress-comparison` selects
+it instead of the Kitsune-only prelude in a full suite. Do not pool it with
+stress-v1 or change taskset-v3 scores. See [comparison protocol](../stress-comparison.md).
+
 ### Upgrading with the next Kitsune release
 
 `taskset-v3` (above, tagged at `4d73130`) adds the long-page family and repeated,
@@ -91,6 +118,11 @@ construction but not measured.
    both targets. Rerun the native viewport check first after a Firefox or Kitsune
    upgrade; configured Firefox window size is not a measured content viewport.
 
+4. Include the independent `stress-v1` / `release-v1` track for both releases,
+   without concurrent model work; record any explicit `--skip-stress` omission.
+   Keep stress results separate from task scores and do not compare against the
+   early ad-hoc or intrusive-probe diagnostic runs.
+
 These are observations; a release-improvement claim still goes through a
 `hypothesis` issue. The [coexistence track](../coexistence.md) remains a separate
 draft, not new content silently added to the full suite. The taskset-v2
@@ -107,6 +139,25 @@ has v3 results yet, so this is an observation, not a release comparison.
 | Date | Report | Model / harness | Kitsune revision | Notes |
 | --- | --- | --- | --- | --- |
 | 2026-10-26 | [Full suite + coexistence, subscription](2026-10-26-opus-subscription-v0.7.0.md) | `claude-opus-5-5`, Claude Code subscription | `1dea68e` (`v0.7.0`) | 480 scorable runs, no retries; personal 83/84 PW vs 84/84 K, crowded 63/63 vs 62/63, isolated both 63/63; coexistence v3 view 2/28 vs 28/28. An earlier `gpt-6.1-sol`/Codex attempt stopped on model timeouts and is not pooled |
+
+Separate from the exact-tag model cohort: [model-free shared-browser stress](2026-10-26-kitsune-stress-v1.md)
+on `5425050fe804de7ee8f7b3e1b77c83414495abba` (`v0.7.0-4-g5425050`).
+`stress-v1` / `release-v1`, no model: 18/18 levels, 77,334 measured requests,
+0 errors, up to 32 clients. Host/sampler limits and an excluded pre-publication
+probe attempt are disclosed; this is not a version-regression baseline.
+
+A separate [Kitsune vs Playwright shared-browser comparison](2026-10-26-shared-browser-stress-comparison.md)
+on the same `5425050` revision uses `stress-compare-v1` / `shared-browser-v1`:
+24 arms, 280,008 measured requests, no errors; Playwright has higher throughput
+and lower p95 in all 12 tab-list pairs. Startup readiness failures are disclosed;
+CPU concentration in Kitsune MCP processes motivates profiling, not a general
+browser-automation ranking or a release-regression claim.
+
+The follow-up [A/B on the same protocol](2026-10-28-kitsune-298-299-ab.md) (2026-10-28)
+compares `main` `dbc84f8` with the unmerged #298/#299 branch at `bbe6adb`, A-B-B-A,
+no model: 96 arms, 0 errors; MCP CPU per request 12.0–12.1 → 0.74–0.76 ms at one
+client and lower in every candidate arm at every level; Kitsune/Playwright throughput
+0.17–0.56× → 1.37–2.87×. A branch measurement, not a release result.
 
 ## v0.4.1
 

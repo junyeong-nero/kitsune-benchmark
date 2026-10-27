@@ -76,6 +76,30 @@ Use `--kitsune-project` or `--codex` for non-default paths. See the
 [running guide](docs/running.md) for track commands, input validation, quota,
 stopping behavior, exit codes and evidence inspection.
 
+## Model-free concurrency benchmark
+
+```sh
+uv run --locked python -m kitsune_benchmark stress --profile release-v1          # plan only
+uv run --locked python -m kitsune_benchmark stress --profile release-v1 --execute
+```
+
+One private shared browser, 1–32 MCP clients, three repeats; **no agent/model calls**.
+The full-suite script includes this separate track before model work (`--skip-stress`
+is the recorded opt-out). It does not change `taskset-v3` scores or require a
+`taskset-v3.1` tag. See [protocol and safety limits](docs/stress.md) and the
+[first published observation](docs/results/2026-10-26-kitsune-stress-v1.md).
+
+For a fresh, counter-ordered **Kitsune vs Playwright shared-browser comparison**:
+
+```sh
+uv run --locked python -m kitsune_benchmark stress-compare --profile shared-browser-v1 --execute
+```
+
+This is separate `stress-compare-v1` evidence, not pooled with the standalone
+Kitsune track. In a full suite, `--stress-comparison` selects it instead of the
+Kitsune-only prelude. See [protocol](docs/stress-comparison.md) and
+[paired results](docs/results/2026-10-26-shared-browser-stress-comparison.md).
+
 ## Tests
 
 ```sh
@@ -105,6 +129,8 @@ PERSONAL_BROWSER_TEST=1 PERSONAL_KITSUNE_TEST=1 \
 | [Coexistence track](docs/coexistence.md) | Draft candidate for a later taskset (provisionally v3): user channel, v3 contracts, delegation/recovery specs |
 | [Codex harness](docs/codex-harness.md) | Authentication, tool policy, generic runs and process cleanup |
 | [Resource methodology](docs/resources.md) | CPU/RSS scope, attribution and sampling caveats |
+| [Model-free stress test](docs/stress.md) | Independent stress-v1/release-v1: concurrent MCP clients, latency, throughput, CPU/RSS; included in full-suite runs |
+| [Shared-browser stress comparison](docs/stress-comparison.md) | Kitsune vs Playwright, fresh paired runs, shared-context proof, counter-ordered load and response/resource accounting |
 | [Optimization findings](docs/optimization-findings.md) | Evidence-backed cache/observation/schema targets, RPC logs and offline analysis |
 | [MiniWoB integration](docs/miniwob.md) | Original task/reward adapter, distinct from personal tasks |
 | [MCP candidates](docs/comparison-candidates.md) | Future server/browser cohorts, not implemented benchmark adapters |

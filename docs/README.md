@@ -28,6 +28,8 @@ already-open tabs and a pre-established test session.
 | **Coexistence (draft)** | Kitsune philosophy: the user is in the browser too; delegation and recovery specs | 24 personal tasks under `user-seeded` + `co-typing-01` runnable; 25 tasks specified in [`tasks/coexistence/catalog.json`](../tasks/coexistence/catalog.json) | Opus, 2026-10-23: user-seeded v1 24/24 both, v3 user view 2/24 Playwright vs 24/24 Kitsune; `co-typing-01` 87 vs 0 misdirected keystrokes ([report](results/2026-10-23-coexistence-user-seeded.md)) |
 | **MiniWoB++ UI pilot** | Small upstream-task/original-reward integration check | Only `click-test-2`, seed 42; not the complete MiniWoB++ suite | One pair passed with historical `gpt-6.1-sol`, 2026-10-18 |
 | **Read-only smoke** | Browser/MCP connectivity and native-tool smoke | Example Domain task; no external task-success grader | One completed historical `gpt-6.1-sol` pair, 2026-10-18 |
+| **Model-free stress** | Concurrent MCP clients sharing one private browser; independent `stress-v1` protocol | Fixed `release-v1` profile, CPU/RSS and latency/throughput; included once in full-suite driver | 1–32 clients × 3 repeats, 77,334 measured requests, 0 errors on Kitsune v0.7.0+4; [report and limitations](results/2026-10-26-kitsune-stress-v1.md) |
+| **Shared-browser stress comparison** | Supported shared-browser deployments under concurrent read load, independent `stress-compare-v1` | One Firefox/context per target, topology proofs, KP/PK order, response/observer metrics | 24 arms, 280,008 measured requests, no errors; Playwright higher throughput/lower p95 in all 12 pairs for tab listing; [report and limits](results/2026-10-26-shared-browser-stress-comparison.md) |
 | **WebArena / live personal accounts** | Future realistic/multi-step tracks | Not provisioned or implemented | No results |
 
 Execution defaults to **Claude Code on the claude.ai subscription** (`--harness claude`, no
@@ -48,6 +50,8 @@ pair is not a general success rate, tool ranking or security certification.
 | [Personal execution config](../configs/benchmarks/personal.json) | Model/pins, default pilot selection and wall-clock budget |
 | [Codex integration](codex-harness.md) | Authentication, isolation, native tool policy, process lifecycle and trace audit |
 | [Local resource methodology](resources.md) | CPU/RSS sampling scope, attribution and interpretation |
+| [Model-free stress](stress.md) | Independent stress-v1 protocol, release profile, resource safety stops and full-suite integration |
+| [Shared-browser stress comparison](stress-comparison.md) | Independent stress-compare-v1, shared-browser-v1 profile, HTTP sessions, shared-context proof and paired metrics |
 | [Optimization findings](optimization-findings.md) | Causal cache evidence, token/observation candidates, native diagnostic logging and offline analysis |
 | [MiniWoB++ integration](miniwob.md) | Pinned upstream task, reward instrumentation and non-standard track limits |
 | [MCP comparison candidates](comparison-candidates.md) | Future MCP/browser cohorts; not benchmark task sources or measured adapters |

@@ -10,6 +10,12 @@ Both targets then share the machine, so elapsed time and CPU/RSS are measured un
 --sequential restores one process per track with paired runs, Playwright-first unless --order selects otherwise.
 MiniWoB (one pair) is sequential.
 
+Before graded tracks, the separate model-free stress-v1/release-v1 track runs once,
+without concurrent model/track work. --stress-comparison selects paired
+stress-compare-v1/shared-browser-v1 instead; --skip-stress explicitly omits it and
+records that choice. Stress results never enter task success denominators. A stopped or
+invalid stress run stops the suite before model usage.
+
 The default harness is `claude`: Claude Code on the claude.ai subscription login, which spends no API
 credit and has no dollar cap. API-key harnesses (`claude-api`, `claude-api-full`) bill ANTHROPIC_API_KEY
 credit and need --allow-api-billing plus --budget-usd and --max-budget-usd-per-run.
@@ -56,6 +62,36 @@ def suite_summary(entries: list[dict]) -> dict:
     return {"entries": entries, "by_order": group("order"), "by_attempt": group("attempt")}
 
 
+def run_stress_track(project: str, out: Path, *, comparison: bool = False) -> dict:
+    """One bounded, fixed-profile run; do not accept exit zero alone as evidence."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from kitsune_benchmark.stress import stress_plan
+    from kitsune_benchmark.stress_compare import comparison_plan
+    plan = comparison_plan("shared-browser-v1") if comparison else stress_plan("release-v1")
+    command = [sys.executable, "-m", "kitsune_benchmark", "stress-compare" if comparison else "stress", "--execute",
+               "--profile", plan["profile"], "--kitsune-project", project]
+    with (out / "stress.json").open("x") as stdout, (out / "stress.err").open("x") as stderr:
+        done = subprocess.run(command, stdout=stdout, stderr=stderr)
+    try:
+        result = json.loads((out / "stress.json").read_text())
+    except (OSError, ValueError):
+        result = {}
+    if not isinstance(result, dict):
+        result = {}
+    levels = result.get("levels")
+    complete = (done.returncode == 0 and result.get("status") == "completed"
+        and all(result.get(k) == v for k, v in plan.items())
+        and result.get("completed_levels") == len(plan["schedule"])
+        and isinstance(levels, list) and len(levels) == len(plan["schedule"])
+        and all(isinstance(level, dict) and level.get("valid") is True
+                and all(level.get(k) == v for k, v in scheduled.items())
+                for level, scheduled in zip(levels, plan["schedule"])))
+    return {"protocol": plan["protocol"], "profile": plan["profile"], "complete": complete,
+            "status": result.get("status", "invalid_summary"), "exit": done.returncode,
+            "run_dir": result.get("run_dir"), "output_path": str(out / "stress.json"),
+            "stopped_reason": result.get("stopped_reason")}
+
+
 def git_identity(project: str | Path, match: str | None = None) -> dict:
     """Revision and tag-relative name of a checkout, for grouping results by version."""
     def git(*argv: str) -> str | None:
@@ -79,6 +115,10 @@ def main() -> int:
     parser.add_argument("--allow-api-billing", action="store_true",
                         help="Confirm that an API-key harness may spend ANTHROPIC_API_KEY credit")
     parser.add_argument("--out", required=True)
+    stress_selection = parser.add_mutually_exclusive_group()
+    stress_selection.add_argument("--skip-stress", action="store_true", help="Explicitly omit model-free stress")
+    stress_selection.add_argument("--stress-comparison", action="store_true",
+                                  help="Use paired stress-compare-v1 instead of the Kitsune-only stress-v1 track")
     parser.add_argument("--spent-usd", type=float, default=0.0, help="Already spent toward the budget")
     parser.add_argument("--sequential", action="store_true",
                         help="One process per track running paired targets in turn, instead of the two in parallel")
@@ -126,10 +166,19 @@ def main() -> int:
                 "started": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
                 "targets_in_parallel": not args.sequential, "attempts": args.attempts,
                 "order_policy": args.order, "attempt_plan": plan,
-                "order_key": {"a": "playwright", "b": "kitsune"}, "commands": [name for name, _ in commands()]}
+                "order_key": {"a": "playwright", "b": "kitsune"}, "commands": [name for name, _ in commands()],
+                "stress": {"protocol": "stress-compare-v1" if args.stress_comparison else "stress-v1",
+                           "profile": "shared-browser-v1" if args.stress_comparison else "release-v1", "enabled": not args.skip_stress,
+                           "placement": "once_before_graded_tracks", "included_in_task_scores": False}}
     (out / "suite-manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
     log = out / "suite-log.jsonl"
     all_entries = []
+    stress = ({"status": "skipped", "reason": "explicit_skip_stress"} if args.skip_stress
+              else run_stress_track(args.kitsune_project, out, comparison=args.stress_comparison))
+    (out / "suite-summary.json").write_text(json.dumps({**suite_summary(all_entries), "stress": stress}, indent=2) + "\n")
+    if not args.skip_stress and not stress["complete"]:
+        print("stopped: stress track incomplete; no model tracks started", flush=True)
+        return 3
     for attempt in plan:
         attempt_dir = out if args.attempts == 1 else out / f"attempt-{attempt['attempt']:03d}"
         attempt_dir.mkdir(exist_ok=True)
@@ -195,7 +244,7 @@ def main() -> int:
                 print(json.dumps(entry), flush=True)
                 with log.open("a") as handle:
                     handle.write(json.dumps(entry) + "\n")
-            (out / "suite-summary.json").write_text(json.dumps(suite_summary(all_entries), indent=2) + "\n")
+            (out / "suite-summary.json").write_text(json.dumps({**suite_summary(all_entries), "stress": stress}, indent=2) + "\n")
             # Wait for the active track's peers above, but never consume more model
             # usage on later tracks after an invalid execution. MiniWoB reports a
             # single pair (no suite counts); its nonzero exit signals unscorability.
