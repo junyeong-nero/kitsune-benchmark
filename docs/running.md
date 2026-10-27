@@ -55,7 +55,7 @@ reads its existing login; there is no API-key or alternate-model fallback.
 | --- | --- | ---: |
 | `personal --task pb-current-01 --execute` | One current-page task pair, variant 0 | 2 |
 | `personal --execute` | Six-task personal pilot, one variant | 12 |
-| `personal --all --execute` | All 28 personal tasks, one variant | 56 |
+| `personal --all --execute` | All 36 personal tasks, one variant | 72 |
 | Three separate `personal --variant N --execute` commands for N=0,1,2 | Six tasks across three data variants | 36 total |
 | `benchmark --execute` | One MiniWoB++ `click-test-2` pair, seed 42 | 2 |
 | `smoke --execute` | One read-only Example Domain pair | 2 |
@@ -128,7 +128,7 @@ values actually used. `doctor --claude-model ID` validates that model for free.
 With `--harness codex`, `--codex-model ID` overrides the config's Codex `model` the
 same way; `scripts/run-full-suite.py --harness codex --model ID` passes it to every
 track and records it in `suite-manifest.json` (default: the config's Codex model).
-`scripts/run-full-suite.py` runs every graded track (personal 28 × 3 variants,
+`scripts/run-full-suite.py` runs every graded track (personal 36 × 3 variants,
 gallery 21 × 3 variants × 2 layouts, MiniWoB) under one total `--budget-usd`, and
 writes `suite-manifest.json` with the Kitsune revision and `git describe` so the
 result can be filed under [its Kitsune version](results/kitsune-versions.md).
@@ -182,8 +182,8 @@ Playwright `viewport_size` 1280×720 (content) and the Kitsune headless Firefox
 `window_size` (a window, not a content area). Configured window height is never
 `innerHeight`: the native check below measured 85 CSS px of Firefox toolbars.
 
-**Effective content viewport (#21).** Every page of a `personal-browsing-local-v3`
-run (`kitsune_benchmark personal`, all 28 tasks including the default pilot)
+**Effective content viewport (#21).** Every page of a personal run since `personal-browsing-local-v3`
+(`kitsune_benchmark personal`, all 36 tasks including the default pilot)
 serves one inline `<head>` script, allowed only by its CSP hash, that
 `navigator.sendBeacon`s `innerWidth`, `innerHeight`, `outerWidth`, `outerHeight`
 and `devicePixelRatio` to the fixture server on every page load. It renders
@@ -226,6 +226,10 @@ tasks (28 total); gallery's benchmark ID remains v2, and the seeded-tab custody
 contract is unchanged. Compare only reruns on the same v3 freeze, never v3
 scores with v1.x/v2. Personal summaries report success, tokens and existing
 response-byte/character counters per category (see [protocol](personal-browsing.md#long-page-lookup-taskset-v3)).
+The untagged `taskset-v4` preparation on `main` adds eight civic-document and
+authenticated-service tasks (36 total, IDs `personal-browsing-local-v4`; see
+[protocol](personal-browsing.md#civic-documents-and-authenticated-services-taskset-v4-preparation)).
+Until its tag exists, results from it are observations of one checkout.
 
 **A/B arms and a pinned Kitsune checkout.**
 
@@ -296,8 +300,8 @@ uv run --locked python -m kitsune_benchmark personal \
   --task pb-tabs-01 --task pb-safe-01 --variant 1 --execute
 ```
 
-There are **28 runnable specifications**, with six selected by the default
-pilot and all 28 selected by `--all`. Unknown, duplicate and specification-only
+There are **36 runnable specifications**, with six selected by the default
+pilot and all 36 selected by `--all`. Unknown, duplicate and specification-only
 IDs fail validation before inference. The
 first real one-pair result is documented
 [here](results/2026-10-19-personal-current-page.md); do not count it as a full

@@ -56,10 +56,10 @@ def main(argv: list[str] | None = None) -> int:
     benchmark.add_argument("--codex", default="codex")
     benchmark.add_argument("--kitsune-project")
     benchmark.add_argument("--targets", default="playwright,kitsune")
-    personal = subparsers.add_parser("personal", help="Personal browsing: 28 runnable local tasks (six-task pilot by default); plan by default")
+    personal = subparsers.add_parser("personal", help="Personal browsing: 36 runnable local tasks (six-task pilot by default); plan by default")
     personal.add_argument("--execute", action="store_true", help="Run selected pairs; consumes subscription quota")
     personal.add_argument("--task", action="append", dest="task_ids", help="Runnable task ID; repeat to select several; default: six pilot tasks")
-    personal.add_argument("--all", action="store_true", help="Select all 28 runnable tasks (56 agent runs with --execute)")
+    personal.add_argument("--all", action="store_true", help="Select all 36 runnable tasks (72 agent runs with --execute)")
     personal.add_argument("--variant", type=int, choices=(0, 1, 2), default=0)
     personal.add_argument("--codex", default="codex")
     personal.add_argument("--kitsune-project")
@@ -85,7 +85,7 @@ def main(argv: list[str] | None = None) -> int:
     coexistence.add_argument("--task", action="append", dest="task_ids",
                              help="Runnable co-* task, or a personal pb-* task to run user-seeded; repeatable; "
                                   "default: runnable co-* tasks")
-    coexistence.add_argument("--all-personal", action="store_true", help="All 28 personal tasks under the user-seeded condition")
+    coexistence.add_argument("--all-personal", action="store_true", help="All 36 personal tasks under the user-seeded condition")
     coexistence.add_argument("--protect-user-tabs", action="store_true",
                              help="Kitsune arm with KITSUNE_PROTECT_USER_TABS=1 (reported separately)")
     coexistence.add_argument("--variant", type=int, choices=(0, 1, 2), default=0)

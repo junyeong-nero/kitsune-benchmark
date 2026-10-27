@@ -1,4 +1,4 @@
-"""Run every graded track (personal 28×3 variants, gallery 21×3×2 layouts, MiniWoB) under one total budget.
+"""Run every graded track (personal 36×3 variants, gallery 21×3×2 layouts, MiniWoB) under one total budget.
 
 Each track command gets the remaining budget via --budget-usd, so the suite as a whole never starts a pair
 whose worst case would exceed it. A failed, stopped, malformed or incomplete track stops the suite

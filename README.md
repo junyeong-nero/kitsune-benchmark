@@ -21,8 +21,8 @@ to drafts, and respecting do-not-submit/preserve-context boundaries.
 
 | Track | Implemented scope | Actual model evidence |
 | --- | --- | --- |
-| **Personal browsing** | 28 original specifications, **all runnable** local tasks (six-task pilot default, `--all` for 28); three data variants each; frozen as `taskset-v3` | Opus subscription on Kitsune v0.7.0, 28 × 3 (2026-10-26): 83/84 Playwright, 84/84 Kitsune ([report](docs/results/2026-10-26-opus-subscription-v0.7.0.md)). Earlier: 24 variant-0 Haiku pairs 21/24 vs 23/24; six-task Codex pilot 3/6 vs 4/6 |
-| Coexistence (draft) | The user is in the browser too: user-owned starting tabs, view telemetry, a typing user ([protocol](docs/coexistence.md)). 28 personal tasks user-seeded + `co-typing-01` runnable; 25 more specified | Opus, 2026-10-23: user-seeded v1 24/24 both, v3 user view 2/24 Playwright vs 24/24 Kitsune ([report](docs/results/2026-10-23-coexistence-user-seeded.md)) |
+| **Personal browsing** | 36 original specifications, **all runnable** local tasks (six-task pilot default, `--all` for 36); three data variants each. `taskset-v3` (28) is the current freeze; eight [civic-document and authenticated-service tasks](docs/personal-browsing.md#civic-documents-and-authenticated-services-taskset-v4-preparation) are the `taskset-v4` preparation | Opus subscription on Kitsune v0.7.0, 28 × 3 (2026-10-26): 83/84 Playwright, 84/84 Kitsune ([report](docs/results/2026-10-26-opus-subscription-v0.7.0.md)). Earlier: 24 variant-0 Haiku pairs 21/24 vs 23/24; six-task Codex pilot 3/6 vs 4/6 |
+| Coexistence (draft) | The user is in the browser too: user-owned starting tabs, view telemetry, a typing user ([protocol](docs/coexistence.md)). 36 personal tasks user-seeded + `co-typing-01` runnable; 25 more specified | Opus, 2026-10-23: user-seeded v1 24/24 both, v3 user view 2/24 Playwright vs 24/24 Kitsune ([report](docs/results/2026-10-23-coexistence-user-seeded.md)) |
 | MiniWoB++ UI pilot | Only upstream `click-test-2`, seed 42 | One pair passed with historical `gpt-6.1-sol` on 2026-10-18 |
 | Read-only smoke | Example Domain, no external task-success grader | One completed historical `gpt-6.1-sol` pair on 2026-10-18 |
 
@@ -71,7 +71,7 @@ uv run --locked python -m kitsune_benchmark personal \
 ```
 
 A separately budgeted six-task pilot is `personal --execute` (**up to 12 agent
-runs**, not all 28 specs). Do not start it just to inspect configuration.
+runs**, not all 36 specs). Do not start it just to inspect configuration.
 Use `--kitsune-project` or `--codex` for non-default paths. See the
 [running guide](docs/running.md) for track commands, input validation, quota,
 stopping behavior, exit codes and evidence inspection.
@@ -96,7 +96,7 @@ PERSONAL_BROWSER_TEST=1 PERSONAL_KITSUNE_TEST=1 \
 | Path | Purpose |
 | --- | --- |
 | `configs/benchmarks/personal.json` | Model/pins, default six-task pilot selection, time budget |
-| `tasks/personal/catalog.json` | All 28 task specifications, implementation status and source references |
+| `tasks/personal/catalog.json` | All 36 task specifications, implementation status and source references |
 | `kitsune_benchmark/` | Codex execution/audit, paired lifecycle, fixtures, evaluators and resource collection |
 | `artifacts/` | Private, gitignored raw evidence and browser/vendor resources |
 | [Documentation index](docs/README.md) | Guide map, track status and source-of-truth boundaries |

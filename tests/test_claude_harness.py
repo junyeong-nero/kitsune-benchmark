@@ -349,7 +349,7 @@ print({chr(10).join(json.dumps(e) for e in events)!r}.replace('@SOURCE@', source
         with redirect_stdout(io.StringIO()) as out:
             self.assertEqual(main(["personal", "--harness", "claude-api", "--all", "--budget-usd", "30"]), 0)
         plan = json.loads(out.getvalue())
-        self.assertEqual((plan["worst_case_usd"], plan["suite_budget_usd"], plan["planned_model_runs"]), (56.0, 30.0, 56))
+        self.assertEqual((plan["worst_case_usd"], plan["suite_budget_usd"], plan["planned_model_runs"]), (72.0, 30.0, 72))
 
 
 class BenchmarkProtocolTests(unittest.TestCase):
