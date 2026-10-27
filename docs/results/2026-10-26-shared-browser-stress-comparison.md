@@ -22,7 +22,9 @@ browser-automation, task-success or user-coexistence ranking.
   and a fresh private user-data-dir. One Firefox process-tree root per arm.
 - Benchmark parent `8a74a1ebe4eb1b1fd992af5ad4dc6ccc50833d16`, dirty with this
   implementation (`taskset-v3-3-g8a74a1e-dirty`); no claim of running the exact v3 tag.
-- Host: macOS 26.5.1 arm64, 8 logical cores, 8 GiB RAM. Driver Python 3.13.5,
+- Host: macOS 26.5.1 arm64, 8 logical cores, 8 GiB RAM (added 2026-10-27, not in
+  the manifest: a fanless MacBook Air, Mac14,2, Apple M2 with **4 performance + 4
+  efficiency cores**; Kitsune's scaling bends after 4 clients). Driver Python 3.13.5,
   psutil 7.2.2, Node v26.12.0, uv 0.7.20, web-ext 10.8.0. A post-run check of the
   unchanged Kitsune project environment reported Python 3.12.6, httpx 0.28.1 and
   MCP SDK 1.30.0 (distinct from the driver Python version in the manifest).

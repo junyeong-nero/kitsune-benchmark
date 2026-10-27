@@ -123,6 +123,13 @@ startup errors remain separate failed evidence. Memory safety stops are host lim
 not proof of a software connection limit. Peaks can occur between samples. Host
 swap/available memory include unrelated applications.
 
+Runs since 2026-10-27 also record the [`host-diagnostics-v1` probe](stress.md#host-diagnostics-host-diagnostics-v1):
+host model and core types in the manifest, a CPU canary before and after each arm
+(`host_canary`, warning `host_cpu_slower`) and whole-machine CPU over each load window
+(`host_cpu`). It changes no schedule or metric. A Kitsune arm keeps six or more cores
+busy and a Playwright arm under two, so on a fanless host the canary shows whether the
+heavier arm slowed the next one. Compare only runs with the same host probe.
+
 This is a saturation test with coordinated omission, not fixed-arrival-rate latency
 or normal LLM-agent behavior with think time. It cannot establish general navigation,
 DOM extraction, screenshot, user coexistence or task-success superiority. Compare

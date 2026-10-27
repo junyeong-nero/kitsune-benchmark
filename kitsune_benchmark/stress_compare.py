@@ -29,6 +29,8 @@ from .personal_session import tabs_from_result
 from .resources import ResourceRoot
 from .smoke import ROOT, await_bridge, benchmark_source, bridge_status, copy_extension, private_ports, source_revision
 from .stress import Client, SafetyStop, StressCollector, aggregate_levels, failed, percentiles, stress_plan
+from .stress_host import (HOST_PROBE, HostCPU, canary_record, canary_warnings, cpu_canary, host_details,
+                          run_canary_summary)
 from .stress_http import HTTPClient
 from .stress_resources import StressProcessProbe
 
@@ -212,7 +214,7 @@ def worker(client, target, index, start, deadline, stage):
     return {'samples': latencies, 'errors': errors, 'json_bytes': payload_bytes, 'text_bytes': text_bytes}
 
 
-def stage_run(stage, spec, plan, project, firefox, env):
+def stage_run(stage, spec, plan, project, firefox, env, canary_before=None, first_canary=None):
     stage.mkdir(mode=0o700)
     target, count = spec['target'], spec['clients']
     with ExitStack() as stack:
@@ -299,7 +301,9 @@ def stage_run(stage, spec, plan, project, firefox, env):
             list(pool.map(warm, connected))
         resources.check()
         resources.set_phase('idle')
+        idle_cpu = HostCPU()
         time.sleep(plan['idle'])
+        idle_cpu.stop()
         resources.check()
         start, deadline = threading.Event(), [0.0]
         observer = psutil.Process()
@@ -310,6 +314,7 @@ def stage_run(stage, spec, plan, project, firefox, env):
                 cpu_before = observer.cpu_times()
                 rss_before = observer.memory_info().rss
                 before = time.monotonic()
+                host_cpu = HostCPU()
                 deadline[0] = before + plan['duration']
                 start.set()
                 while not all(f.done() for f in futures):
@@ -318,6 +323,7 @@ def stage_run(stage, spec, plan, project, firefox, env):
                     time.sleep(.05)
                 outcomes = [f.result() for f in futures]
                 elapsed = time.monotonic() - before
+                host_cpu.stop()
                 cpu_after = observer.cpu_times()
                 rss_after = observer.memory_info().rss
             finally:
@@ -330,6 +336,7 @@ def stage_run(stage, spec, plan, project, firefox, env):
             if any([t['url'] for t in tabs] != BASELINE for tabs in after):
                 raise ValueError('Post-load tab baseline changed')
         resources.set_phase('cleanup')
+    canary = canary_record(canary_before, cpu_canary(), first_canary or canary_before) if canary_before else None
     samples = [s for row in outcomes for s in row['samples']]
     successful = [s[0] for s in samples if s[1] is None]
     errors = {}
@@ -354,6 +361,7 @@ def stage_run(stage, spec, plan, project, firefox, env):
                 if bucket['duration_sec'] else None}
     max_gap = max(resources.load_gaps, default=None)
     warnings = ['sampling_cadence_degraded'] if max_gap is None or max_gap > max(1, 4 * plan['interval']) else []
+    warnings += canary_warnings(canary) if canary else []
     result = {**spec, 'valid': not reasons, 'invalid_reasons': reasons, 'elapsed_sec': elapsed,
         'attempts': len(samples), 'successes': len(successful), 'errors': errors,
         'successful_requests_per_sec': len(successful) / elapsed,
@@ -365,6 +373,9 @@ def stage_run(stage, spec, plan, project, firefox, env):
                      'rss_before_bytes': rss_before, 'rss_after_bytes': rss_after, 'scope': 'load generator + resource sampler; excluded from owned totals'},
         'measurement_warnings': warnings, 'load_sample_cadence': {'median_sec': statistics.median(resources.load_gaps) if resources.load_gaps else None,
                                                                'max_sec': max_gap, 'intervals': len(resources.load_gaps)},
+        'host_cpu': {**host_cpu.record(elapsed, metrics.get('phase/load/all', {}).get('mean_cpu_percent_one_core')),
+                     'idle_window_percent_one_core': idle_cpu.record(plan['idle'], None)['load_percent_one_core']},
+        'host_canary': canary,
         'topology_path': str(stage / 'topology.json'), 'resource_summary_path': str(stage / 'resource-summary.json')}
     write_json(stage / 'summary.json', result)
     return result
@@ -407,28 +418,32 @@ def run_comparison(*, execute=False, profile=None, kitsune_project=None, **overr
     root = ROOT / 'artifacts/stress-compare' / (datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ-') + uuid.uuid4().hex[:8])
     root.mkdir(parents=True, mode=0o700)
     files = ['kitsune_benchmark/stress_compare.py', 'kitsune_benchmark/stress_http.py', 'kitsune_benchmark/stress.py',
-             'kitsune_benchmark/stress_resources.py', 'kitsune_benchmark/resources.py', 'kitsune_benchmark/personal_session.py',
+             'kitsune_benchmark/stress_resources.py', 'kitsune_benchmark/stress_host.py', 'kitsune_benchmark/resources.py',
+             'kitsune_benchmark/personal_session.py',
              'kitsune_benchmark/smoke.py', 'kitsune_benchmark/adapter.py', 'configs/benchmarks/stress-compare-v1.json',
              'uv.lock', 'package-lock.json', 'node_modules/playwright-core/lib/coreBundle.js']
     hashes = {p: hashlib.sha256((ROOT / p).read_bytes()).hexdigest() for p in files}
     manifest = {**plan, 'kitsune_source': {**identity, 'describe': output(['git', '-C', str(project), 'describe', '--tags', '--always', '--dirty'])},
-        'benchmark_source': benchmark_source(), 'file_sha256': hashes, 'browser_binary': str(firefox),
+        'benchmark_source': benchmark_source(), 'file_sha256': hashes, 'browser_binary': str(firefox), 'host_probe': HOST_PROBE,
         'versions': {'firefox': output([str(firefox), '--version']), 'node': output(['node', '--version']),
                      'uv': output(['uv', '--version']), 'python': sys.version, 'psutil': psutil.__version__,
                      **{name: json.loads((ROOT / f'node_modules/{name}/package.json').read_text())['version']
                         for name in ('@playwright/mcp', 'playwright', 'web-ext')}},
         'host': {'os': platform.platform(), 'arch': platform.machine(), 'logical_cpus': psutil.cpu_count(),
                  'total_ram_bytes': psutil.virtual_memory().total, 'available_ram_bytes_at_start': psutil.virtual_memory().available,
-                 'swap_used_bytes_at_start': psutil.swap_memory().used}}
+                 'swap_used_bytes_at_start': psutil.swap_memory().used, **host_details()}}
     write_json(root / 'manifest.json', manifest)
     summary = {**plan, 'run_dir': str(root), 'levels': [], 'status': 'running'}
+    first_canary = None
     try:
         for i, spec in enumerate(plan['schedule']):
             if source_revision(project) != identity:
                 raise ValueError('Kitsune checkout changed during comparison')
             print(f"compare repeat {spec['repeat']}, {spec['clients']} clients, {spec['target']} ({spec['pair_order']})", file=sys.stderr, flush=True)
             stage = root / f"{i:02d}-r{spec['repeat']}-n{spec['clients']}-{spec['target']}"
-            result = stage_run(stage, spec, plan, project, firefox, env)
+            canary_before = cpu_canary()  # outside the arm's processes and phases
+            first_canary = first_canary or canary_before
+            result = stage_run(stage, spec, plan, project, firefox, env, canary_before, first_canary)
             summary['levels'].append(result)
             if not result['valid']:
                 summary.update(status='failed', stopped_reason=result['invalid_reasons'])
@@ -449,5 +464,6 @@ def run_comparison(*, execute=False, profile=None, kitsune_project=None, **overr
         summary['aggregates'] = {target: aggregate_levels([r for r in summary['levels'] if r['target'] == target])
                                  for target in ('kitsune', 'playwright')}
         summary['paired_ratios'] = paired_ratios(summary['levels'])
+        summary['host_canary'] = run_canary_summary(summary['levels'])
         write_json(root / 'summary.json', summary)
     return summary

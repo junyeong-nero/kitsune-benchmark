@@ -23,6 +23,8 @@ import psutil
 
 from .adapter import terminate_group, write_json
 from .resources import ResourceCollector, ResourceRoot
+from .stress_host import (HOST_PROBE, HostCPU, canary_record, canary_warnings, cpu_canary, host_details,
+                          run_canary_summary)
 from .stress_resources import StressProcessProbe
 from .smoke import ROOT, await_bridge, benchmark_source, copy_extension, private_ports, source_revision
 
@@ -251,24 +253,28 @@ def run_stress(*, execute=False, profile=None, kitsune_project=None, **overrides
     manifest = {**plan, "kitsune_source": {**identity,
         "describe": version(["git", "-C", str(project), "describe", "--tags", "--always", "--dirty"])},
         "benchmark_source": benchmark_source(), "browser_binary": str(firefox),
-        "resource_probe": "single-table-v1",
+        "resource_probe": "single-table-v1", "host_probe": HOST_PROBE,
         "versions": {"firefox": version([str(firefox), "--version"]), "node": version(["node", "--version"]),
                      "uv": version(["uv", "--version"]), "python": sys.version, "psutil": psutil.__version__},
         "host": {"os": platform.platform(), "arch": platform.machine(), "logical_cpus": psutil.cpu_count(),
                  "physical_cpus": psutil.cpu_count(logical=False), "total_ram_bytes": psutil.virtual_memory().total,
                  "available_ram_bytes_at_start": psutil.virtual_memory().available,
-                 "swap_used_bytes_at_start": psutil.swap_memory().used},
+                 "swap_used_bytes_at_start": psutil.swap_memory().used, **host_details()},
         "file_sha256": {p: hashlib.sha256((ROOT / p).read_bytes()).hexdigest() for p in
-            ("kitsune_benchmark/stress.py", "kitsune_benchmark/stress_resources.py", "kitsune_benchmark/resources.py", "kitsune_benchmark/smoke.py",
+            ("kitsune_benchmark/stress.py", "kitsune_benchmark/stress_resources.py", "kitsune_benchmark/stress_host.py",
+             "kitsune_benchmark/resources.py", "kitsune_benchmark/smoke.py",
              "kitsune_benchmark/adapter.py", "configs/benchmarks/stress-v1.json", "uv.lock", "package-lock.json")}}
     write_json(directory / "manifest.json", manifest)
     summary["manifest_path"] = str(directory / "manifest.json")
+    first_canary = None
     try:
         # Fresh bridge/browser per level: no retained clients or accumulated browser state.
         for level, scheduled in enumerate(plan["schedule"]):
             count = scheduled["clients"]
             if source_revision(project) != identity:
                 raise ValueError("Kitsune source changed during sweep")
+            canary_before = cpu_canary()  # outside the level's processes and phases
+            first_canary = first_canary or canary_before
             print(f"stress repeat {scheduled['repeat']}: {count} clients", file=sys.stderr, flush=True)
             stage = directory / f"{level:02d}-repeat-{scheduled['repeat']}-clients-{count}"
             stage.mkdir(mode=0o700)
@@ -327,7 +333,9 @@ def run_stress(*, execute=False, profile=None, kitsune_project=None, **overrides
                     list(pool.map(warm, connected))
                 resources.check()
                 resources.set_phase("idle")
+                idle_cpu = HostCPU()
                 time.sleep(idle)
+                idle_cpu.stop()
                 resources.check()
                 start, deadline = threading.Event(), [0.0]
                 with ThreadPoolExecutor(max_workers=count) as pool:
@@ -336,6 +344,7 @@ def run_stress(*, execute=False, profile=None, kitsune_project=None, **overrides
                     try:
                         resources.set_phase("load")
                         before = time.monotonic()
+                        host_cpu = HostCPU()
                         deadline[0] = before + duration
                         start.set()
                         while not all(f.done() for f in futures):
@@ -344,11 +353,13 @@ def run_stress(*, execute=False, profile=None, kitsune_project=None, **overrides
                             time.sleep(0.05)
                         outcomes = [f.result() for f in futures]
                         elapsed = time.monotonic() - before
+                        host_cpu.stop()
                     finally:
                         # Release waiting workers even on interruption/setup failure.
                         deadline[0] = 0
                         start.set()
                 resources.set_phase("cleanup")
+            canary = canary_record(canary_before, cpu_canary(), first_canary)
             samples = [s for rows, _ in outcomes for s in rows]
             successes = [latency for latency, error in samples if error is None]
             errors = {}
@@ -375,9 +386,12 @@ def run_stress(*, execute=False, profile=None, kitsune_project=None, **overrides
             cadence = {"median_sec": statistics.median(resources.load_gaps) if resources.load_gaps else None,
                        "max_sec": max(resources.load_gaps, default=None), "intervals": len(resources.load_gaps)}
             warnings = (["sampling_cadence_degraded"] if cadence["max_sec"] is None
-                        or cadence["max_sec"] > max(1.0, interval * 4) else [])
+                        or cadence["max_sec"] > max(1.0, interval * 4) else []) + canary_warnings(canary)
+            owned = metrics.get("phase/load/all", {}).get("mean_cpu_percent_one_core")
             result = {**scheduled, "valid": not reasons, "invalid_reasons": reasons,
                       "measurement_warnings": warnings, "load_sample_cadence": cadence,
+                      "host_canary": canary, "host_cpu": {**host_cpu.record(elapsed, owned),
+                          "idle_window_percent_one_core": idle_cpu.record(idle, None)["load_percent_one_core"]},
                       "initialize_and_probe_sec": connect_seconds, "elapsed_sec": elapsed,
                       "attempts": len(samples), "successes": len(successes), "errors": errors,
                       "error_rate": (len(samples) - len(successes)) / len(samples) if samples else None,
@@ -403,6 +417,7 @@ def run_stress(*, execute=False, profile=None, kitsune_project=None, **overrides
         raise
     finally:
         summary["aggregates"] = aggregate_levels(summary["levels"])
+        summary["host_canary"] = run_canary_summary(summary["levels"])
         summary["completed_levels"] = len(summary["levels"])
         summary["requested_levels"] = len(plan["schedule"])
         path = directory / "summary.json"

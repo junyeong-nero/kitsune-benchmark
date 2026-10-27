@@ -14,7 +14,9 @@ track, excluded from personal/gallery success denominators.
   uncommitted stress implementation; manifest describes it as
   `taskset-v3-3-g8a74a1e-dirty`. It does not claim execution from the exact v3 tag.
 - Protocol/profile: `stress-v1` / `release-v1`; resource probe `single-table-v1`.
-- Host: macOS 26.5.1, arm64, 8 logical/physical cores, 8 GiB RAM.
+- Host: macOS 26.5.1, arm64, 8 logical/physical cores, 8 GiB RAM. Added 2026-10-27,
+  not recorded by this run's manifest: the machine is a fanless MacBook Air
+  (Mac14,2, Apple M2) whose eight cores are **4 performance + 4 efficiency**.
 - Firefox 156.0, Python 3.13.5, psutil 7.2.2, Node v26.12.0, uv 0.7.20.
 - Fresh private headless Firefox, bridge and independent stdio MCP processes per
   level; each client continuously calls `browser_tabs(action=list)`, one in flight.

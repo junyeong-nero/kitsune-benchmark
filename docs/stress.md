@@ -128,6 +128,37 @@ in the resource report. `load_sample_cadence` records actual median/maximum gaps
 not guaranteed cadence. Warnings do not turn a completed request into an error. Repeat longer runs on a quiet
 machine before interpreting the scaling curve.
 
+## Host diagnostics (`host-diagnostics-v1`)
+
+Runs since 2026-10-27 record `host_probe: host-diagnostics-v1` in the manifest. It
+changes no workload, schedule, safety limit or measured metric; it adds context for
+reading them, because the same build measured on the same machine can differ by tens
+of percent between runs:
+
+- `manifest.json` `host`: model identifier, CPU brand, core types (performance and
+  efficiency core counts on Apple Silicon), power source, `pmset -g therm` notes and
+  load average. Eight logical CPUs can be four performance and four efficiency cores.
+- Per level `host_canary`: a fixed single-threaded Python loop timed in the driver
+  before the level's processes start and after they are gone (about 0.5 s each,
+  outside warmup, idle and load), and its slowdown against the run's first canary.
+  More than 15% slower adds the `host_cpu_slower` measurement warning: a slower or
+  busier host (thermal limits on a fanless laptop, other applications), not a slower
+  target. Wall time well above CPU time means the driver waited for a core; more CPU
+  time for the same loop means a slower core.
+- Per level `host_cpu`: whole-machine busy CPU over the load window, the driver's
+  share, and the remainder after owned processes (`unowned_percent_one_core`), plus
+  the same whole-machine figure over the connected-idle window
+  (`idle_window_percent_one_core`). The remainder includes the machine's background
+  (60–120% of one core on the reporting laptop with a terminal open) and is approximate:
+  the owned window differs by milliseconds, owned CPU is sampled, and a calibration
+  with 2 and 4 busy loops read about 50% of one core above their expected total. Read
+  a large rise over the idle figure as interference, not a small difference.
+- `summary.json` `host_canary`: the first canary, the largest slowdown and the number
+  of levels with a warning.
+
+Compare runs that have the same host probe. Earlier runs, including the published
+2026-10-26 cohort, have none; no slowdown can be inferred for them after the fact.
+
 ## Artifacts
 
 `artifacts/stress/<run-id>/` (private, gitignored):
