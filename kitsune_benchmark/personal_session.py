@@ -13,6 +13,7 @@ import os
 from pathlib import Path
 import queue
 import re
+import signal
 import subprocess
 import sys
 import threading
@@ -59,9 +60,15 @@ def tabs_from_result(target: str, result: dict) -> list[dict]:
 
 
 class NativeSession:
+    # Whether the upstream server gets its own session, out of reach of signals sent to this
+    # relay's process group (see CoexistenceSession).
+    upstream_new_session = False
+
     def __init__(self, config: dict):
         self.config = config
         self.process = None
+        # The termination signal that ended the run, if any; the harness kills the relay soon after.
+        self.terminated_by: str | None = None
         self.pending = queue.Queue()
         self.serial = 0
         self.tab_indexed = False
@@ -73,7 +80,7 @@ class NativeSession:
 
     def start(self):
         self.process = subprocess.Popen(self.config["upstream"], stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE, stderr=sys.stderr, bufsize=0)
+            stdout=subprocess.PIPE, stderr=sys.stderr, bufsize=0, start_new_session=self.upstream_new_session)
 
         def read():
             try:
@@ -299,22 +306,34 @@ class NativeSession:
             self.save()
         emit({**result, "id": message["id"]})
 
+    def signal_upstream(self, signum: int) -> None:
+        try:
+            if self.upstream_new_session:
+                os.killpg(self.process.pid, signum)  # its whole session, as a group signal would
+            else:
+                self.process.send_signal(signum)
+        except ProcessLookupError:
+            pass
+
     def close(self):
         if self.process:
             try:
                 self.process.stdin.close()  # Let a nested relay/native server clean up on EOF.
             except OSError:
                 pass
+            # After a termination signal the harness kills this relay shortly (Codex: about 0.4 s),
+            # so do not wait the usual seconds for the upstream to clean up on EOF.
+            grace = 0.15 if self.terminated_by else 3
             try:
-                self.process.wait(timeout=3)
+                self.process.wait(timeout=grace)
             except subprocess.TimeoutExpired:
-                self.process.terminate()
+                self.signal_upstream(signal.SIGTERM)
                 try:
-                    self.process.wait(timeout=3)
+                    self.process.wait(timeout=grace)
                 except subprocess.TimeoutExpired:
-                    self.process.kill()
+                    self.signal_upstream(signal.SIGKILL)
                     self.process.wait(timeout=3)
-            self.reader.join(timeout=5)
+            self.reader.join(timeout=0.1 if self.terminated_by else 5)
             self.process.stdout.close()
 
 

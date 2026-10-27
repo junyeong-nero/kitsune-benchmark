@@ -50,6 +50,11 @@ An earlier attempt the same night used Codex `0.163.0` with `gpt-6.1-sol`
 - The cause was on the model side (no response) and was not identified further.
 - Its `co-typing-01` pair was unscorable: user-channel activity and view samples
   were not recorded under the Codex harness. That was not investigated.
+  - Follow-up (2026-10-27): Codex 0.163.0 ends a run with SIGTERM to the relay's
+    process group and kills it about 0.4 s later. The relay died before finishing
+    the user, so the typing record and sampler transitions were never written. The
+    relay now finishes the user on SIGTERM ([coexistence](../coexistence.md)); this
+    pair was not rerun.
 - None of its runs are pooled here. It is not a Kitsune or Codex task result.
 
 ## Task outcomes

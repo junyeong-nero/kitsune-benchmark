@@ -11,6 +11,9 @@ Differences from `personal_session.py` (taskset-v1 behaviour; taskset-v2 only ad
   window focus are recorded (`evidence["view"]`). The agent never sees this channel.
 - An optional typing user (`config["user_activity"]`) types into a field of their tab during
   the run; keystrokes that land elsewhere because the view moved are recorded.
+- The user is finished (typing stopped, field read, sampler stopped) before the upstream
+  server stops, also when the harness ends the run with SIGTERM: Codex sends it to this
+  relay's process group, closes stdin and kills the relay about 0.4 s later.
 
 Driver calls are counted separately from harness MCP calls (`driver_calls`, `driver_seconds`).
 """
@@ -18,6 +21,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import signal
 import sys
 import time
 
@@ -44,13 +48,19 @@ def owned_urls(target: str, result: dict) -> list[str] | None:
 
 
 class CoexistenceSession(NativeSession):
+    # In this relay's process group the upstream would get the harness's SIGTERM too, and
+    # Playwright MCP would close its browser before the user's field is read.
+    upstream_new_session = True
+
     def __init__(self, config: dict):
         super().__init__(config)
         self.driver: UserDriver | None = None
         self.sampler: ViewSampler | None = None
         self.typist: TypingUser | None = None
+        self.closing = False
         self.evidence.update(seeding="user_bidi", seeded_owned_by_agent=None, view=None,
-                             user_activity=None, driver_calls=0, driver_seconds=0.0)
+                             user_activity=None, driver_calls=0, driver_seconds=0.0,
+                             termination_signal=None, user_finish_sec=None)
 
     def raw_tabs(self) -> dict:
         return self.tool("browser_tabs", {"action": "list"})
@@ -148,11 +158,15 @@ class CoexistenceSession(NativeSession):
             self.driver = None
 
     def close(self):
+        self.closing = True
+        started = time.monotonic()
+        self.evidence["termination_signal"] = self.terminated_by
         try:
             self.finish_user()
         except (BidiError, OSError, ValueError):
             self.evidence["user_channel_error"] = True
-            self.save()
+        self.evidence["user_finish_sec"] = round(time.monotonic() - started, 3)
+        self.save()
         super().close()
 
 
@@ -163,6 +177,15 @@ def main() -> int:
     def emit(message):
         print(json.dumps(message, ensure_ascii=False), flush=True)
 
+    def terminated(signum, frame):
+        # Unwind into `finally` at once: the harness kills the relay soon after. A signal that
+        # arrives once closing has begun changes nothing.
+        if not session.closing:
+            session.terminated_by = signal.Signals(signum).name
+            raise SystemExit(128 + signum)
+
+    for signum in (signal.SIGTERM, signal.SIGHUP):
+        signal.signal(signum, terminated)
     try:
         session.start()
         for line in sys.stdin:
@@ -175,7 +198,12 @@ def main() -> int:
         print("Coexistence fixture MCP setup/inventory failed; inspect private artifacts.", file=sys.stderr)
         return 2
     finally:
-        session.close()
+        while True:
+            try:
+                session.close()
+                break
+            except SystemExit:
+                continue  # the signal landed as close() was entered, before `closing` was set
 
 
 if __name__ == "__main__":

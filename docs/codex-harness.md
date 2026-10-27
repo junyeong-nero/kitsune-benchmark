@@ -191,6 +191,12 @@ A bounded check handles macOS EPERM only if no live group member survives;
 remaining live processes remain an error. Independently detached/shared services
 and browser/site mutations cannot generally be undone by generic `run`.
 
+Codex itself stops MCP servers at the end of a run. 0.163.0 starts each server as a
+process-group leader, then sends SIGTERM to that group and closes the server's stdin,
+and kills the server about 0.4 s later (no-model probe with a local stub model,
+2026-10-27). A relay that must finish work at exit has that long; the coexistence
+relay handles it (see [coexistence](coexistence.md)).
+
 JSONL audit deduplicates MCP calls, checks the server name and optional tool
 policy, and records errors/usage. Shell/file changes/built-in search, foreign MCPs,
 unknown schema items, and malformed logs invalidate the trace. It is a conservative
