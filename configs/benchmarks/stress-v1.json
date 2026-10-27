@@ -1,0 +1,15 @@
+{
+  "protocol": "stress-v1",
+  "profile": "release-v1",
+  "clients": [1, 2, 4, 8, 16, 32],
+  "repeats": 3,
+  "order": "alternating",
+  "duration": 30.0,
+  "warmup": 3.0,
+  "idle": 3.0,
+  "cooldown": 3.0,
+  "timeout": 10.0,
+  "interval": 0.25,
+  "min_available_mib": 512,
+  "max_rss_mib": 4096
+}

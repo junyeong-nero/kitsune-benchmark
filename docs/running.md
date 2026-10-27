@@ -59,6 +59,8 @@ reads its existing login; there is no API-key or alternate-model fallback.
 | Three separate `personal --variant N --execute` commands for N=0,1,2 | Six tasks across three data variants | 36 total |
 | `benchmark --execute` | One MiniWoB++ `click-test-2` pair, seed 42 | 2 |
 | `smoke --execute` | One read-only Example Domain pair | 2 |
+| `stress --profile release-v1 --execute` | Independent `stress-v1`: 1–32 concurrent MCP clients, 3 repeats, private shared browser | **0** |
+| `stress-compare --profile shared-browser-v1 --execute` | Independent `stress-compare-v1`: paired Kitsune/Playwright, 1–32 clients, 2 counter-ordered repeats | **0** |
 
 These are **agent run counts**, not LLM turn counts, token caps or prices. One
 agent run can contain many model/tool interactions. There is no `full-test`
@@ -139,6 +141,22 @@ suite log has one entry per target). `--sequential` restores paired,
 Playwright-first runs in one process. A Playwright-only process starts no Kitsune
 bridge or browser. `scripts/analyze-per-tool.py <out>` compares the two targets
 tool by tool (calls, errors, latency, response size, grouped error texts).
+**Model-free stress is now included once before the graded tracks.** The driver
+runs `stress --profile release-v1 --execute` alone, with no model or competing
+track processes. This adds roughly 15 minutes (host-dependent) and records the
+independent `stress-v1` protocol/profile and a separate `stress` summary, never
+adding performance results to task-success denominators. Resource safety stops
+or invalid/incomplete stress evidence stop the suite before model execution.
+`--skip-stress` explicitly opts out and records that choice. `--attempts` below
+applies to graded tracks; the stress profile always declares its own three repeats.
+See [stress protocol, limits and standalone commands](stress.md). Add
+`--stress-comparison` to the full-suite command to replace that prelude with the
+independent `stress-compare-v1` / `shared-browser-v1` paired Kitsune/Playwright
+comparison. It is mutually exclusive with `--skip-stress`, also runs alone before
+model work, and never changes task scores. The standalone, model-free command is
+`uv run --locked python -m kitsune_benchmark stress-compare --profile shared-browser-v1 --execute`.
+See [comparison protocol](stress-comparison.md).
+
 The full-suite driver exits **3** after an invalid/incomplete track (nonzero exit,
 stopped reason, malformed summary, or incomplete coverage), once its active
 target processes have settled. It does not start later tracks or retry. Ordinary

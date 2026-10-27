@@ -17,11 +17,22 @@ from .miniwob import run_benchmark
 from .gallery import run_gallery
 from .personal import config as personal_config, pair_complete, run_personal, runnable_ids
 from .coexistence import run_coexistence
+from .stress import run_stress
+from .stress_compare import run_comparison
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Kitsune browser MCP benchmark tooling")
     subparsers = parser.add_subparsers(dest="command", required=True)
+    for command, profile in (("stress", "release-v1"), ("stress-compare", "shared-browser-v1")):
+        stress = subparsers.add_parser(command, help="Model-free shared-browser load; plan by default")
+        stress.add_argument("--execute", action="store_true")
+        stress.add_argument("--profile", choices=(profile,), help="Fixed profile; no workload overrides")
+        stress.add_argument("--clients", help="Comma-separated concurrency levels (1–128)")
+        stress.add_argument("--repeats", type=int)
+        for setting in ("duration", "idle", "warmup", "cooldown", "timeout", "interval", "min-available-mib", "max-rss-mib"):
+            stress.add_argument("--" + setting, type=float)
+        stress.add_argument("--kitsune-project")
     doctor = subparsers.add_parser("doctor", help="Check Codex prerequisites without a model call")
     doctor.add_argument("--codex", default="codex", help="Codex executable name or path")
     doctor.add_argument("--codex-home", help="Existing Codex home to check; no credentials are copied")
@@ -110,6 +121,20 @@ def main(argv: list[str] | None = None) -> int:
                            "(e.g. gpt-6.1-sol); the override is recorded in each run's manifest")
     doctor.add_argument("--claude-model", help="Model ID to validate with the claude-api harnesses")
     args = parser.parse_args(argv)
+    if args.command in {"stress", "stress-compare"}:
+        try:
+            runner = run_stress if args.command == "stress" else run_comparison
+            result = runner(execute=args.execute, profile=args.profile,
+                clients=tuple(int(n) for n in args.clients.split(",")) if args.clients is not None else None,
+                duration=args.duration, idle=args.idle, timeout=args.timeout, interval=args.interval,
+                repeats=args.repeats, warmup=args.warmup, cooldown=args.cooldown,
+                min_available_mib=args.min_available_mib, max_rss_mib=args.max_rss_mib,
+                kitsune_project=args.kitsune_project)
+        except (ValueError, OSError, subprocess.SubprocessError, TimeoutError, EOFError) as exc:
+            print(json.dumps({"error": str(exc)}))
+            return 2
+        print(json.dumps(result, indent=2))
+        return 3 if result.get("status") in {"failed", "stopped"} else 0
     claude = getattr(args, "harness", "codex").startswith("claude")
     executable = getattr(args, "claude", None) if claude else args.codex
     overrides = {"claude_model": getattr(args, "claude_model", None),
