@@ -31,9 +31,14 @@ uv run --locked python -m kitsune_benchmark stress --execute \
 
 Start small: each client is a real MCP process and consumes RAM. Concurrency is
 bounded to 128, at most 16 levels. Repeated levels are allowed (`--clients 4,4,4`).
-Each level creates a fresh browser/bridge, connects clients, performs initialize
-and a probe, then repeated warmup requests (default 3 seconds), measures
-connected-idle resources, then starts workers together. Clients are launched sequentially and initialized concurrently; this
+Each level creates a fresh browser/bridge, waits for a stable extension connection,
+connects clients, performs initialize and a probe, then repeated warmup requests
+(default 3 seconds), measures connected-idle resources, then starts workers together.
+A stable connection is the extension's hello/version with one unchanged generation
+for a full second: on a fresh bridge the first connection can drop at once and come
+back as generation 2 or 3, and a client probe in that gap failed a short custom run
+(2026-10-27). This setup-only check, the same as the comparison track's, does not
+touch measured requests; release-v1 runs before it simply had no failing probe. Clients are launched sequentially and initialized concurrently; this
 is **not** a simultaneous cold bridge startup/race test.
 
 ## Versioning and release integration

@@ -26,7 +26,7 @@ from .resources import ResourceCollector, ResourceRoot
 from .stress_host import (HOST_PROBE, HostCPU, canary_record, canary_warnings, cpu_canary, host_details,
                           run_canary_summary)
 from .stress_resources import StressProcessProbe
-from .smoke import ROOT, await_bridge, benchmark_source, copy_extension, private_ports, source_revision
+from .smoke import ROOT, await_bridge, benchmark_source, bridge_status, copy_extension, private_ports, source_revision
 
 PROTOCOL = "stress-v1"
 PROFILE_PATH = ROOT / "configs/benchmarks/stress-v1.json"
@@ -67,6 +67,32 @@ def stress_plan(profile=None, **overrides):
 
 class SafetyStop(RuntimeError):
     pass
+
+
+def await_stable_extension(port, token, process, resources):
+    """The extension's first connection to a fresh bridge can drop at once and come back
+    as a later generation (one or two reconnects within about 2 s of every startup).
+
+    A socket alone is not readiness: require hello/version and one unchanged,
+    connected generation for a full second. This is startup-only, not load retry.
+    """
+    end, since, generation = time.monotonic() + 40, None, None
+    while time.monotonic() < end:
+        resources.check()
+        if process.poll() is not None:
+            raise ValueError('Firefox exited during extension readiness')
+        status = bridge_status(port, token)
+        now = time.monotonic()
+        if status and status.get('extension_connected') and status.get('extension_version'):
+            current = status.get('extension_generation')
+            if since is None or current != generation:
+                since, generation = now, current
+            if now - since >= 1:
+                return {k: status.get(k) for k in ('extension_version', 'extension_build', 'extension_generation')}
+        else:
+            since, generation = None, None
+        time.sleep(.25)
+    raise TimeoutError('No stable extension handshake within 40 seconds')
 
 
 class StressCollector(ResourceCollector):
@@ -311,7 +337,8 @@ def run_stress(*, execute=False, profile=None, kitsune_project=None, **overrides
                     "--source-dir", str(stage / "extension"), "--artifacts-dir", str(stage / "web-ext"),
                     "--firefox", str(firefox), "--no-reload", "--start-url", "about:blank", "--args=-headless"],
                     "firefox", "browser_launcher")
-                await_bridge(http, stage_env["KITSUNE_TOKEN"], browser, extension=True)
+                write_json(stage / "extension-ready.json",
+                           await_stable_extension(http, stage_env["KITSUNE_TOKEN"], browser, resources))
                 resources.set_phase("connect")
                 connected = [Client(spawn(base + ["kitsune"], f"client-{i}", "mcp", True), timeout)
                              for i in range(count)]

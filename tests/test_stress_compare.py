@@ -38,9 +38,9 @@ class ComparisonTests(unittest.TestCase):
         ])
         def status(*_):
             return next(sequence, {'extension_connected': True, 'extension_generation': 2, 'extension_version': '0.7'})
-        with patch('kitsune_benchmark.stress_compare.bridge_status', side_effect=status), \
-             patch('kitsune_benchmark.stress_compare.time.monotonic', side_effect=lambda: clock[0]), \
-             patch('kitsune_benchmark.stress_compare.time.sleep', side_effect=lambda dt: clock.__setitem__(0, clock[0] + dt)):
+        with patch('kitsune_benchmark.stress.bridge_status', side_effect=status), \
+             patch('kitsune_benchmark.stress.time.monotonic', side_effect=lambda: clock[0]), \
+             patch('kitsune_benchmark.stress.time.sleep', side_effect=lambda dt: clock.__setitem__(0, clock[0] + dt)):
             ready = await_stable_extension(12345, 'test', Mock(poll=lambda: None), Mock())
         self.assertEqual(ready['extension_generation'], 2)
         self.assertGreaterEqual(clock[0], 1.75)

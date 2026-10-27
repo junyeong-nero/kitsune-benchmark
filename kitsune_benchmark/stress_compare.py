@@ -27,8 +27,9 @@ import psutil
 from .adapter import terminate_group, write_json
 from .personal_session import tabs_from_result
 from .resources import ResourceRoot
-from .smoke import ROOT, await_bridge, benchmark_source, bridge_status, copy_extension, private_ports, source_revision
-from .stress import Client, SafetyStop, StressCollector, aggregate_levels, failed, percentiles, stress_plan
+from .smoke import ROOT, await_bridge, benchmark_source, copy_extension, private_ports, source_revision
+from .stress import (Client, SafetyStop, StressCollector, aggregate_levels, await_stable_extension, failed,
+                     percentiles, stress_plan)
 from .stress_host import (HOST_PROBE, HostCPU, canary_record, canary_warnings, cpu_canary, host_details,
                           run_canary_summary)
 from .stress_http import HTTPClient
@@ -139,31 +140,6 @@ class Runtime:
         self.resources.register(ResourceRoot(process.pid, component, self.target))
         self.resources.check()
         return process, close
-
-
-def await_stable_extension(port, token, process, resources):
-    """web-ext can briefly connect generation 1 before restarting the extension.
-
-    A socket alone is not readiness: require hello/version and one unchanged,
-    connected generation for a full second. This is startup-only, not load retry.
-    """
-    end, since, generation = time.monotonic() + 40, None, None
-    while time.monotonic() < end:
-        resources.check()
-        if process.poll() is not None:
-            raise ValueError('Firefox exited during extension readiness')
-        status = bridge_status(port, token)
-        now = time.monotonic()
-        if status and status.get('extension_connected') and status.get('extension_version'):
-            current = status.get('extension_generation')
-            if since is None or current != generation:
-                since, generation = now, current
-            if now - since >= 1:
-                return {k: status.get(k) for k in ('extension_version', 'extension_build', 'extension_generation')}
-        else:
-            since, generation = None, None
-        time.sleep(.25)
-    raise TimeoutError('No stable extension handshake within 40 seconds')
 
 
 def await_port(port, process, resources):
