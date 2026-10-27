@@ -9,7 +9,7 @@ already-open tabs and a pre-established test session.
 
 1. [Run safely](running.md): setup, plan-only checks, one-pair execution, quotas,
    tests and where results are written.
-2. [Personal browsing taskset](personal-browsing.md): the 24-task catalog,
+2. [Personal browsing taskset](personal-browsing.md): the 36-task catalog,
    six implemented tasks, session/reset protocol, grading and limitations.
 3. [Latest six-task result](results/2026-10-19-personal-six-task.md): all six
    implemented tasks, variant 0, with token/time breakdown and grading caveats.
@@ -24,7 +24,7 @@ already-open tabs and a pre-established test session.
 
 | Track | Purpose | Implementation | Observed evidence |
 | --- | --- | --- | --- |
-| **Personal browsing** | Existing tabs, test sessions, lookup, drafts and safe mutations | 24 original specifications, all runnable local fixtures, each with three data variants | 24 variant-0 pairs on Claude Code + `claude-haiku-5-5`: 21/24 Playwright vs 23/24 Kitsune, 2026-10-21; six-task Codex `gpt-6-luna` pilot 3/6 vs 4/6, 2026-10-19 |
+| **Personal browsing** | Existing tabs, test sessions, lookup, drafts and safe mutations | 36 original specifications (28 frozen in `taskset-v3`, 8 civic-document and authenticated-service tasks in the `taskset-v4` preparation), all runnable local fixtures, each with three data variants | 24 variant-0 pairs on Claude Code + `claude-haiku-5-5`: 21/24 Playwright vs 23/24 Kitsune, 2026-10-21; six-task Codex `gpt-6-luna` pilot 3/6 vs 4/6, 2026-10-19 |
 | **Coexistence (draft)** | Kitsune philosophy: the user is in the browser too; delegation and recovery specs | 24 personal tasks under `user-seeded` + `co-typing-01` runnable; 25 tasks specified in [`tasks/coexistence/catalog.json`](../tasks/coexistence/catalog.json) | Opus, 2026-10-23: user-seeded v1 24/24 both, v3 user view 2/24 Playwright vs 24/24 Kitsune; `co-typing-01` 87 vs 0 misdirected keystrokes ([report](results/2026-10-23-coexistence-user-seeded.md)) |
 | **MiniWoB++ UI pilot** | Small upstream-task/original-reward integration check | Only `click-test-2`, seed 42; not the complete MiniWoB++ suite | One pair passed with historical `gpt-6.1-sol`, 2026-10-18 |
 | **Read-only smoke** | Browser/MCP connectivity and native-tool smoke | Example Domain task; no external task-success grader | One completed historical `gpt-6.1-sol` pair, 2026-10-18 |

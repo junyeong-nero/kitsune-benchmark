@@ -87,12 +87,12 @@ endpoint, and this is not an adversarial boundary.
 
 ## Conditions and tasks
 
-### `user-seeded` (runnable): the 28 personal tasks
+### `user-seeded` (runnable): the 36 personal tasks
 
 Fixtures, requests and graders are imported from `personal.py` and
-`personal_fixtures.py` unchanged. `--all-personal` selects all 28
-`personal-browsing-local-v3` tasks, including the four long-page tasks. The
-original 24 remain unchanged; compare historical results only on that same
+`personal_fixtures.py` unchanged. `--all-personal` selects all 36
+`personal-browsing-local-v4` tasks, including the four long-page tasks and the
+eight taskset-v4 service tasks. The original 24 and the 28 v3 tasks remain unchanged; compare historical results only on that same
 selection and contract, not against the expanded total. The relay (`coexistence_session.py`, a
 subclass of the personal relay, whose only `taskset-v2` change is the hidden
 `tab_calls` record) changes three things:
@@ -183,7 +183,7 @@ track; add `--harness claude-api --allow-api-billing` only to spend API credit:
 ```sh
 # The coexistence fixture(s): 2 agent runs per task.
 uv run --locked python -m kitsune_benchmark coexistence --execute
-# All 28 personal tasks user-seeded (56 runs), then the Kitsune protection arm.
+# All 36 personal tasks user-seeded (72 runs), then the Kitsune protection arm.
 uv run --locked python -m kitsune_benchmark coexistence --all-personal --execute
 uv run --locked python -m kitsune_benchmark coexistence --all-personal --protect-user-tabs --targets kitsune --execute
 ```

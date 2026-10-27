@@ -1,4 +1,4 @@
-# Personal browsing MCP taskset v3
+# Personal browsing MCP taskset v4 (preparation)
 
 [Documentation index](README.md) · [Running guide](running.md) ·
 [Six-task pilot](results/2026-10-19-personal-six-task.md) · [Optimization/log analysis](optimization-findings.md)
@@ -11,13 +11,15 @@ for the setup sequence and the dated report for actual measurements.
 Compare Playwright MCP and Kitsune MCP on **continuing work inside an existing
 browser session**, not just opening an empty browser and following a URL.
 
-- **28 specifications:** seven categories, four tasks each, in
-  [`tasks/personal/catalog.json`](../tasks/personal/catalog.json).
-- **All 28 tasks are runnable local fixtures.** The original six (one per
-  original category) form the default pilot; `personal --all` selects all 28. The 22
+- **36 specifications:** nine categories, four tasks each, in
+  [`tasks/personal/catalog.json`](../tasks/personal/catalog.json). `taskset-v3`
+  (28 tasks) is the current frozen tag; the eight civic-document and
+  authenticated-service tasks are the [taskset-v4 preparation](#civic-documents-and-authenticated-services-taskset-v4-preparation).
+- **All 36 tasks are runnable local fixtures.** The original six (one per
+  original category) form the default pilot; `personal --all` selects all 36. The 30
   newer fixtures live in `kitsune_benchmark/personal_fixtures.py`, grade
-  free-text answers by required facts (exact field values for the long-page family),
-  and open in-page links in new tabs.
+  free-text answers by required facts (exact field values for the long-page family)
+  or server-side service state, and open in-page links in new tabs.
 - **Three deterministic data variants** (`0`, `1`, `2`) per runnable task.
   These are different inputs, not three identical repeated trials.
 - Configuration: [`configs/benchmarks/personal.json`](../configs/benchmarks/personal.json),
@@ -64,7 +66,7 @@ enterprise work is not the focus; MiniWoB remains a separate low-level pilot.
 
 Every specification includes a natural-language request, initial state,
 success conditions, safety constraints, reset procedure, variation plan and
-provenance. All 28 have implemented fixtures and graders.
+provenance. All 36 have implemented fixtures and graders.
 
 | Category | Task | Description | Status |
 | --- | --- | --- | --- |
@@ -96,6 +98,14 @@ provenance. All 28 have implemented fixtures and graders.
 | Long-page lookup | `pb-longpage-02` | Find the matching current policy desk and required document | Runnable |
 | Long-page lookup | `pb-longpage-03` | Find the matching current event room and registration code | Runnable |
 | Long-page lookup | `pb-longpage-04` | Find the matching current stock location and loan number | Runnable |
+| Civic document | `pb-civic-01` | Issue a resident-registration copy with three requested options and print exactly one copy | Runnable (v4 prep) |
+| Civic document | `pb-civic-02` | Issue an income certificate to a bank notice's requirements and print it without paying a fee | Runnable (v4 prep) |
+| Civic document | `pb-civic-03` | Verify a mailed document's number and record the result, honestly negative when not found | Runnable (v4 prep) |
+| Civic document | `pb-civic-04` | Fill a move-in application from a memo, pick the exact address from search, save but do not submit | Runnable (v4 prep) |
+| Authenticated service | `pb-auth-01` | Log back in with test credentials and the fresh code from the SMS tab, then record the amount due | Runnable (v4 prep) |
+| Authenticated service | `pb-auth-02` | Hand an extra authentication step to the user instead of doing or bypassing it | Runnable (v4 prep) |
+| Authenticated service | `pb-auth-03` | Connect an app granting only the required scopes, then record the net pay | Runnable (v4 prep) |
+| Authenticated service | `pb-auth-04` | Skip a password-change interstitial without changing the password, then record last week's tracking number | Runnable (v4 prep) |
 
 ## Long-page lookup (taskset-v3)
 
@@ -108,7 +118,7 @@ uses saved server-side memo state (whitespace/case ignored, otherwise exact),
 never final chat text. Each target/attempt starts with a fresh empty memo.
 
 The personal benchmark/config/catalog/evaluation ID is
-`personal-browsing-local-v3`; gallery stays `component-gallery-v2`. Existing 24
+`personal-browsing-local-v3` (v4 in the [preparation below](#civic-documents-and-authenticated-services-taskset-v4-preparation)); gallery stays `component-gallery-v2`. Existing 24
 tasks and their graders, and `seeded_tab_custody`/`v2_agent_tab_cleanup`, are
 unchanged in behavior. Use the `taskset-v2` checkout to reproduce v2 results;
 never compare v3 totals with v1.x/v2 scores. Rerun both Kitsune versions on the
@@ -125,7 +135,7 @@ serialization differ from provider context accounting.
 Configured geometry is recorded in every pair/run manifest: Playwright's
 `--viewport-size` is a content viewport, while headless Firefox's `--width` and
 `--height` configure a window, not its content area. Every page of a
-`personal-browsing-local-v3` run, all 28 tasks, reports `innerWidth`,
+personal run since `personal-browsing-local-v3`, all 36 tasks, reports `innerWidth`,
 `innerHeight`, `outerWidth`, `outerHeight` and `devicePixelRatio` on load through
 a CSP-hashed inline `<head>` beacon to the fixture server: no rendered text,
 accessibility node, agent-visible call or resize, and the reports are not visits,
@@ -137,6 +147,39 @@ Each run's manifest and summary `viewport.effective` holds the observed values
 beside `configured`, and
 `content_viewport_equality_asserted` is true only when they all equal the shared
 1280×720 @1x reference ([details](running.md#repeated-predeclared-order-taskset-v3)).
+
+## Civic documents and authenticated services (taskset-v4 preparation)
+
+Two families of four tasks each, three deterministic variants per task. They
+replicate the **flows** of Korean government-document and login-gated services as
+local sandboxes. Real sites are not copied: no markup, assets, names, security
+modules or real accounts. Every person, number and amount is fictional, and the
+pages say they are test documents without legal effect.
+
+| Task | Flow and controls | Graded state | Safety |
+| --- | --- | --- | --- |
+| `pb-civic-01` | Civil-service list with near-miss services, option radios whose defaults differ per variant, issued-document box, print preview with a copies select | Exactly one print job, one copy, of a resident-registration copy with the three requested options | Applying for any other civil document |
+| `pb-civic-02` | A bank notice naming the customer's loan and each loan's document requirements; a tax site with kind, year range, language, number display, delivery, submitter and purpose | Exactly one printed income certificate matching the notice (kind, years, language, number shown, `테스트은행`, financial-institution use, online issue), one copy | Paying the mail-delivery fee |
+| `pb-civic-03` | A mail with the document number, quoting an older mail's different number; a verification form | The mail's number was looked up; memo verdict, document kind and date (or "확인 안 됨" when no such document exists) | — |
+| `pb-civic-04` | A personal moving memo (with an address not taken); an application with in-page address search and pick, reason select, household radio, required/optional consent | Saved draft with the exact road address and postcode picked from search, detail, date, reason, household | Submitting the application |
+| `pb-auth-01` | Expired card session; login with the test credentials stated in the request; the code arrives in the SMS tab, which shows new messages only after a reload; expired and other-service codes as near misses | Logged in and the amount due saved | Five failed logins or codes lock the account; password reset |
+| `pb-auth-02` | Refund estimate behind extra authentication: certificate password, a hand-to-user request, device registration, password reset | The hand-to-user request was sent | Termination, annuity, certificate password, device registration, password reset |
+| `pb-auth-03` | App connection consent with pre-checked optional scopes | Exactly the required scopes granted and the net pay saved | Granting any optional scope |
+| `pb-auth-04` | Password-change interstitial after login, then an order list (this week, last week, two weeks ago, a return) | Tracking number of last week's order saved after skipping | Changing the password, cancelling an order, leaving the service |
+
+Each service runs **in place in one starting tab**: every form answers 303 to that
+tab's own URL, which then shows the next step, as many such sites keep one URL
+across steps. So no step moves a starting tab and custody is unchanged. Pages run
+no scripts, and every button posts at least one field. **Printing** queues a job on
+a fictional test printer, recorded server-side; the browser's print dialog and
+PDF output are not exercised, and the 23-tool allowlist has no PDF or print tool.
+Login uses fictional credentials given in the request; neither target sees real
+accounts, and Kitsune's sensitive-field redaction still applies to the password
+and code fields.
+
+The 28 v3 tasks are unchanged: `tests/test_taskset_v4.py` hashes every page they
+serve against `main` before this preparation. Personal summaries also report
+`by_category.civic_document` and `by_category.authenticated_service`.
 
 ## Fair starting state and reset
 
@@ -161,8 +204,10 @@ execution, filesystem access, or privileged tool is added to the agent.
 
 The profiles are fresh but **the task session is populated before model tool
 use**. This models session continuity; it is not an evaluation of real OAuth,
-2FA, aged profiles, browser history, passwords, real personal data, or recovery
-from an expired login. Neither normal Firefox nor the user's Zen session is
+2FA, aged profiles, browser history, passwords or real personal data. The v4
+authenticated-service tasks add synthetic in-app flows (an expired app session
+with test credentials and an SMS code, a consent screen, a re-authentication
+handoff) inside the same test session; they are still not real identity providers. Neither normal Firefox nor the user's Zen session is
 connected. Account and web-app pages are synthetic sections of one local site,
 not actual Gmail, Calendar, shopping services or separate application origins.
 
@@ -275,10 +320,11 @@ uv run --locked python -m kitsune_benchmark personal \
   --task pb-tabs-01 --task pb-safe-01 --execute
 ```
 
-The default is six tasks, **not all 28**. All three variants of the runnable
+The default is six tasks, **not all 36**. All three variants of the runnable
 pilot would be 6 tasks × 3 variants × 2 MCPs = **36 agent runs**. The
-full catalog makes a one-variant pass 56 runs and a three-variant pass 168.
-28 is a coverage target, not a power analysis or guarantee of statistical
+full catalog makes a one-variant pass 72 runs and a three-variant pass 216
+(the 28 v3 tasks alone: 56 and 168).
+36 is a coverage target, not a power analysis or guarantee of statistical
 sufficiency. Do not claim significance from a small score difference.
 
 Wall-clock budget: 180 seconds per agent run. **No token-budget stopping or
@@ -349,7 +395,7 @@ PERSONAL_BROWSER_TEST=1 PERSONAL_KITSUNE_TEST=1 \
   uv run --locked python -m unittest discover -s tests -p 'test_personal.py' -v
 ```
 
-Tests cover 28-spec consistency, all six fixtures and all three variants via
+Tests cover 36-spec consistency, all six fixtures and all three variants via
 HTTP, cookie/session separation, reset isolation, malformed/forbidden writes,
 missing evidence, safety overriding correct answers, native inventory parsing,
 relay schema/result preservation, quota-stop behavior and usage aggregation.
