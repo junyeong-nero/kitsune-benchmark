@@ -14,7 +14,8 @@ from urllib.error import HTTPError
 from urllib.parse import urlencode
 from urllib.request import HTTPCookieProcessor, ProxyHandler, Request, build_opener
 
-from kitsune_benchmark.personal import CSP, PersonalServer, PersonalTrial, aggregate_results, catalog, config, run_personal
+from kitsune_benchmark.personal import (CSP, LATER_CATEGORIES, PersonalServer, PersonalTrial, aggregate_results, catalog,
+                                        config, run_personal)
 from kitsune_benchmark.personal_fixtures import LongPage
 from kitsune_benchmark.cost_metrics import observation_volume
 from kitsune_benchmark.coexistence import run_coexistence
@@ -52,7 +53,8 @@ class TasksetV3Tests(unittest.TestCase):
         return PersonalTrial(task, variant, "fixed", "http://local/t/fixed")
 
     def test_version_ids_agree_and_gallery_stays_v2(self):
-        self.assertEqual(config()["id"], "personal-browsing-local-v3")
+        # taskset-v4 adds two families and keeps every v3 contract below (tests/test_taskset_v4.py).
+        self.assertEqual(config()["id"], "personal-browsing-local-v4")
         self.assertEqual(catalog()["suite"], config()["id"])
         self.assertEqual(gallery_config()["id"], "component-gallery-v2")
         self.assertEqual(len(self.tasks()), 4)
@@ -113,7 +115,7 @@ class TasksetV3Tests(unittest.TestCase):
         """Uninstrumented, and in v3 runs apart from the report script and its CSP, the 24 tasks serve taskset-v2's pages."""
         pages = {False: [], True: []}
         for task in catalog()["tasks"]:
-            if task["category"] == "long_page_lookup":
+            if task["category"] in LATER_CATEGORIES:
                 continue
             for variant in range(3):
                 with PersonalServer(task, variant) as server:
