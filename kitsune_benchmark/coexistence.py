@@ -184,15 +184,19 @@ class CoexistenceServer(PersonalServer):
             evidence = {}
         view = view_metrics(evidence)
         typing = input_metrics(evidence)
+        # A configured typing user without a typing record (a relay killed before it finished
+        # the user) is unknown, not a task without one.
+        with self.lock:
+            expects_typing = self.activity(self.trials[self.by_target[target]]) is not None
         owned = evidence.get("seeded_owned_by_agent")
         scorable = bool(base["scorable"] and evidence.get("seeding") == "user_bidi" and view["recorded"]
-                        and owned in (0, None) and (typing is None or typing["recorded"])
+                        and owned in (0, None) and (typing["recorded"] if typing else not expects_typing)
                         and not evidence.get("user_channel_error"))
         success = base["task_success"] if scorable else None
         view_kept = view["view_left_initial_after_calls"] == 0 and view["view_transitions_away"] == 0
         contracts = dict(base["contracts"])
         contracts["v3_user_view"] = {"task_success": (success and view_kept) if scorable else None}
-        if typing is not None:
+        if typing is not None or expects_typing:
             contracts["v3_user_input"] = {"task_success": (success and typing["user_input_intact"]) if scorable else None}
         track = "coexistence" if self.task["id"].startswith("co-") else "personal@user-seeded"
         return {**base, "benchmark": "coexistence-v0-draft", "track": track, "condition": "user-seeded",

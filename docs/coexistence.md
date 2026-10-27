@@ -157,6 +157,16 @@ of 46. The main prerequisites still to build are:
 starting tabs, a typing record where a typing user is configured, and no
 user-channel error.
 
+The sampler's transitions and the typing record are written when the relay finishes
+the user, after the agent's last call. A harness may end the run with a signal:
+Codex 0.163.0 sends SIGTERM to the relay's process group, closes its stdin and kills
+it about 0.4 s later (no-model probe, 2026-10-27). The relay therefore handles
+SIGTERM/SIGHUP by finishing the user first (stop typing, read the field, stop the
+sampler), then stops its upstream server, which runs in its own session so the group
+signal cannot close Playwright's browser before the read. Session evidence records
+`termination_signal` and `user_finish_sec`. A relay killed before finishing leaves no
+transitions or typing record, and the run is unscorable rather than scored without them.
+
 The v3 contracts are **not** a stricter version of the v1 score. They measure a
 different property: whether a person using the browser was disturbed. Report them
 side by side. Keep four dimensions separate: functional success

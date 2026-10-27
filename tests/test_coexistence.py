@@ -7,8 +7,11 @@ import json
 import os
 from pathlib import Path
 import re
+import signal
 import socket
 import struct
+import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -21,6 +24,7 @@ from kitsune_benchmark.coexistence import (CoexistenceServer, aggregate_coexiste
                                            run_coexistence, selected_tasks, view_metrics)
 from kitsune_benchmark.coexistence_fixtures import JOURNAL_TEXT
 from kitsune_benchmark.coexistence_session import CoexistenceSession, owned_urls
+from kitsune_benchmark.personal_session import NativeSession
 from kitsune_benchmark.smoke import ROOT, await_bridge, copy_extension, private_ports, run_pair
 from kitsune_benchmark.specs import Server
 from http.cookiejar import CookieJar
@@ -303,6 +307,16 @@ class EvaluationTests(unittest.TestCase):
             self.assertEqual((result["scorable"], result["task_success"], result["contracts"]["v3_user_view"]["task_success"],
                               result["contracts"]["v3_user_input"]["task_success"]), (True, None, None, None))
 
+    def test_typing_user_without_a_record_is_unscorable(self):
+        # A relay killed before it finished the user leaves the view samples but no typing record.
+        with tempfile.TemporaryDirectory() as folder, CoexistenceServer(typing_task(), 0) as server:
+            trial = self.prepared(server, "kitsune", folder)
+            trial.visits.append("/notice")
+            trial.mutate("/note", trial.expected)
+            result = self.evaluate(server, "kitsune", user_evidence(trial))
+            self.assertFalse(result["scorable"])
+            self.assertIsNone(result["contracts"]["v3_user_input"]["task_success"])
+
     def test_missing_user_channel_evidence_is_unscorable(self):
         with tempfile.TemporaryDirectory() as folder, CoexistenceServer(selected_tasks(["pb-account-01"])[0], 0) as server:
             trial = self.prepared(server, "kitsune", folder)
@@ -320,6 +334,100 @@ class EvaluationTests(unittest.TestCase):
         self.assertIsNone(owned_urls("playwright", listed))
         with self.assertRaises(ValueError):
             owned_urls("kitsune", {"content": [{"type": "text", "text": "not json"}]})
+
+
+# The relay's shutdown without an upstream server or a browser; finish_user stands in for
+# stopping the typing user, reading their field and stopping the sampler.
+PROBE_RELAY = r'''
+import sys, time
+from kitsune_benchmark import coexistence_session as relay
+
+class Probe(relay.CoexistenceSession):
+    def start(self):
+        self.process = None
+
+    def forward(self, message, emit):
+        emit({"jsonrpc": "2.0", "id": message["id"], "result": {}})
+
+    def finish_user(self):
+        time.sleep(self.config["finish_delay"])
+        self.evidence["user_activity"] = {"finished": True}
+
+relay.CoexistenceSession = Probe
+raise SystemExit(relay.main())
+'''
+
+
+class RelayTerminationTests(unittest.TestCase):
+    """Codex 0.163 ends a run with SIGTERM to the relay's process group and stdin EOF, then
+    kills the relay about 0.4 s later (no-model probe, 2026-10-27)."""
+
+    def relay(self, folder, finish_delay):
+        config = Path(folder) / "session.json"
+        config.write_text(json.dumps({"target": "kitsune", "evidence_path": str(Path(folder) / "evidence.json"),
+                                      "finish_delay": finish_delay}))
+        script = Path(folder) / "probe_relay.py"
+        script.write_text(PROBE_RELAY)
+        process = subprocess.Popen([sys.executable, str(script), str(config)], stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE, start_new_session=True, env={**os.environ, "PYTHONPATH": str(ROOT)})
+        self.addCleanup(lambda: process.poll() is None and process.kill())
+        self.addCleanup(process.stdout.close)
+        process.stdin.write(b'{"jsonrpc": "2.0", "id": 1, "method": "tools/list"}\n')
+        process.stdin.flush()
+        self.assertEqual(json.loads(process.stdout.readline())["id"], 1)  # serving, handlers installed
+        return process
+
+    def test_sigterm_finishes_the_user_before_the_relay_exits(self):
+        with tempfile.TemporaryDirectory() as folder:
+            process = self.relay(folder, 0.1)
+            signalled = time.monotonic()
+            os.killpg(process.pid, signal.SIGTERM)
+            time.sleep(0.05)
+            process.stdin.close()
+            self.assertEqual(process.wait(timeout=5), 128 + signal.SIGTERM)
+            self.assertLess(time.monotonic() - signalled, 1.0)
+            evidence = json.loads((Path(folder) / "evidence.json").read_text())
+            self.assertEqual(evidence["user_activity"], {"finished": True})
+            self.assertEqual(evidence["termination_signal"], "SIGTERM")
+            self.assertGreaterEqual(evidence["user_finish_sec"], 0.1)
+
+    def test_a_signal_while_closing_does_not_cut_it_short(self):
+        with tempfile.TemporaryDirectory() as folder:
+            process = self.relay(folder, 0.4)
+            process.stdin.close()  # EOF first: closing starts
+            time.sleep(0.15)
+            os.killpg(process.pid, signal.SIGTERM)
+            self.assertEqual(process.wait(timeout=5), 0)
+            evidence = json.loads((Path(folder) / "evidence.json").read_text())
+            self.assertEqual(evidence["user_activity"], {"finished": True})
+            self.assertIsNone(evidence["termination_signal"])
+
+    def test_upstream_has_its_own_session_and_is_stopped_at_once_after_a_signal(self):
+        with tempfile.TemporaryDirectory() as folder:
+            # An upstream that ignores stdin EOF; the relay must not wait its usual 3 s for it.
+            config = {"target": "kitsune", "evidence_path": str(Path(folder) / "evidence.json"),
+                      "upstream": [sys.executable, "-c", "import time; time.sleep(30)"]}
+            session = CoexistenceSession(config)
+            session.start()
+            self.addCleanup(lambda: session.process.poll() is None and session.process.kill())
+            self.assertEqual(os.getpgid(session.process.pid), session.process.pid)
+            self.assertNotEqual(os.getpgid(session.process.pid), os.getpgid(0))
+            session.terminated_by = "SIGTERM"
+            started = time.monotonic()
+            session.close()
+            self.assertLess(time.monotonic() - started, 1.0)
+            self.assertEqual(session.process.returncode, -signal.SIGTERM)
+            self.assertEqual(json.loads(Path(config["evidence_path"]).read_text())["termination_signal"], "SIGTERM")
+
+    def test_personal_relay_keeps_its_upstream_in_its_process_group(self):
+        with tempfile.TemporaryDirectory() as folder:
+            session = NativeSession({"target": "kitsune", "evidence_path": str(Path(folder) / "evidence.json"),
+                                     "upstream": [sys.executable, "-c", "import sys; sys.stdin.read()"]})
+            session.start()
+            self.addCleanup(lambda: session.process.poll() is None and session.process.kill())
+            self.assertEqual(os.getpgid(session.process.pid), os.getpgid(0))
+            session.close()  # EOF: the upstream exits on its own
+            self.assertEqual(session.process.returncode, 0)
 
 
 # ---- Opt-in real-browser tests: no model calls ---------------------------------------------
