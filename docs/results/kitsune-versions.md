@@ -12,7 +12,7 @@ when model, harness and tasks match.
 
 | Kitsune | Revisions | Reports |
 | --- | --- | --- |
-| **v0.7.0** | `1dea68e` (tag); `5425050` = v0.7.0 + 4 commits | Subscription full suite + coexistence at tag (2026-10-26; first `taskset-v3` cohort); separate model-free `stress-v1` observation at +4 |
+| **v0.7.0** | `1dea68e` (tag); `5425050` = v0.7.0 + 4 commits; `dbc84f8` = + 8; `bbe6adb` = + 11 (unmerged branch) | Subscription full suite + coexistence at tag (2026-10-26; first `taskset-v3` cohort); separate model-free `stress-v1` observation at +4; model-free A/B of `bbe6adb` vs `dbc84f8` (2026-10-28) |
 | v0.4.1 | `83acfe9` (tag) | Subscription full suite + coexistence (2026-10-25), completed after startup correction and one explicit setup retry; earlier incomplete attempt retained |
 | v0.4.0 | `a03df44` (tag) | Opus full suite + coexistence (2026-10-24; API harness) |
 | v0.3.1 | `4ad65ee` (tag) | Opus full suite (2026-10-23; `taskset-v1.2`) |
@@ -152,6 +152,12 @@ on the same `5425050` revision uses `stress-compare-v1` / `shared-browser-v1`:
 and lower p95 in all 12 tab-list pairs. Startup readiness failures are disclosed;
 CPU concentration in Kitsune MCP processes motivates profiling, not a general
 browser-automation ranking or a release-regression claim.
+
+The follow-up [A/B on the same protocol](2026-10-28-kitsune-298-299-ab.md) (2026-10-28)
+compares `main` `dbc84f8` with the unmerged #298/#299 branch at `bbe6adb`, A-B-B-A,
+no model: 96 arms, 0 errors; MCP CPU per request 12.0–12.1 → 0.74–0.76 ms at one
+client and lower in every candidate arm at every level; Kitsune/Playwright throughput
+0.17–0.56× → 1.37–2.87×. A branch measurement, not a release result.
 
 ## v0.4.1
 

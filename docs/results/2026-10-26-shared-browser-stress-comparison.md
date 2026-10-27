@@ -156,6 +156,12 @@ A/B testing. **No Kitsune code was modified and no causal optimization experimen
 was performed here.** Header/policy/auth/lifecycle semantics must be preserved in
 any candidate; rerun the same paired profile before claiming an improvement.
 
+Follow-up, 2026-10-28: the per-call client mattered mostly because each one built an
+SSL context that loads the CA bundle (~10 ms of CPU). A candidate that passes one
+cached context and quiets two per-call INFO loggers, still without connection reuse,
+was measured in a predeclared [A/B on this profile](2026-10-28-kitsune-298-299-ab.md):
+MCP CPU per request 12.0–12.1 → 0.74–0.76 ms at one client.
+
 ## Response sizes and measurement quality
 
 - Native canonical JSON responses averaged **312.7–313.6 bytes for Kitsune** vs
