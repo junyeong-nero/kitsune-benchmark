@@ -231,7 +231,18 @@ class NativeSession:
         tabs = self.wait_inventory(lambda tabs: len(tabs) >= 1)
         if len(tabs) != 1:
             raise ValueError("Expected exactly one initial tab in a fresh profile.")
-        self.tool("browser_navigate", {"url": self.config["bootstrap_url"]})
+        try:
+            self.tool("browser_navigate", {"url": self.config["bootstrap_url"]})
+        except ValueError:
+            # Kitsune after v0.7.0 (kitsune#303) refuses a tab-less navigate until a tab is selected. Select the
+            # fresh profile's only tab and retry; earlier versions never reach this branch, so their setup is unchanged.
+            if (self.evidence.get("native_error") or {}).get("code") != "no_current_tab":
+                raise
+            self.evidence.pop("native_error")
+            field = "index" if self.config["target"] == "playwright" or self.tab_indexed else "tab_id"
+            self.tool("browser_tabs", {"action": "select", field: tabs[0]["id"]})
+            self.evidence["setup_selected_initial_tab"] = True
+            self.tool("browser_navigate", {"url": self.config["bootstrap_url"]})
         self.tool("browser_navigate", {"url": self.config["urls"][0]})
         for url in self.config["urls"][1:]:
             self.tool("browser_tabs", {"action": "new", "url": url})
