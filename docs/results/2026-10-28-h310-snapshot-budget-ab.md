@@ -88,6 +88,8 @@ directly, so they try its container more often.
 
 ## Reproduce
 
+The intervention commit `d571963` is kept as the Kitsune tag `h310-intervention`; its branch `exp/h310-snapshot-budget` was deleted after #310 was solved differently by Kitsune #319.
+
 ```sh
 uv run --locked python scripts/run-h310.py analyze   # from artifacts/h310/runs.jsonl; no browser or model
 ```
