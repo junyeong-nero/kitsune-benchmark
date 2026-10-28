@@ -18,9 +18,10 @@ from unittest.mock import patch
 from kitsune_benchmark.__main__ import main
 from kitsune_benchmark.bidi import Bidi, BidiError
 from kitsune_benchmark.coexistence import (CoexistenceServer, aggregate_coexistence, catalog, input_metrics,
-                                           run_coexistence, selected_tasks, view_metrics)
+                                           run_coexistence, runnable_ids, selected_tasks, view_metrics)
+from kitsune_benchmark.coexistence import config as coexistence_config
 from kitsune_benchmark.coexistence_fixtures import JOURNAL_TEXT
-from kitsune_benchmark.coexistence_session import CoexistenceSession, owned_urls
+from kitsune_benchmark.coexistence_session import CoexistenceSession, owned_urls, user_tab_refusal
 from kitsune_benchmark.smoke import ROOT, await_bridge, copy_extension, private_ports, run_pair
 from kitsune_benchmark.specs import Server
 from http.cookiejar import CookieJar
@@ -194,7 +195,7 @@ def user_evidence(trial, *, after=None, transitions=None, activity=None):
     initial = trial.url(trial.paths[trial.active_index])
     evidence.update(seeding="user_bidi", seeded_owned_by_agent=0, view={
         "initial_url": initial, "after_call": after if after is not None else [{"url": initial, "window_focused": True}],
-        "sampler": {"interval_sec": 0.25, "errors": 0,
+        "sampler": {"interval_sec": 0.25, "errors": 0, "alive_at_stop": False,
                     "transitions": transitions if transitions is not None else [{"t": 0, "url": initial, "window_focused": True}]}},
         user_activity=activity)
     return evidence
@@ -258,7 +259,8 @@ class EvaluationTests(unittest.TestCase):
             trial.visits.append("/notice")
             trial.mutate("/note", trial.expected)
             calm = {"typed_into_user_field": "Saturday.", "misdirected": [], "ticks": 4, "errors": 0,
-                    "finished": False, "final_field_value": "Saturday.", "url": initial}
+                    "finished": False, "final_field_value": "Saturday.", "final_field_status": "ok",
+                    "alive_at_stop": False, "url": initial}
             result = self.evaluate(server, "kitsune", user_evidence(trial, activity=calm))
             self.assertTrue(result["scorable"])
             self.assertTrue(result["contracts"]["v3_user_view"]["task_success"])
@@ -286,7 +288,8 @@ class EvaluationTests(unittest.TestCase):
             trial.visits.append("/notice")
             trial.mutate("/note", trial.expected)
             calm = {"typed_into_user_field": "Saturday.", "misdirected": [], "ticks": 4, "errors": 0,
-                    "finished": False, "final_field_value": "Saturday.", "url": initial}
+                    "finished": False, "final_field_value": "Saturday.", "final_field_status": "ok",
+                    "alive_at_stop": False, "url": initial}
             evidence = user_evidence(trial, activity=calm)
             evidence["close_attempts"] = 1
             result = self.evaluate(server, "kitsune", evidence)
@@ -312,6 +315,87 @@ class EvaluationTests(unittest.TestCase):
             owned["seeded_owned_by_agent"] = 1
             self.assertFalse(self.evaluate(server, "kitsune", owned)["scorable"])
             self.assertFalse(view_metrics({})["recorded"])
+
+    def test_agent_damage_to_the_user_channel_is_scored_not_dropped(self):
+        # Review B1: navigating the user's tab away or closing the browser is the agent's failure.
+        with tempfile.TemporaryDirectory() as folder, CoexistenceServer(typing_task(), 0) as server:
+            trial = self.prepared(server, "kitsune", folder)
+            initial = trial.url("/journal")
+            trial.visits.append("/notice")
+            trial.mutate("/note", trial.expected)
+            lost = {"typed_into_user_field": "Sat", "misdirected": [], "ticks": 4, "errors": 0, "finished": False,
+                    "final_field_value": None, "final_field_status": "lost", "alive_at_stop": False, "url": initial}
+            result = self.evaluate(server, "kitsune", user_evidence(trial, activity=lost))
+            self.assertTrue(result["scorable"])
+            self.assertFalse(result["user_input"]["user_field_intact"])
+            self.assertFalse(result["contracts"]["v3_user_input"]["task_success"])
+        # Channel broken (e.g. Playwright browser_close) and the agent failed (no saved answer): a scored failure.
+        with tempfile.TemporaryDirectory() as folder, CoexistenceServer(typing_task(), 0) as server:
+            trial = self.prepared(server, "kitsune", folder)
+            broken = user_evidence(trial, after=[{"url": None, "error": True}], activity=dict(
+                lost, errors=2, final_field_status="error", url=trial.url("/journal")))
+            outcome = self.evaluate(server, "kitsune", broken)
+            self.assertIs(outcome["task_success"], False)
+            self.assertTrue(outcome["scorable"])
+            self.assertFalse(outcome["user_channel_complete"])
+            self.assertFalse(outcome["contracts"]["v3_user_view"]["task_success"])
+            self.assertFalse(outcome["contracts"]["v3_user_input"]["task_success"])
+
+    def test_broken_channel_never_yields_a_pass(self):
+        with tempfile.TemporaryDirectory() as folder, CoexistenceServer(typing_task(), 0) as server:
+            trial = self.prepared(server, "kitsune", folder)
+            initial = trial.url("/journal")
+            trial.visits.append("/notice")
+            trial.mutate("/note", trial.expected)
+            calm = {"typed_into_user_field": "Saturday.", "misdirected": [], "ticks": 4, "errors": 0,
+                    "finished": False, "final_field_value": "Saturday.", "final_field_status": "ok",
+                    "alive_at_stop": False, "url": initial}
+            for evidence in (user_evidence(trial, after=[{"url": None, "error": True}], activity=calm),
+                             user_evidence(trial, activity=dict(calm, final_field_status="error")),
+                             user_evidence(trial, activity=dict(calm, errors=1)),
+                             user_evidence(trial, activity=dict(calm, typed_into_user_field="", final_field_value="")),
+                             user_evidence(trial, activity=None)):  # a typing task must have a typing record
+                with self.subTest(evidence=evidence["user_activity"]):
+                    result = self.evaluate(server, "kitsune", evidence)
+                    self.assertFalse(result["scorable"])
+                    self.assertIsNone(result["contracts"]["v3_user_view"]["task_success"])
+            dead = user_evidence(trial, activity=calm)
+            dead["view"]["sampler"]["errors"] = 3
+            self.assertFalse(self.evaluate(server, "kitsune", dead)["scorable"])
+            hung = user_evidence(trial, activity=calm)
+            hung["view"]["sampler"]["alive_at_stop"] = True
+            self.assertFalse(self.evaluate(server, "kitsune", hung)["scorable"])
+
+    def test_zero_agent_calls_and_ownership_by_target(self):
+        with tempfile.TemporaryDirectory() as folder, CoexistenceServer(selected_tasks(["pb-account-01"])[0], 0) as server:
+            trial = self.prepared(server, "kitsune", folder)
+            self.assertTrue(view_metrics(user_evidence(trial, after=[]))["recorded"])
+            unknown = user_evidence(trial)
+            unknown["seeded_owned_by_agent"] = None  # Kitsune must report ownership
+            self.assertFalse(self.evaluate(server, "kitsune", unknown)["scorable"])
+            result = self.evaluate(server, "kitsune", user_evidence(trial))
+            self.assertEqual(result["benchmark"], catalog()["suite"])
+            self.assertEqual(result["track"], "personal@user-seeded")
+            playwright = self.prepared(server, "playwright", folder)
+            evidence = user_evidence(playwright)
+            evidence["seeded_owned_by_agent"] = 0  # Playwright has no ownership notion: must be None
+            self.assertFalse(self.evaluate(server, "playwright", evidence)["scorable"])
+
+    def test_user_tab_refusals_are_counted_from_kitsune_errors(self):
+        refusal = {"id": 3, "result": {"isError": True, "content": [{"type": "text", "text": json.dumps(
+            {"ok": False, "code": "user_tab", "error": "Use your own tab."})}]}}
+        self.assertTrue(user_tab_refusal(refusal))
+        for other in ({"id": 3, "result": {"isError": True, "content": [{"type": "text", "text": '{"code":"timeout"}'}]}},
+                      {"id": 3, "result": {"content": [{"type": "text", "text": '{"code":"user_tab"}'}]}},
+                      {"id": 3, "result": {"isError": True, "content": [{"type": "text", "text": "plain"}]}}):
+            self.assertFalse(user_tab_refusal(other))
+
+    def test_config_and_catalog_agree_on_the_frozen_suite(self):
+        self.assertEqual(coexistence_config()["id"], "coexistence-local-v1")
+        self.assertEqual(catalog()["suite"], coexistence_config()["id"])
+        self.assertEqual(runnable_ids(), ["co-typing-01"])
+        self.assertEqual({c["id"]: c["status"] for c in catalog()["conditions"]},
+                         {"user-seeded": "runnable", "protect-user-tabs": "runnable"})
 
     def test_kitsune_ownership_parser(self):
         listed = {"content": [{"type": "text", "text": json.dumps({"tabs": [

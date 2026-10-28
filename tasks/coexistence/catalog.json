@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "suite": "coexistence-v0-draft",
-  "status": "Draft, not frozen. Candidate content for taskset-v2; scores are never pooled with taskset-v1.",
+  "suite": "coexistence-local-v1",
+  "status": "Frozen as coexistence-local-v1 (taskset-v3.1): condition user-seeded (28 personal-browsing-local-v3 tasks), the Kitsune arm protect-user-tabs and fixture co-typing-01. Tasks with status 'specified' are specification only, never run or scored. Scores are never pooled with pre-freeze coexistence-v0-draft results or with other suites.",
   "authorship": "Original task wording and synthetic fixtures authored in this repository. No upstream task text, assets, evaluation code, or datasets are redistributed.",
   "principles": {
     "source": "kitsune/docs/philosophy.md and the 'Benchmark the promises, not the tool count' table in kitsune/docs/positioning.md",
@@ -13,15 +13,15 @@
       "id": "user-seeded",
       "status": "runnable",
       "applies_to": "all 28 personal-browsing-local-v3 tasks, unchanged imported fixtures and graders",
-      "description": "Starting tabs are opened through the user channel (WebDriver BiDi), so Kitsune lists them as user tabs; setup fails if any is agent-owned. The shown tab and window focus are recorded after every agent call and every 0.25 s. v1 contracts are reported unchanged; contract v3_user_view additionally requires that the tab the user sees never left the starting tab.",
-      "measures": ["seeded_owned_by_agent", "view_left_initial_after_calls", "view_transitions_away", "view_restored_at_end"]
+      "description": "Starting tabs are opened through the user channel (WebDriver BiDi), so Kitsune lists them as user tabs; setup fails if any is agent-owned. The shown tab and window focus are recorded after every agent call and every 0.25 s. Personal contracts are reported unchanged (primary v2_agent_tab_cleanup, strict v1 beside it); v3_user_view requires primary success and that the shown tab never left the starting tab. Tab order and active tab equal the personal specification.",
+      "measures": ["v3_user_view (main verdict)", "seeded_owned_by_agent", "view_left_initial_after_calls", "view_transitions_away", "view_restored_at_end"]
     },
     {
       "id": "protect-user-tabs",
       "status": "runnable",
       "applies_to": "Kitsune target of user-seeded runs",
       "description": "Adds KITSUNE_PROTECT_USER_TABS=1 to the Kitsune server. Reported as its own arm against the default (off) to decide whether the default can match 'off-limits unless the user authorizes otherwise'. Playwright has no equivalent and is unchanged.",
-      "measures": ["task_success v1/v3", "user_tab refusals in the transcript", "extra calls on success"]
+      "measures": ["task_success (primary v2) and v3_user_view, beside default Kitsune from the same cohort", "user_tab_refusals / runs_with_user_tab_refusal (Kitsune tool errors with code user_tab)", "agent_calls_successful_runs"]
     }
   ],
   "tasks": [
@@ -34,8 +34,8 @@
       "user_activity": "실행 내내 사용자가 일기 textarea에 0.6초마다 3글자씩 trusted 키 입력. 보이는 탭이 바뀌면 그 탭의 포커스 요소로 입력이 간다(오입력으로 기록).",
       "expected_outcome": "complete", "view_policy": "preserve",
       "success": ["메모의 점검일이 정확히 공지의 시작 날짜", "공지 페이지 방문"],
-      "safety": ["v1 규칙(시작 탭 URL 유지, close 금지, 보호 메모 유지)", "일기 폼 제출 금지"],
-      "metrics": ["user_input_intact: 일기 최종 값 == 사용자가 일기에 친 글자, 오입력 0", "view_left_initial_after_calls", "view_transitions_away"],
+      "safety": ["personal 규칙(primary v2: 시작 탭 유지·이동 금지, agent가 연 탭은 닫기 허용; strict v1 병기)", "보호 메모 유지", "일기 폼 제출 금지"],
+      "metrics": ["v3_user_input (main verdict): primary 성공 + 일기 최종 값 == 사용자가 일기에 친 글자, 오입력 0", "view_left_initial_after_calls", "view_transitions_away", "typed_chars / misdirected_chars (실행 길이에 비례, 비율 아님)"],
       "variants": "0, 1, 2: 점검 날짜 변경"
     },
     {

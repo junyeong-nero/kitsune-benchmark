@@ -1,18 +1,21 @@
 """Coexistence relay: the personal relay, but the *user* seeds the session and watches the view.
 
-Differences from `personal_session.py` (taskset-v1 behaviour; taskset-v2 only adds `tab_calls`):
+Differences from `personal_session.py`:
 
 - Starting tabs are opened through the user channel (`user_driver.py`, WebDriver BiDi),
   not with the MCP server's `browser_tabs new`. Kitsune therefore lists them as user tabs.
   Setup fails (unscorable) if the MCP server reports any starting tab as agent-owned.
-- The tab the user sees starts on the task's active tab. One hidden `browser_tabs select`
-  still pins the tool cursor there, as in v1, so v1 graders keep their meaning.
+- Tab order is the personal track's: the user opens the starting tabs in order, then
+  clicks the task's active tab, which is the tab they see. One hidden `browser_tabs select`
+  still pins the tool cursor there, as in the personal relay, so its graders keep their meaning.
 - After every agent call, and every `sampler_interval` seconds in between, the shown tab and
   window focus are recorded (`evidence["view"]`). The agent never sees this channel.
 - An optional typing user (`config["user_activity"]`) types into a field of their tab during
   the run; keystrokes that land elsewhere because the view moved are recorded.
 
 Driver calls are counted separately from harness MCP calls (`driver_calls`, `driver_seconds`).
+Agent calls that Kitsune refuses with code `user_tab` (the protect-user-tabs arm) are counted
+in `user_tab_refusals`.
 """
 from __future__ import annotations
 
@@ -43,14 +46,29 @@ def owned_urls(target: str, result: dict) -> list[str] | None:
     raise ValueError("Unrecognized Kitsune tab list.")
 
 
+def user_tab_refusal(response: dict) -> bool:
+    """A Kitsune tool error with code user_tab: protection refused to navigate a user's tab."""
+    result = response.get("result") or {}
+    if not result.get("isError"):
+        return False
+    for item in result.get("content", []):
+        if item.get("type") == "text":
+            try:
+                if json.loads(item["text"]).get("code") == "user_tab":
+                    return True
+            except (ValueError, AttributeError):
+                continue
+    return False
+
+
 class CoexistenceSession(NativeSession):
     def __init__(self, config: dict):
         super().__init__(config)
         self.driver: UserDriver | None = None
         self.sampler: ViewSampler | None = None
         self.typist: TypingUser | None = None
-        self.evidence.update(seeding="user_bidi", seeded_owned_by_agent=None, view=None,
-                             user_activity=None, driver_calls=0, driver_seconds=0.0)
+        self.evidence.update(seeding=None, seeded_owned_by_agent=None, view=None,
+                             user_activity=None, driver_calls=0, driver_seconds=0.0, user_tab_refusals=0)
 
     def raw_tabs(self) -> dict:
         return self.tool("browser_tabs", {"action": "list"})
@@ -67,15 +85,17 @@ class CoexistenceSession(NativeSession):
         try:
             self.driver = UserDriver(self.config["user_driver"]["bidi_url"])
             urls, active = self.config["urls"], self.config["active_index"]
-            # The user starts on the active tab and opened the others earlier, in the background.
+            # The user opened the starting tabs in the personal track's order, then clicked the active one.
             self.driver.navigate_shown(self.config["bootstrap_url"])
-            self.driver.navigate_shown(urls[active])
-            for index, url in enumerate(urls):
-                if index != active:
-                    self.driver.open_tab(url, background=True)
+            self.driver.navigate_shown(urls[0])
+            for url in urls[1:]:
+                self.driver.open_tab(url, background=True)
+            self.driver.select(urls[active])
         except BidiError as error:
             raise ValueError("User channel setup failed.") from error
         tabs = self.wait_inventory(lambda tabs: sorted(t["url"] for t in tabs) == sorted(urls))
+        if [t["url"] for t in tabs] != list(urls):
+            raise ValueError("User-seeded tab order differs from the personal specification.")
         desired = urls[active]
         chosen = [tab for tab in tabs if tab["url"] == desired]
         if len(chosen) != 1:
@@ -92,7 +112,7 @@ class CoexistenceSession(NativeSession):
         if view["url"] != desired:
             raise ValueError("The user's view is not on the active starting tab.")
         self.evidence["view"] = {"initial_url": desired, "after_call": [], "sampler": None}
-        self.evidence.update(setup_complete=True, initial_tabs=tabs, snapshots=[tabs])
+        self.evidence.update(seeding="user_bidi", setup_complete=True, initial_tabs=tabs, snapshots=[tabs])
         self.sampler = ViewSampler(self.driver, float(self.config.get("sampler_interval", 0.25)))
         self.sampler.start()
         activity = self.config.get("user_activity")
@@ -119,6 +139,8 @@ class CoexistenceSession(NativeSession):
 
         def answered(response: dict) -> None:
             if response.get("id") == message["id"]:
+                if self.config["target"] == "kitsune" and user_tab_refusal(response):
+                    self.evidence["user_tab_refusals"] += 1
                 self.sample_after_call()
                 self.save()
             emit(response)
@@ -134,9 +156,10 @@ class CoexistenceSession(NativeSession):
         if self.typist is not None:
             record = self.typist.stop()
             try:
-                record["final_field_value"] = self.driver.field_value(record["url"], record["selector"])
+                field = self.driver.field_value(record["url"], record["selector"])
             except (BidiError, OSError):
-                record["final_field_value"] = None
+                field = {"status": "error", "value": None}
+            record.update(final_field_status=field["status"], final_field_value=field["value"])
             self.evidence["user_activity"] = record
             self.typist = None
         if self.sampler is not None:

@@ -10,7 +10,7 @@ CPU/RAM measurements.
 ## Current focus and status
 
 Latest release check: [Kitsune v0.7.0 on Opus subscription, full suite + coexistence](docs/results/2026-10-26-opus-subscription-v0.7.0.md),
-the first `taskset-v3` cohort: 480 scorable runs, no retries. Personal: Playwright
+the first `taskset-v3` cohort: 480 scorable runs, no retries (422 `taskset-v3` runs plus 58 pre-freeze coexistence-draft runs). Personal: Playwright
 83/84 vs Kitsune 84/84; crowded gallery 63/63 vs 62/63, isolated both 63/63. On
 joint successes Kitsune used 19% / 16% / 5% less input at about the same call count.
 Not comparable with the earlier v1.x/v2 reports.
@@ -22,8 +22,8 @@ to drafts, and respecting do-not-submit/preserve-context boundaries.
 | Track | Implemented scope | Actual model evidence |
 | --- | --- | --- |
 | **Personal browsing** | 28 original specifications, **all runnable** local tasks (six-task pilot default, `--all` for 28); three data variants each; frozen as `taskset-v3` | Opus subscription on Kitsune v0.7.0, 28 × 3 (2026-10-26): 83/84 Playwright, 84/84 Kitsune ([report](docs/results/2026-10-26-opus-subscription-v0.7.0.md)). Earlier: 24 variant-0 Haiku pairs 21/24 vs 23/24; six-task Codex pilot 3/6 vs 4/6 |
-| Coexistence (draft) | The user is in the browser too: user-owned starting tabs, view telemetry, a typing user ([protocol](docs/coexistence.md)). 28 personal tasks user-seeded + `co-typing-01` runnable; 25 more specified | Opus, 2026-10-23: user-seeded v1 24/24 both, v3 user view 2/24 Playwright vs 24/24 Kitsune ([report](docs/results/2026-10-23-coexistence-user-seeded.md)) |
-| MiniWoB++ UI pilot | Only upstream `click-test-2`, seed 42 | One pair passed with historical `gpt-6.1-sol` on 2026-10-18 |
+| **Coexistence** (frozen `coexistence-local-v1`, `taskset-v3.1`) | The user is in the browser too: user-owned starting tabs, view telemetry, a typing user ([protocol](docs/coexistence.md)). 28 personal tasks user-seeded, the Kitsune `protect-user-tabs` arm and `co-typing-01`; 25 more specified only | No frozen cohort yet. Pre-freeze draft on Kitsune v0.7.0, Opus subscription (2026-10-26): v2 28/28 both, v3 user view 2/28 Playwright vs 28/28 Kitsune, `co-typing-01` 48 vs 0 misdirected characters ([report](docs/results/2026-10-26-opus-subscription-v0.7.0.md)) |
+| **External** (`external-v1`) | 7 pinned MiniWoB++ tasks graded by the upstream reward (incl. a `login-user` form) + 3 live public-web tasks (Steam, Wikipedia, MDN), recorded but never graded ([protocol](docs/external.md)) | No full cohort yet. Earlier one-task pilot (`click-test-2` only): both passed in every full-suite report |
 | Read-only smoke | Example Domain, no external task-success grader | One completed historical `gpt-6.1-sol` pair on 2026-10-18 |
 
 Execution defaults to **Claude Code `2.1.303` on the claude.ai subscription** (`--harness claude`; no API credit). API-key billing needs `--harness claude-api --allow-api-billing`. The Codex harness (`gpt-6-luna`, Codex CLI `0.163.0`) remains available.
@@ -102,11 +102,11 @@ PERSONAL_BROWSER_TEST=1 PERSONAL_KITSUNE_TEST=1 \
 | [Documentation index](docs/README.md) | Guide map, track status and source-of-truth boundaries |
 | [Results by Kitsune version](docs/results/kitsune-versions.md) | Reports per Kitsune revision, frozen `taskset-v1` and upgrade rules |
 | [Personal protocol](docs/personal-browsing.md) | Catalog, session/reset setup, state-based grading and provenance |
-| [Coexistence track](docs/coexistence.md) | Draft candidate for a later taskset (provisionally v3): user channel, v3 contracts, delegation/recovery specs |
+| [Coexistence track](docs/coexistence.md) | Frozen `coexistence-local-v1`: user channel, v3 contracts, run plan, comparability; delegation/recovery specs |
 | [Codex harness](docs/codex-harness.md) | Authentication, tool policy, generic runs and process cleanup |
 | [Resource methodology](docs/resources.md) | CPU/RSS scope, attribution and sampling caveats |
 | [Optimization findings](docs/optimization-findings.md) | Evidence-backed cache/observation/schema targets, RPC logs and offline analysis |
-| [MiniWoB integration](docs/miniwob.md) | Original task/reward adapter, distinct from personal tasks |
+| [External track](docs/external.md) | `external-v1`: 7 MiniWoB++ tasks (upstream reward) + 3 ungraded live-site tasks |
 | [MCP candidates](docs/comparison-candidates.md) | Future server/browser cohorts, not implemented benchmark adapters |
 
 ## Interpretation and safety

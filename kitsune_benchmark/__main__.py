@@ -13,7 +13,7 @@ from .specs import load_server, load_task
 from .smoke import experiment as smoke_experiment, run_pair
 from .miniwob import UI_TOOLS
 from pathlib import Path
-from .miniwob import run_benchmark
+from .external import run_external
 from .gallery import run_gallery
 from .personal import config as personal_config, pair_complete, run_personal, runnable_ids
 from .coexistence import run_coexistence
@@ -50,12 +50,16 @@ def main(argv: list[str] | None = None) -> int:
     smoke.add_argument("--task", dest="task_file", help="Task JSON ({id, prompt}) instead of the default read-only smoke task")
     smoke.add_argument("--ui-tools", action="store_true", help="Expose only the benchmark UI tool allowlist to each MCP")
     smoke.add_argument("--targets", default="playwright,kitsune", help="Comma-separated MCPs to run")
-    benchmark = subparsers.add_parser("benchmark", help="MiniWoB++ UI-only pilot; defaults to a plan")
-    benchmark.add_argument("--execute", action="store_true", help="Run the pinned external task; consumes subscription quota")
+    benchmark = subparsers.add_parser("external", aliases=["benchmark"], help="External track: 7 MiniWoB++ tasks "
+                                      "(upstream reward) + 3 ungraded live public-web tasks; plan by default")
+    benchmark.add_argument("--execute", action="store_true", help="Run selected pairs; consumes quota or API credit")
     benchmark.add_argument("--fetch", action="store_true", help="Download the pinned upstream source, without inference unless --execute")
+    benchmark.add_argument("--task", action="append", dest="task_ids", help="External task ID; repeatable; default all 10")
+    benchmark.add_argument("--kind", choices=("miniwob", "live"), help="Only MiniWoB or only live tasks")
     benchmark.add_argument("--codex", default="codex")
     benchmark.add_argument("--kitsune-project")
     benchmark.add_argument("--targets", default="playwright,kitsune")
+    benchmark.add_argument("--budget-usd", type=float)
     personal = subparsers.add_parser("personal", help="Personal browsing: 28 runnable local tasks (six-task pilot by default); plan by default")
     personal.add_argument("--execute", action="store_true", help="Run selected pairs; consumes subscription quota")
     personal.add_argument("--task", action="append", dest="task_ids", help="Runnable task ID; repeat to select several; default: six pilot tasks")
@@ -79,7 +83,7 @@ def main(argv: list[str] | None = None) -> int:
     gallery.add_argument("--kitsune-preset")
     gallery.add_argument("--targets", default="playwright,kitsune")
     gallery.add_argument("--budget-usd", type=float)
-    coexistence = subparsers.add_parser("coexistence", help="Draft coexistence track: user-seeded tabs, a simulated "
+    coexistence = subparsers.add_parser("coexistence", help="Coexistence track (coexistence-local-v1): user-seeded tabs, a simulated "
                                         "user and view telemetry; plan by default")
     coexistence.add_argument("--execute", action="store_true", help="Run selected pairs; consumes quota or API credit")
     coexistence.add_argument("--task", action="append", dest="task_ids",
@@ -173,16 +177,15 @@ def main(argv: list[str] | None = None) -> int:
             if not args.execute:
                 return 0
             return 0 if result["completed_pairs"] == result["requested_pairs"] else 3
-        if args.command == "benchmark":
-            result = run_benchmark(execute=args.execute, fetch=args.fetch,
-                                   executable=executable, kitsune_project=args.kitsune_project,
-                                   harness=args.harness, targets=tuple(args.targets.split(",")), **overrides)
+        if args.command in ("external", "benchmark"):
+            result = run_external(execute=args.execute, fetch=args.fetch, task_ids=args.task_ids, kind=args.kind,
+                                  executable=executable, kitsune_project=args.kitsune_project,
+                                  harness=args.harness, budget_usd=args.budget_usd,
+                                  targets=tuple(args.targets.split(",")), **overrides)
             print(json.dumps(result, indent=2, ensure_ascii=False))
             if not args.execute:
                 return 0
-            results = result["results"]
-            return 0 if set(results) == set(args.targets.split(",")) and all(
-                item.get("benchmark_evaluation", {}).get("scorable") for item in results.values()) else 3
+            return 0 if result["completed_pairs"] == result["requested_pairs"] else 3
         if args.command == "smoke":
             spec = with_claude_overrides(smoke_experiment(), overrides["claude_model"],
                                          overrides["max_budget_usd_per_run"], overrides.get("codex_model"))

@@ -236,8 +236,8 @@ strong test of choosing not to edit an editable existing event.
 server's own `browser_tabs new`, so Kitsune lists them (and the protected note)
 as agent-owned, and for Kitsune ≥ 0.3.1 the relay's `active` is the tool cursor
 `current`, not the tab the user sees. Nobody uses the browser during a run. The
-draft [coexistence track](coexistence.md) re-runs these tasks with user-owned
-starting tabs and view telemetry, without changing this taskset.
+[coexistence track](coexistence.md) (`coexistence-local-v1`) re-runs these tasks
+with user-owned starting tabs and view telemetry, without changing them.
 
 This is **not an adversarial security boundary**: the server and browser live
 on the same machine, the relay relies on native inventory formats, and tab
