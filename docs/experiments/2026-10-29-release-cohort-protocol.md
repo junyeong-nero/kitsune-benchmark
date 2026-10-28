@@ -17,8 +17,8 @@ The release after v0.7.0 contains several changes that the benchmark measured or
 - #317: trusted-click buttons;
 - #330: compact `browser_find` (#323), if merged.
 
-This cohort runs the whole frozen suite once on that release, in the same way as the v0.7.0 cohorts, so the two can
-be compared track by track.
+This cohort runs the frozen suite once on that release, with the personal and gallery tracks reduced to about 100
+units (the `lite` plan below), so the two releases can be compared track by track on the same units.
 
 ## Pins
 
@@ -40,21 +40,25 @@ select the fresh profile's only tab and retry, but only when that refusal occurs
 - Setup calls are harness calls, not recorded in `tab_calls`, so grading is unaffected.
 - Tasks, fixtures, graders, configs and catalogs are identical to `taskset-v3.1`.
 
-## Scope (one attempt, about 530 agent runs)
+## Scope (one attempt, `--plan lite`, 306 agent runs)
 
-`scripts/run-full-suite.py` runs, in this order:
+`scripts/run-full-suite.py --plan lite` runs, in this order:
 
-| Track | Entries | Agent runs |
-| --- | --- | ---: |
-| Personal | `personal --all --variant 0/1/2` | 168 |
-| Gallery | `gallery --layout crowded/isolated --variant 0/1/2` | 252 |
-| Coexistence (frozen plan) | user-seeded 28 tasks v0; `co-typing-01` v0–2; Kitsune protect-user-tabs arm 28 tasks v0 | 90 |
-| External | 7 MiniWoB++ + 3 live tasks | 20 |
+| Track | Entries | Units | Agent runs |
+| --- | --- | ---: | ---: |
+| Personal | `personal --all --variant 0/1`: all 28 tasks, data variants 0 and 1 | 56 | 112 |
+| Gallery | `gallery --layout crowded/isolated --variant 0`: all 21 tasks, both layouts, variant 0 | 42 | 84 |
+| Coexistence (frozen plan) | user-seeded 28 tasks v0; `co-typing-01` v0–2; Kitsune protect-user-tabs arm 28 tasks v0 | 59 | 90 |
+| External | 7 MiniWoB++ + 3 live tasks | 10 | 20 |
+
+The `lite` plan keeps every personal and gallery task and both gallery layouts. Only data variants are dropped:
+98 of the 210 personal and gallery units. The full plan (`--plan full`, 530 runs) stays available. Coexistence and
+external are the same in both plans.
 
 - **Personal, gallery and external:** Playwright and Kitsune run as two concurrent processes (the default), so elapsed
   time and resources are measured under shared load.
 - **Coexistence:** always runs paired in one process, Playwright first.
-- **Duration:** expected about 2.5–3 h. The 2026-10-26 cohort took 2 h 17 min for 480 runs.
+- **Duration:** expected about 1.5–2 h. The 2026-10-26 cohort took 2 h 17 min for 480 runs.
 
 ## Procedure
 
@@ -78,7 +82,7 @@ select the fresh profile's only tab and retry, but only when that refusal occurs
 3. **Run:**
 
    ```sh
-   uv run --locked python scripts/run-full-suite.py --kitsune-project artifacts/vendor/kitsune-<TAG> \
+   uv run --locked python scripts/run-full-suite.py --plan lite --kitsune-project artifacts/vendor/kitsune-<TAG> \
      --out artifacts/opus-subscription-<TAG>
    ```
 
@@ -119,12 +123,20 @@ Also reported:
 
 | Track | v0.7.0 reference cohort | Comparable |
 | --- | --- | --- |
-| Personal 28 × 3, gallery 21 × 3 × 2 | [2026-10-26](../results/2026-10-26-opus-subscription-v0.7.0.md), `taskset-v3`: content identical to `taskset-v3.1` | Success and K/PW ratios: yes, as observations |
+| Personal 28 × v0–v1, gallery 21 × 2 layouts × v0 | The same units of [2026-10-26](../results/2026-10-26-opus-subscription-v0.7.0.md), `taskset-v3`: content identical to `taskset-v3.1` | Success and K/PW ratios on the same units: yes, as observations |
 | Coexistence (frozen plan), external MiniWoB | [2026-10-28](../results/2026-10-28-new-tracks-v0.7.0.md), `taskset-v3.1` | Yes |
 | External live tasks | 2026-10-28 | Qualitative only: the sites change |
 
-v0.7.0 reference values on joint successes, Kitsune/Playwright input: personal **0.807**, crowded **0.840**, isolated
-**0.954**. Successes: personal PW 83/84 vs K 84/84; crowded 63/63 vs 62/63; isolated 63/63 both.
+v0.7.0 reference values on the `lite` units, recomputed from the 2026-10-26 runs. The same computation over all units
+reproduces that report's 0.807 / 0.840 / 0.954.
+
+| Track (lite units) | Units | Successes PW / K | K/PW input, joint successes | Paired input-ratio median | K/PW MCP calls |
+| --- | ---: | --- | ---: | ---: | ---: |
+| Personal v0–v1 | 56 | 56 / 56 | **0.815** | 0.824 | 1.002 |
+| Gallery crowded v0 | 21 | 21 / 21 | **0.945** | 0.957 | 1.216 |
+| Gallery isolated v0 | 21 | 21 / 21 | **1.018** | 0.981 | 1.065 |
+
+Compare only with these values. Gallery's variant 0 alone differs a lot from all three variants (0.840 and 0.954).
 
 Rules:
 
@@ -138,5 +150,6 @@ Rules:
 ## Limits
 
 - One attempt, fixed process layout, no order counterbalancing: this is not a ranking.
+- The `lite` plan has 21 units per gallery layout. One unit moves a layout's success rate by about 5 points.
 - Live-site tasks depend on the pages as they are on the run date.
 - Resource measures are taken under concurrent load and are not comparable with sequential runs.
