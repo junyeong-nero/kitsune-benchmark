@@ -125,6 +125,22 @@ class FullSuiteTests(unittest.TestCase):
                 self.assertEqual(self.manifest["attempts"], 1)
                 self.assertTrue(all(entry["attempt"] == 1 for entry in entries))
 
+    def test_lite_plan_keeps_every_task_with_fewer_variants(self):
+        lite = suite.commands("lite")
+        names = [name for name, _ in lite]
+        self.assertEqual([n for n in names if n.startswith("personal")], ["personal-v0", "personal-v1"])
+        self.assertEqual([n for n in names if n.startswith("gallery")], ["gallery-crowded-v0", "gallery-isolated-v0"])
+        full = suite.commands()
+        self.assertEqual([c for c in lite if not c[0].startswith(("personal", "gallery"))],
+                         [c for c in full if not c[0].startswith(("personal", "gallery"))])
+        self.assertTrue(all("--all" in argv for name, argv in lite if name.startswith("personal")))
+        # 4 personal/gallery entries and external in parallel (2 processes each), 5 coexistence entries paired.
+        code, launched, _, _ = self.invoke([(0, {"requested_pairs": 1, "completed_pairs": 1})] * 15,
+                                           tracks=lite, extra=("--plan", "lite"))
+        self.assertEqual(code, 0)
+        self.assertEqual(len(launched), 15)
+        self.assertEqual(self.manifest["plan"], "lite")
+
     def test_codex_harness_passes_and_records_its_model(self):
         result = {"requested_pairs": 1, "completed_pairs": 1, "results": {"kitsune": {}}}
         for extra, model in ((("--harness", "codex", "--model", "gpt-6.1-sol"), "gpt-6.1-sol"),

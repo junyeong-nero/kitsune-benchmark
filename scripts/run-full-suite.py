@@ -34,10 +34,17 @@ import time
 from pathlib import Path
 
 
-def commands() -> list[tuple[str, list[str]]]:
-    items = [(f"personal-v{v}", ["personal", "--all", "--variant", str(v)]) for v in range(3)]
+# Variants per track. "lite" keeps every personal and gallery task and both gallery layouts with fewer data
+# variants: personal 28 x v0-v1 + gallery 21 x 2 layouts x v0 = 98 units (196 paired runs) instead of 210.
+PLANS = {"full": {"personal": (0, 1, 2), "gallery": (0, 1, 2)},
+         "lite": {"personal": (0, 1), "gallery": (0,)}}
+
+
+def commands(plan: str = "full") -> list[tuple[str, list[str]]]:
+    variants = PLANS[plan]
+    items = [(f"personal-v{v}", ["personal", "--all", "--variant", str(v)]) for v in variants["personal"]]
     items += [(f"gallery-{layout}-v{v}", ["gallery", "--layout", layout, "--variant", str(v)])
-              for layout in ("crowded", "isolated") for v in range(3)]
+              for layout in ("crowded", "isolated") for v in variants["gallery"]]
     items.append(("coexistence-user-seeded", ["coexistence", "--all-personal", "--variant", "0"]))
     items += [(f"coexistence-typing-v{v}", ["coexistence", "--task", "co-typing-01", "--variant", str(v)]) for v in range(3)]
     items.append(("coexistence-protect", ["coexistence", "--all-personal", "--variant", "0", "--protect-user-tabs",
@@ -91,6 +98,9 @@ def main() -> int:
     parser.add_argument("--allow-api-billing", action="store_true",
                         help="Confirm that an API-key harness may spend ANTHROPIC_API_KEY credit")
     parser.add_argument("--out", required=True)
+    parser.add_argument("--plan", choices=tuple(PLANS), default="full",
+                        help="full: every data variant; lite: personal v0-v1 and gallery v0 (both layouts), "
+                             "coexistence and external unchanged")
     parser.add_argument("--spent-usd", type=float, default=0.0, help="Already spent toward the budget")
     parser.add_argument("--sequential", action="store_true",
                         help="One process per track running paired targets in turn, instead of the two in parallel")
@@ -138,14 +148,14 @@ def main() -> int:
                 "started": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
                 "targets_in_parallel": not args.sequential, "attempts": args.attempts,
                 "order_policy": args.order, "attempt_plan": plan,
-                "order_key": {"a": "playwright", "b": "kitsune"}, "commands": [name for name, _ in commands()]}
+                "order_key": {"a": "playwright", "b": "kitsune"}, "plan": args.plan, "commands": [name for name, _ in commands(args.plan)]}
     (out / "suite-manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
     log = out / "suite-log.jsonl"
     all_entries = []
     for attempt in plan:
         attempt_dir = out if args.attempts == 1 else out / f"attempt-{attempt['attempt']:03d}"
         attempt_dir.mkdir(exist_ok=True)
-        for name, argv in commands():
+        for name, argv in commands(args.plan):
             remaining = args.budget_usd - spent if api else None
             worst_pair = 2 * args.max_budget_usd_per_run if api else 0.0
             if api and remaining < worst_pair:
