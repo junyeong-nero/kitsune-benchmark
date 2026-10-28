@@ -1,0 +1,13 @@
+{
+  "id": "coexistence-local-v1",
+  "model": "gpt-6-luna",
+  "reasoning_effort": "medium",
+  "codex_version": "0.163.0",
+  "claude_code": {"model": "claude-opus-5-5", "effort": "medium", "version": "2.1.303", "max_budget_usd_per_run_by_model": {"claude-opus-5-5": 1.0, "claude-sonnet-5-5": 0.5, "claude-haiku-5-5": 0.1}},
+  "timeout_sec": 180,
+  "catalog": "tasks/coexistence/catalog.json",
+  "personal_catalog": "tasks/personal/catalog.json",
+  "sampler_interval_sec": 0.25,
+  "minimum_kitsune_version": "0.7.0",
+  "purpose": "User-seeded personal tasks and a typing-user fixture: does the agent disturb a person using the same browser; synthetic, not a live-account evaluation"
+}

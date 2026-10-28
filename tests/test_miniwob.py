@@ -13,7 +13,8 @@ from unittest.mock import patch
 from kitsune_benchmark.__main__ import main
 from kitsune_benchmark.adapter import settings
 from kitsune_benchmark.audit import audit_events
-from kitsune_benchmark.miniwob import BenchmarkServer, Trial, UI_TOOLS, bootstrap, config, run_benchmark
+from kitsune_benchmark.external import LiveTask, aggregate, catalog, run_external, selected_tasks
+from kitsune_benchmark.miniwob import BenchmarkServer, Trial, UI_TOOLS, bootstrap, config
 from kitsune_benchmark.specs import Server
 
 
@@ -24,7 +25,7 @@ def event(kind="end", raw=1, reward=0.9):
 
 class MiniwobTests(unittest.TestCase):
     def test_official_reward_not_agent_answer_is_the_success_label(self):
-        for raw, success in ((1, True), (-1, False), (0, False)):
+        for raw, success in ((1, True), (-1, False), (0, False), (0.6, False)):
             with self.subTest(raw=raw):
                 trial = Trial("click-test-2", 42, 120000, page_loads=1)
                 self.assertTrue(trial.event(event("start")))
@@ -32,6 +33,7 @@ class MiniwobTests(unittest.TestCase):
                 result = trial.evaluate("completed_unscored")
                 self.assertTrue(result["scorable"])
                 self.assertEqual(result["task_success"], success)
+                self.assertEqual(result["positive_reward"], raw > 0)
                 self.assertIsNone(trial.evaluate("invalid_trace")["task_success"])
 
     def test_restart_reload_bad_reward_and_modified_timer_are_not_scorable(self):
@@ -64,7 +66,8 @@ class MiniwobTests(unittest.TestCase):
             path = directory / "click-test-2.html"
             path.write_text(original)
             spec = config()
-            with BenchmarkServer(source, spec) as server:
+            task = {"id": "mw-click-test-2", "kind": "miniwob", "task_id": "click-test-2", "seed": 42}
+            with BenchmarkServer(source, spec, task) as server:
                 task = server.begin("playwright")
                 url = re.search(r"http://\S+", task.prompt).group()
                 opener = build_opener(ProxyHandler({}))
@@ -85,13 +88,66 @@ class MiniwobTests(unittest.TestCase):
                 with self.assertRaises(HTTPError):
                     opener.open(Request(endpoint, data=b'null'), timeout=2)
 
-    def test_benchmark_default_does_not_start_processes(self):
+    def test_external_default_does_not_start_processes(self):
         with patch("subprocess.Popen", side_effect=AssertionError("no processes in plan")):
-            result = run_benchmark()
+            result = run_external()
         self.assertFalse(result["model_invoked"])
         self.assertEqual(result["config"]["model"], "gpt-6-luna")
-        with patch("subprocess.Popen", side_effect=AssertionError("no model")), redirect_stdout(io.StringIO()):
-            self.assertEqual(main(["benchmark"]), 0)
+        self.assertEqual(result["planned_model_runs"], 20)
+        for argv in (["external"], ["benchmark"], ["external", "--kind", "live"],
+                     ["external", "--task", "mw-login-user"]):
+            with patch("subprocess.Popen", side_effect=AssertionError("no model")), redirect_stdout(io.StringIO()):
+                self.assertEqual(main(argv), 0)
+
+    def test_catalog_is_seven_pinned_miniwob_plus_three_live(self):
+        tasks = catalog()["tasks"]
+        self.assertEqual(catalog()["suite"], config()["id"])
+        self.assertEqual([t["kind"] for t in tasks].count("miniwob"), 7)
+        self.assertEqual([t["kind"] for t in tasks].count("live"), 3)
+        self.assertEqual(len({t["id"] for t in tasks}), 10)
+        self.assertEqual(len(selected_tasks()), 10)  # loads and id-checks every live task file
+        self.assertEqual([t["id"] for t in selected_tasks(kind="live")],
+                         [t["id"] for t in tasks if t["kind"] == "live"])
+        for bad in (["nope"], ["mw-login-user", "mw-login-user"]):
+            with self.assertRaises(ValueError):
+                selected_tasks(bad)
+        with self.assertRaises(ValueError):
+            selected_tasks(["mw-login-user"], kind="live")
+        source = Path(__file__).resolve().parents[1] / config()["source_directory"] / "miniwob/html/miniwob"
+        if source.is_dir():
+            for task in tasks:
+                if task["kind"] == "miniwob":
+                    self.assertTrue((source / (task["task_id"] + ".html")).is_file(), task["task_id"])
+
+    def test_live_tasks_are_recorded_never_graded(self):
+        live = next(t for t in catalog()["tasks"] if t.get("advisory_answer_regex") and "wikipedia" in t["id"])
+        fixture = LiveTask(live)
+        self.assertEqual(fixture.begin("kitsune").id, live["id"])
+        with tempfile.TemporaryDirectory() as folder:
+            for text, status, match, scorable in (
+                    ("Release: November 9, 2004", "completed_unscored", True, True),
+                    ("It was released in 2002.", "completed_unscored", False, True),
+                    ("9 November 2004", "timeout", None, False)):
+                with self.subTest(text=text, status=status):
+                    (Path(folder) / "final.txt").write_text(text)
+                    result = fixture.evaluate("kitsune", {"execution_status": status, "run_dir": folder})
+                    self.assertIsNone(result["task_success"])
+                    self.assertFalse(result["graded"])
+                    self.assertEqual(result["scorable"], scorable)
+                    self.assertEqual(result["advisory_answer_match"], match)
+
+    def test_aggregate_keeps_miniwob_and_live_apart(self):
+        def run(evaluation):
+            return {"benchmark_evaluation": evaluation, "mcp_calls": 3, "elapsed_sec": 1.0}
+        pairs = [{"external_kind": "miniwob", "results": {"kitsune": run(
+                     {"scorable": True, "task_success": False, "positive_reward": True})}},
+                 {"external_kind": "live", "results": {"kitsune": run(
+                     {"scorable": True, "task_success": None, "advisory_answer_match": True})}}]
+        totals = aggregate(pairs)["kitsune"]
+        self.assertEqual(totals["miniwob"]["successes"], 0)
+        self.assertEqual(totals["miniwob"]["positive_reward"], 1)
+        self.assertEqual(totals["live"]["advisory_answer_matches"], 1)
+        self.assertNotIn("successes", totals["live"])
 
     def test_audit_catches_code_tool_or_javascript_navigation(self):
         with tempfile.TemporaryDirectory() as folder:

@@ -4,9 +4,10 @@ Runs personal-browsing tasks under the `user-seeded` condition, plus coexistence
 that need a simulated user. Starting tabs belong to the user (opened over WebDriver BiDi,
 not through the MCP server), and the tab the user sees is recorded throughout the run.
 
-The personal fixtures, graders and relay are imported, never modified. Their contracts are
-reported as they are (primary `v2_agent_tab_cleanup` since taskset-v2, strict v1 beside it);
-the coexistence contracts build on the primary one:
+Benchmark `coexistence-local-v1` (configs/benchmarks/coexistence.json). The personal fixtures,
+graders and relay are imported, never modified. Their contracts are reported as they are
+(primary `v2_agent_tab_cleanup`, strict v1 beside it); the coexistence contracts build on the
+primary one:
 
 - `v3_user_view`: primary success, and the tab the user sees never left the starting tab.
 - `v3_user_input` (tasks with a typing user): primary success, and every keystroke the user
@@ -31,6 +32,7 @@ from .personal import (PersonalServer, PersonalTrial, aggregate_results, catalog
 from .smoke import ROOT, TARGETS, run_pair, source_revision
 from .specs import Server, Task
 
+CONFIG = ROOT / "configs/benchmarks/coexistence.json"
 CATALOG = ROOT / "tasks/coexistence/catalog.json"
 TRACKS = ("coexistence", "delegation", "recovery")
 OUTCOMES = ("complete", "refuse", "handoff", "unknown")
@@ -42,10 +44,19 @@ INTEGRITY = ("Synthetic local apps; personal-track graders unchanged. The simula
              "Remote agent activity can be visible to pages (navigator.webdriver) in both browsers.")
 
 
+def config() -> dict:
+    spec = json.loads(CONFIG.read_text())
+    if ROOT / spec["catalog"] != CATALOG or spec["personal_catalog"] != personal_config()["catalog"]:
+        raise ValueError("Coexistence config names an unexpected catalog.")
+    return spec
+
+
 def catalog() -> dict:
     spec = json.loads(CATALOG.read_text())
     if spec.get("schema_version") != 1:
         raise ValueError("Expected coexistence catalog schema v1.")
+    if spec.get("suite") != config()["id"]:
+        raise ValueError("Coexistence config and catalog benchmark IDs differ.")
     ids = [task["id"] for task in spec["tasks"]]
     if len(set(ids)) != len(ids):
         raise ValueError("Duplicate coexistence task ID.")
@@ -112,7 +123,9 @@ def view_metrics(evidence: dict) -> dict:
     left_after_calls = sum(sample.get("url") != initial for sample in after)
     away = [t for t in transitions if t.get("url") != initial]
     focus_lost = sum(t.get("window_focused") is False for t in transitions)
-    complete = bool(initial) and bool(after) and bool(transitions) and not any(s.get("error") for s in after)
+    # A run with no agent call has no after-call samples; the sampler still covers the view.
+    complete = (bool(initial) and bool(transitions) and not any(s.get("error") for s in after)
+                and sampler.get("errors") == 0 and sampler.get("alive_at_stop") is False)
     return {"recorded": complete, "initial_url": initial, "after_call_samples": len(after),
             "view_left_initial_after_calls": left_after_calls, "view_transitions_away": len(away),
             "window_focus_lost_transitions": focus_lost,
@@ -128,17 +141,25 @@ def input_metrics(evidence: dict) -> dict | None:
     typed = record.get("typed_into_user_field", "")
     misdirected = record.get("misdirected", [])
     final = record.get("final_field_value")
-    return {"recorded": final is not None and record.get("ticks", 0) > 0,
+    status = record.get("final_field_status")
+    # `lost`/`ambiguous`: the agent navigated or duplicated the user's tab, so the field is not intact.
+    # That is a recorded outcome; only a channel failure (`error`) or a typist that never typed is not.
+    intact = status == "ok" and final == typed and bool(typed)
+    return {"recorded": (status in ("ok", "lost", "ambiguous") and record.get("ticks", 0) > 0
+                         and record.get("errors", 0) == 0 and record.get("alive_at_stop") is False
+                         and bool(typed or misdirected)),
             "typed_chars": len(typed), "misdirected_chars": sum(len(m.get("text", "")) for m in misdirected),
             "misdirected_to": sorted({m.get("url") for m in misdirected}),
-            "user_field_intact": final == typed and bool(typed),
-            "user_input_intact": final == typed and bool(typed) and not misdirected,
+            "final_field_status": status,
+            "user_field_intact": intact,
+            "user_input_intact": intact and not misdirected,
             "typing_errors": record.get("errors", 0), "user_finished_typing": record.get("finished")}
 
 
 class CoexistenceServer(PersonalServer):
     def __init__(self, task: dict, variant: int, *, protect_user_tabs: bool = False):
-        super().__init__(task, variant)
+        # Pages report the content viewport like the personal track's (personal-browsing-local-v3).
+        super().__init__(task, variant, report_viewport=True)
         self.protect_user_tabs = protect_user_tabs
         self.bidi_ports = {target: free_port() for target in TARGETS}
 
@@ -172,7 +193,7 @@ class CoexistenceServer(PersonalServer):
             "diagnostics_path": str(pair_dir / (target + "-native-rpc.jsonl")),
             "metadata_path": str(pair_dir / (target + "-native-metadata.json")),
             "user_driver": {"bidi_url": f"ws://127.0.0.1:{port}"},
-            "user_activity": self.activity(trial), "sampler_interval": 0.25})
+            "user_activity": self.activity(trial), "sampler_interval": config()["sampler_interval_sec"]})
         return replace(server, command=sys.executable,
                        args=(str(ROOT / "kitsune_benchmark/coexistence_session.py"), str(path)))
 
@@ -184,18 +205,27 @@ class CoexistenceServer(PersonalServer):
             evidence = {}
         view = view_metrics(evidence)
         typing = input_metrics(evidence)
+        with self.lock:
+            typing_user = self.activity(self.trials[self.by_target[target]]) is not None
         owned = evidence.get("seeded_owned_by_agent")
-        scorable = bool(base["scorable"] and evidence.get("seeding") == "user_bidi" and view["recorded"]
-                        and owned in (0, None) and (typing is None or typing["recorded"])
-                        and not evidence.get("user_channel_error"))
+        seeded = evidence.get("seeding") == "user_bidi" and (owned == 0 if target == "kitsune" else owned is None)
+        channel = (view["recorded"] and (typing["recorded"] if typing_user and typing is not None else not typing_user)
+                   and not evidence.get("user_channel_error"))
+        # An incomplete user-channel record blocks only a positive verdict. When the agent already failed
+        # (e.g. it closed the browser or navigated the user's tab), the run stays scored as a failure:
+        # the most disruptive behavior must not drop out of the denominator.
+        agent_failed = base["task_success"] is False
+        scorable = bool(base["scorable"] and seeded and (channel or agent_failed))
         success = base["task_success"] if scorable else None
         view_kept = view["view_left_initial_after_calls"] == 0 and view["view_transitions_away"] == 0
         contracts = dict(base["contracts"])
         contracts["v3_user_view"] = {"task_success": (success and view_kept) if scorable else None}
         if typing is not None:
             contracts["v3_user_input"] = {"task_success": (success and typing["user_input_intact"]) if scorable else None}
-        track = "coexistence" if self.task["id"].startswith("co-") else "personal@user-seeded"
-        return {**base, "benchmark": "coexistence-v0-draft", "track": track, "condition": "user-seeded",
+        track = "coexistence" if self.task["id"] in runnable_ids() else "personal@user-seeded"
+        return {**base, "benchmark": config()["id"], "track": track, "condition": "user-seeded",
+                "user_channel_complete": channel,
+                "user_tab_refusals": evidence.get("user_tab_refusals") if target == "kitsune" else None,
                 "protect_user_tabs": self.protect_user_tabs if target == "kitsune" else None,
                 "scorable": scorable, "task_success": success,
                 "functional_success": base["functional_success"] if scorable else None,
@@ -217,6 +247,11 @@ def aggregate_coexistence(pairs: list[dict]) -> dict:
         entry["runs_with_typing_user"] = len(typed)
         entry["successes_v3_user_input"] = sum(e["contracts"]["v3_user_input"]["task_success"] is True for e in typed)
         entry["misdirected_chars"] = sum(e["user_input"]["misdirected_chars"] for e in typed)
+        entry["typed_chars"] = sum(e["user_input"]["typed_chars"] for e in typed)
+        entry["runs_user_channel_incomplete"] = sum(e.get("user_channel_complete") is False for e in scored)
+        if target == "kitsune":
+            entry["user_tab_refusals"] = sum(e.get("user_tab_refusals") or 0 for e in scored)
+            entry["runs_with_user_tab_refusal"] = sum(bool(e.get("user_tab_refusals")) for e in scored)
     return totals
 
 
@@ -228,9 +263,7 @@ def run_coexistence(*, execute: bool = False, task_ids: list[str] | None = None,
     if type(variant) is not int or variant not in range(3):
         raise ValueError("Variant must be 0, 1 or 2.")
     tasks = selected_tasks(task_ids)
-    spec = with_claude_overrides({**personal_config(), "id": "coexistence-v0-draft", "catalog": str(CATALOG.relative_to(ROOT)),
-                                  "purpose": "User-seeded personal tasks and simulated-user coexistence fixtures; draft, not frozen"},
-                                 claude_model, max_budget_usd_per_run, codex_model)
+    spec = with_claude_overrides(config(), claude_model, max_budget_usd_per_run, codex_model)
     model, _ = harness_pins(spec, harness)
     per_run = claude_budget(spec, harness)
     targets = tuple(targets)
@@ -272,7 +305,8 @@ def run_coexistence(*, execute: bool = False, task_ids: list[str] | None = None,
                 harness=harness, targets=targets,
                 kitsune_env={"KITSUNE_PROTECT_USER_TABS": "1"} if protect_user_tabs else None,
                 kitsune_firefox_args=(f"--remote-debugging-port={port}", "--remote-allow-system-access"),
-                kitsune_firefox_prefs=USER_CHANNEL_PREFS, equalize_kitsune_viewport=True)
+                kitsune_firefox_prefs=USER_CHANNEL_PREFS, viewport_reports=fixture.viewport_reports,
+                equalize_kitsune_viewport=True)
         pair.update(coexistence_task=task["id"], variant=variant, protect_user_tabs=protect_user_tabs,
                     kitsune_source_after=source_revision(project))
         write_json(Path(pair["pair_dir"]) / "coexistence-summary.json", pair)
@@ -289,7 +323,8 @@ def run_coexistence(*, execute: bool = False, task_ids: list[str] | None = None,
     if not pairs:
         raise ValueError("Suite budget is smaller than one pair's worst case; nothing was run.")
     summary_path = Path(pairs[0]["pair_dir"]) / "suite-summary.json"
-    summary = {"mode": "coexistence_executed", "model_invoked": True, "harness": harness, "model": model,
+    summary = {"mode": "coexistence_executed", "model_invoked": True, "benchmark": spec["id"],
+               "harness": harness, "model": model,
                "targets": list(targets), "protect_user_tabs": protect_user_tabs, "kitsune_source": source,
                "requested_pairs": len(tasks), "attempted_pairs": len(pairs), "stopped_reason": stopped,
                "estimated_cost_usd": round(spent, 6) if per_run is not None else None,

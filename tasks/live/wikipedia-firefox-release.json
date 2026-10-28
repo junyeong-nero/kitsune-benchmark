@@ -1,0 +1,4 @@
+{
+  "id": "live-wikipedia-firefox-release",
+  "prompt": "Open https://en.wikipedia.org in a new tab. Use the site's own search box to find the article about the Firefox web browser, open it, and report the first release date shown in the article's infobox. Do not log in, edit any page, or change any setting."
+}

@@ -1,4 +1,5 @@
-"""Run every graded track (personal 28×3 variants, gallery 21×3×2 layouts, MiniWoB) under one total budget.
+"""Run every track (personal 28×3 variants, gallery 21×3×2 layouts, coexistence, external 7 MiniWoB + 3 live) under one
+total budget.
 
 Each track command gets the remaining budget via --budget-usd, so the suite as a whole never starts a pair
 whose worst case would exceed it. A failed, stopped, malformed or incomplete track stops the suite
@@ -8,7 +9,10 @@ By default the personal and gallery tracks run Playwright and Kitsune as two con
 playwright / --targets kitsune), each with its own fixture server, ports, profiles and half the remaining budget.
 Both targets then share the machine, so elapsed time and CPU/RSS are measured under that contention.
 --sequential restores one process per track with paired runs, Playwright-first unless --order selects otherwise.
-MiniWoB (one pair) is sequential.
+The external track runs like the others; its three live tasks are recorded, never graded.
+Coexistence (coexistence-local-v1) follows its frozen plan: the 28 personal tasks user-seeded on variant 0,
+co-typing-01 on variants 0-2, then the Kitsune protect-user-tabs arm on variant 0. Its entries always run
+paired in one process (the user channel was validated that way), in the attempt's order.
 
 The default harness is `claude`: Claude Code on the claude.ai subscription login, which spends no API
 credit and has no dollar cap. API-key harnesses (`claude-api`, `claude-api-full`) bill ANTHROPIC_API_KEY
@@ -34,8 +38,16 @@ def commands() -> list[tuple[str, list[str]]]:
     items = [(f"personal-v{v}", ["personal", "--all", "--variant", str(v)]) for v in range(3)]
     items += [(f"gallery-{layout}-v{v}", ["gallery", "--layout", layout, "--variant", str(v)])
               for layout in ("crowded", "isolated") for v in range(3)]
-    items.append(("miniwob", ["benchmark"]))
+    items.append(("coexistence-user-seeded", ["coexistence", "--all-personal", "--variant", "0"]))
+    items += [(f"coexistence-typing-v{v}", ["coexistence", "--task", "co-typing-01", "--variant", str(v)]) for v in range(3)]
+    items.append(("coexistence-protect", ["coexistence", "--all-personal", "--variant", "0", "--protect-user-tabs",
+                                          "--targets", "kitsune"]))
+    items.append(("external", ["external"]))
     return items
+
+
+def always_sequential(name: str) -> bool:
+    return name.startswith("coexistence")
 
 
 def attempt_plan(attempts: int, order: str | None, sequential: bool) -> list[dict]:
@@ -143,7 +155,8 @@ def main() -> int:
                         *(["--claude-model", args.model] if args.harness != "codex" else ["--codex-model", args.model]),
                         *(["--max-budget-usd-per-run", str(args.max_budget_usd_per_run), "--allow-api-billing"] if api else []),
                         "--kitsune-project", args.kitsune_project, "--execute"]
-                parallel = not args.sequential and name != "miniwob"
+                parallel = not args.sequential and not always_sequential(name)
+                fixed_targets = "--targets" in argv
                 def budget(amount):
                     return ["--budget-usd", str(round(amount, 6))] if api else []
                 if parallel:
@@ -152,9 +165,9 @@ def main() -> int:
                     jobs = [(f"{name}-{target}", base + ["--targets", target, *budget(share)])
                             for target in ("playwright", "kitsune")]
                 else:
-                    jobs = [(name, base + ["--targets", "kitsune,playwright" if attempt["order"] == "ba"
-                                      else "playwright,kitsune"]
-                         + (budget(remaining) if name != "miniwob" else []))]
+                    order = [] if fixed_targets else ["--targets", "kitsune,playwright" if attempt["order"] == "ba"
+                                                      else "playwright,kitsune"]
+                    jobs = [(name, base + order + budget(remaining))]
                 started = time.time()
                 print(f"[{time.strftime('%H:%M:%S')}] {name}: "
                       + (f"remaining ${remaining:.2f}" if api else "subscription harness, no dollar cap")
@@ -175,8 +188,6 @@ def main() -> int:
                     if not isinstance(result, dict):
                         result = {}
                     cost = result.get("estimated_cost_usd")
-                    if cost is None and name == "miniwob" and api:
-                        cost = worst_pair  # not reported by the MiniWoB runner; count its worst case
                     spent += cost or 0.0
                     entries.append({"name": name, **({"target": label.rsplit("-", 1)[1]} if parallel else {}),
                                     "exit": code, "summary_valid": bool(result),
@@ -190,19 +201,19 @@ def main() -> int:
                                     "by_target": result.get("by_target", result.get("results")),
                                     "output_path": str(attempt_dir / f"{label}.json")})
             for entry in entries:
-                entry.update(attempt=attempt["attempt"], order=attempt["order"] if name != "miniwob" else attempt["order"] or "ab")
+                entry.update(attempt=attempt["attempt"],
+                             order=attempt["order"] or ("ab" if always_sequential(name) else None))
                 all_entries.append(entry)
                 print(json.dumps(entry), flush=True)
                 with log.open("a") as handle:
                     handle.write(json.dumps(entry) + "\n")
             (out / "suite-summary.json").write_text(json.dumps(suite_summary(all_entries), indent=2) + "\n")
             # Wait for the active track's peers above, but never consume more model
-            # usage on later tracks after an invalid execution. MiniWoB reports a
-            # single pair (no suite counts); its nonzero exit signals unscorability.
+            # usage on later tracks after an invalid execution.
             failed = [entry for entry in entries if not entry.get("skipped") and (
                 entry.get("exit") != 0 or not entry.get("summary_valid") or entry.get("stopped_reason") or
-                (name != "miniwob" and (entry.get("requested_pairs") is None or
-                 entry.get("completed_pairs") != entry.get("requested_pairs"))))]
+                entry.get("requested_pairs") is None or
+                entry.get("completed_pairs") != entry.get("requested_pairs"))]
             if failed:
                 print(f"stopped: incomplete track {name}; no later tracks started", flush=True)
                 return 3

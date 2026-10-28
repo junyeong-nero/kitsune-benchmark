@@ -24,9 +24,9 @@ already-open tabs and a pre-established test session.
 
 | Track | Purpose | Implementation | Observed evidence |
 | --- | --- | --- | --- |
-| **Personal browsing** | Existing tabs, test sessions, lookup, drafts and safe mutations | 24 original specifications, all runnable local fixtures, each with three data variants | 24 variant-0 pairs on Claude Code + `claude-haiku-5-5`: 21/24 Playwright vs 23/24 Kitsune, 2026-10-21; six-task Codex `gpt-6-luna` pilot 3/6 vs 4/6, 2026-10-19 |
-| **Coexistence (draft)** | Kitsune philosophy: the user is in the browser too; delegation and recovery specs | 24 personal tasks under `user-seeded` + `co-typing-01` runnable; 25 tasks specified in [`tasks/coexistence/catalog.json`](../tasks/coexistence/catalog.json) | Opus, 2026-10-23: user-seeded v1 24/24 both, v3 user view 2/24 Playwright vs 24/24 Kitsune; `co-typing-01` 87 vs 0 misdirected keystrokes ([report](results/2026-10-23-coexistence-user-seeded.md)) |
-| **MiniWoB++ UI pilot** | Small upstream-task/original-reward integration check | Only `click-test-2`, seed 42; not the complete MiniWoB++ suite | One pair passed with historical `gpt-6.1-sol`, 2026-10-18 |
+| **Personal browsing** | Existing tabs, test sessions, lookup, drafts and safe mutations | 28 original specifications (`personal-browsing-local-v3`), all runnable local fixtures, each with three data variants | Opus subscription on Kitsune v0.7.0, 28 × 3 (2026-10-26): 83/84 Playwright vs 84/84 Kitsune ([report](results/2026-10-26-opus-subscription-v0.7.0.md)) |
+| **Coexistence** (frozen `coexistence-local-v1`) | Kitsune philosophy: the user is in the browser too | 28 personal tasks under `user-seeded`, the Kitsune `protect-user-tabs` arm and `co-typing-01`; 25 delegation/recovery/coexistence tasks specified only in [`tasks/coexistence/catalog.json`](../tasks/coexistence/catalog.json) | No frozen cohort yet. Pre-freeze draft, Opus subscription on Kitsune v0.7.0 (2026-10-26): v3 user view 2/28 Playwright vs 28/28 Kitsune; `co-typing-01` 48 vs 0 misdirected characters ([report](results/2026-10-26-opus-subscription-v0.7.0.md)) |
+| **External** (`external-v1`) | Tasks not written for these fixtures | 7 pinned MiniWoB++ tasks graded by the upstream reward + 3 live public-web tasks recorded, never graded ([protocol](external.md)) | No full cohort yet; the earlier one-task pilot (`click-test-2`) passed for both targets |
 | **Read-only smoke** | Browser/MCP connectivity and native-tool smoke | Example Domain task; no external task-success grader | One completed historical `gpt-6.1-sol` pair, 2026-10-18 |
 | **WebArena / live personal accounts** | Future realistic/multi-step tracks | Not provisioned or implemented | No results |
 
@@ -41,7 +41,7 @@ pair is not a general success rate, tool ranking or security certification.
 | --- | --- |
 | [Running guide](running.md) | Operational sequence, command selection, cost boundaries, exit codes |
 | [Personal browsing protocol](personal-browsing.md) | Personal-session task design, provenance, fixture/evaluation/reset contract |
-| [Coexistence track](coexistence.md) | Draft: user channel over WebDriver BiDi, user-owned seeding, view/input contracts, spec catalog for coexistence, delegation and recovery |
+| [Coexistence track](coexistence.md) | Frozen `coexistence-local-v1`: user channel over WebDriver BiDi, user-owned seeding, view/input contracts, run plan and comparability; spec catalog for coexistence, delegation and recovery |
 | [Component gallery](gallery.md) | Modern components, multimodal puzzles and a hand-off judgement task on one local page |
 | [Personal-state track](personal-state.md) | Specification only: tasks that need a personal profile's history, bookmarks or logins |
 | [Task catalog](../tasks/personal/catalog.json) | Per-task requests, initial state, success/safety criteria, implementation status |
@@ -49,7 +49,7 @@ pair is not a general success rate, tool ranking or security certification.
 | [Codex integration](codex-harness.md) | Authentication, isolation, native tool policy, process lifecycle and trace audit |
 | [Local resource methodology](resources.md) | CPU/RSS sampling scope, attribution and interpretation |
 | [Optimization findings](optimization-findings.md) | Causal cache evidence, token/observation candidates, native diagnostic logging and offline analysis |
-| [MiniWoB++ integration](miniwob.md) | Pinned upstream task, reward instrumentation and non-standard track limits |
+| [External track](external.md) | `external-v1`: pinned MiniWoB++ tasks, reward instrumentation, live-task recording and non-standard track limits |
 | [MCP comparison candidates](comparison-candidates.md) | Future MCP/browser cohorts; not benchmark task sources or measured adapters |
 | [Disclosure experiment plan](experiments/2026-10-22-disclosure-plan.md) | Preregistered 2×2 observation/action-guidance experiment and budget |
 | [Disclosure A/B findings](results/2026-10-22-disclosure-ab.md) | 72 repeated runs, ref/expect mechanism probes, and small-model selector decision |

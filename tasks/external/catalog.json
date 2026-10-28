@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "suite": "external-v1",
+  "status": "Frozen task list for external-v1. MiniWoB tasks are graded by the pinned upstream reward; live tasks are recorded but never graded.",
+  "authorship": "MiniWoB++ task HTML and reward code stay in the pinned upstream checkout (MIT, not redistributed). Live prompts are original to this repository.",
+  "tasks": [
+    {"id": "mw-click-test-2", "kind": "miniwob", "task_id": "click-test-2", "seed": 42,
+     "skill": "Click the named one of two buttons"},
+    {"id": "mw-click-checkboxes", "kind": "miniwob", "task_id": "click-checkboxes", "seed": 42,
+     "skill": "Select exactly the named checkboxes, then submit"},
+    {"id": "mw-enter-text", "kind": "miniwob", "task_id": "enter-text", "seed": 42,
+     "skill": "Type a given string into a field and submit"},
+    {"id": "mw-choose-list", "kind": "miniwob", "task_id": "choose-list", "seed": 42,
+     "skill": "Pick an item from a native select dropdown"},
+    {"id": "mw-login-user", "kind": "miniwob", "task_id": "login-user", "seed": 42,
+     "skill": "Fill a username/password login form and submit"},
+    {"id": "mw-use-autocomplete", "kind": "miniwob", "task_id": "use-autocomplete", "seed": 42,
+     "skill": "Type a prefix and choose the matching autocomplete suggestion"},
+    {"id": "mw-book-flight", "kind": "miniwob", "task_id": "book-flight", "seed": 42,
+     "skill": "Multi-field search form with autocomplete and date picker, then pick the requested flight"},
+    {"id": "live-steam-goty-2025-negative-100h", "kind": "live", "task_file": "tasks/live/steam-goty-2025-negative-100h.json",
+     "site": "store.steampowered.com", "skill": "Find a page and apply in-page review filters"},
+    {"id": "live-wikipedia-firefox-release", "kind": "live", "task_file": "tasks/live/wikipedia-firefox-release.json",
+     "site": "en.wikipedia.org", "skill": "Site search, open the right article, read an infobox field",
+     "advisory_answer_regex": "(?i)(9 November 2004|November 9,? 2004|2004-11-09)"},
+    {"id": "live-mdn-array-at-firefox", "kind": "live", "task_file": "tasks/live/mdn-array-at-firefox.json",
+     "site": "developer.mozilla.org", "skill": "Site search, then read a client-rendered compatibility table",
+     "advisory_answer_regex": "(?i)firefox\\D{0,40}\\b90\\b|\\b90\\b\\D{0,40}firefox"}
+  ]
+}

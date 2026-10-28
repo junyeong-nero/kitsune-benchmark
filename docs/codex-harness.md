@@ -4,7 +4,7 @@
 
 This document describes execution/authentication boundaries. Track-specific
 reset and grading contracts live in the [personal](personal-browsing.md) and
-[MiniWoB](miniwob.md) guides; observed measurements live in dated reports.
+[external track](external.md) guides; observed measurements live in dated reports.
 
 ## Fixed configuration and boundaries
 
@@ -30,7 +30,7 @@ Commands:
 The personal track has a bounded sequential multi-task runner. No generalized
 randomized/repeated scheduler/statistics, WebArena reset/deployment, token-budget
 termination, or complete tool/prompt attestation is implemented. See
-[MiniWoB](miniwob.md) and [personal browsing](personal-browsing.md) for separate
+[external track](external.md) and [personal browsing](personal-browsing.md) for separate
 tracks, external state evaluation, and their limits.
 
 ## Local checks and real validation

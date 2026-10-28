@@ -57,7 +57,9 @@ reads its existing login; there is no API-key or alternate-model fallback.
 | `personal --execute` | Six-task personal pilot, one variant | 12 |
 | `personal --all --execute` | All 28 personal tasks, one variant | 56 |
 | Three separate `personal --variant N --execute` commands for N=0,1,2 | Six tasks across three data variants | 36 total |
-| `benchmark --execute` | One MiniWoB++ `click-test-2` pair, seed 42 | 2 |
+| `external --task mw-login-user --execute` | One MiniWoB++ pair, seed 42 | 2 |
+| `external --execute` | All 10 external tasks: 7 MiniWoB++ + 3 live sites | 20 |
+| `coexistence --execute` | The `co-typing-01` typing-user pair, variant 0 | 2 |
 | `smoke --execute` | One read-only Example Domain pair | 2 |
 
 These are **agent run counts**, not LLM turn counts, token caps or prices. One
@@ -128,11 +130,12 @@ values actually used. `doctor --claude-model ID` validates that model for free.
 With `--harness codex`, `--codex-model ID` overrides the config's Codex `model` the
 same way; `scripts/run-full-suite.py --harness codex --model ID` passes it to every
 track and records it in `suite-manifest.json` (default: the config's Codex model).
-`scripts/run-full-suite.py` runs every graded track (personal 28 × 3 variants,
-gallery 21 × 3 variants × 2 layouts, MiniWoB) under one total `--budget-usd`, and
+`scripts/run-full-suite.py` runs every track (personal 28 × 3 variants,
+gallery 21 × 3 variants × 2 layouts, the [coexistence plan](coexistence.md#frozen-protocol),
+external 7 MiniWoB + 3 live) under one total `--budget-usd`, and
 writes `suite-manifest.json` with the Kitsune revision and `git describe` so the
 result can be filed under [its Kitsune version](results/kitsune-versions.md).
-By default each personal/gallery track runs Playwright and Kitsune as two
+By default each personal/gallery/external track runs Playwright and Kitsune as two
 concurrent `--targets` processes with half the remaining budget each (about half
 the wall time; elapsed and CPU/RSS are then measured under shared load, and the
 suite log has one entry per target). `--sequential` restores paired,
@@ -166,10 +169,11 @@ across all attempts: no implicit retry after invalid evidence.
 A = Playwright, B = Kitsune (not baseline/candidate Kitsune versions).
 `--sequential --order ab` or `ba` fixes the target order for every attempt.
 `--sequential --attempts 2 --order abba` declares AB for attempt 1 and BA for
-attempt 2 (alternates for larger even N; odd N is rejected). Order includes
-MiniWoB. Default parallel personal/gallery mode has **no target order** and
-rejects `--order`; its MiniWoB pair remains AB. Default `--attempts 1` retains
-the previous parallel behavior, or AB with `--sequential`.
+attempt 2 (alternates for larger even N; odd N is rejected). Default parallel
+personal/gallery/external mode has **no target order** and rejects `--order`.
+Coexistence entries always run paired in one process: AB by default, or the
+attempt's declared order. Default `--attempts 1` keeps the parallel behavior, or AB
+with `--sequential`.
 
 ```sh
 # Authorized model execution only; run both Kitsune revisions separately on the same frozen tag.
@@ -191,12 +195,13 @@ nothing and adds no accessibility node or snapshot text; the server keeps the
 reports apart from visits, form writes and forbidden actions, so grading is
 unchanged. No agent-visible call or resize is involved. Apart from that script
 and its CSP header, the 24 original tasks serve the same pages as `taskset-v2`;
-reproduce v2 results from the `taskset-v2` checkout. Gallery, MiniWoB, coexistence
-and the experiments that reuse personal fixtures serve uninstrumented pages and
-are not measured. The personal, gallery and coexistence tracks launch Kitsune's
-window at 1280×805 (720 + 85) so its content viewport is 1280×720 by construction
-(verified per run only on personal pages); MiniWoB and the older experiments keep
-the 1280×720 window. Pair manifests show `content_viewport_construction`.
+reproduce v2 results from the `taskset-v2` checkout. Coexistence
+(`coexistence-local-v1`) serves the same instrumented personal pages and reports
+them the same way. Gallery, external and the older experiments that reuse personal
+fixtures serve uninstrumented pages and are not measured. The personal, gallery and
+coexistence tracks launch Kitsune's window at 1280×805 (720 + 85), so its content
+viewport is 1280×720 by construction; this is verified per run only on personal and
+coexistence pages. External and the older experiments keep the 1280×720 window. Pair manifests show `content_viewport_construction`.
 
 After each run, `viewport.effective` (first report, `reports`,
 `later_reports_differed`) is written beside the unchanged `configured` record into
@@ -241,10 +246,12 @@ sets `KITSUNE_TOOL_PRESET` for the Kitsune server. A suite stops with
 `stopped_reason: kitsune_revision_changed` if the Kitsune checkout's revision or
 dirty state changes between pairs.
 
-**Live-site tasks.** `smoke --task FILE` runs any `{id, prompt}` task in the same
-isolated browsers without a grader. Add `--ui-tools` for the benchmark UI allowlist
-and `--targets` to pick MCPs. Live sites change, so judge results from the trace and
-screenshots, and never treat them as benchmark scores.
+**Live-site tasks.** The three catalogued live tasks belong to the
+[external track](external.md) (`external --kind live`), where they are recorded but
+never graded. For an ad-hoc live prompt, `smoke --task FILE` runs any `{id, prompt}`
+task in the same isolated browsers without a grader. Add `--ui-tools` for the
+benchmark UI allowlist and `--targets` to pick MCPs. Live sites change, so judge
+results from the trace and screenshots, and never treat them as benchmark scores.
 
 ```sh
 uv run --locked python -m kitsune_benchmark smoke \
@@ -312,18 +319,19 @@ See the [catalog and protocol](personal-browsing.md#catalog) for eligible tasks 
 uv run --locked python -m kitsune_benchmark smoke
 uv run --locked python -m kitsune_benchmark smoke --execute
 
-# Draft coexistence track (docs/coexistence.md): plan, then the typing-user fixture pair.
+# Coexistence track (docs/coexistence.md): plan, then the typing-user fixture pair.
 uv run --locked python -m kitsune_benchmark coexistence
 uv run --locked python -m kitsune_benchmark coexistence --execute
 
-# MiniWoB source fetch only: network/download, but no model inference.
-uv run --locked python -m kitsune_benchmark benchmark --fetch
-uv run --locked python -m kitsune_benchmark benchmark
-uv run --locked python -m kitsune_benchmark benchmark --execute
+# External track: MiniWoB source fetch only (network/download, no model), plan, then execute.
+uv run --locked python -m kitsune_benchmark external --fetch
+uv run --locked python -m kitsune_benchmark external
+uv run --locked python -m kitsune_benchmark external --kind miniwob --execute
 ```
 
-MiniWoB is the small [upstream task/reward integration](miniwob.md), not the
-personal-session evaluation and not the complete MiniWoB++ suite. Generic
+The [external track](external.md) is 7 pinned MiniWoB++ tasks graded by the upstream
+reward, plus 3 ungraded live-site tasks. It is not the complete MiniWoB++ suite.
+`benchmark` remains an alias of `external`. Generic
 `plan`/`run` are advanced operator-provisioned commands; `run` requires
 `--confirm-isolated-browser` and **does not provision an isolated browser**.
 Read [individual-run inputs](codex-harness.md#individual-run-inputs) first.
@@ -332,14 +340,17 @@ Read [individual-run inputs](codex-harness.md#individual-run-inputs) first.
 
 - Without `--execute`, paired track commands plan only. The separate generic
   `run` command executes by definition.
-- Execution consumes **ChatGPT subscription usage**. The project has no direct
-  model API integration, remaining-quota monitor or dollar-cost estimator.
-- Current per-agent wall-clock limit is **180 seconds** in the paired configs.
+- With the default `--harness claude`, execution consumes **claude.ai subscription usage**;
+  with `--harness codex` it consumes ChatGPT subscription usage. API-key harnesses bill
+  per token, need `--allow-api-billing`, and can be capped with `--budget-usd`.
+- Current per-agent wall-clock limit is **180 seconds** in the paired configs
+  (gallery 240, external live tasks 300).
   **There is no token-budget stop.** A timeout is not a fixed token allowance.
 - Setup/execution/unscorable failures stop further targets/tasks. Ordinary
   scorable task failures do not. No automatic retry or model substitution occurs.
-- Fixed order is Playwright then Kitsune. Data variants are not repeated
-  identical trials or order counterbalancing.
+- A single track command runs Playwright, then Kitsune, unless `--targets` gives
+  another order. Data variants are not repeated identical trials or order
+  counterbalancing; use the full-suite `--attempts`/`--order` for that.
 
 ## Inspect outcomes and usage
 
@@ -350,7 +361,7 @@ The CLI prints the summary. Raw evidence is private and gitignored:
 | Personal | `artifacts/personal/<pair-id>/` | `personal-summary.json`; `suite-summary.json` in the first attempted pair |
 | Gallery | `artifacts/gallery/<pair-id>/` | `gallery-summary.json`; `suite-summary.json` in the first attempted pair |
 | Coexistence | `artifacts/coexistence/<pair-id>/` | `coexistence-summary.json`; `suite-summary.json` in the first attempted pair |
-| MiniWoB | `artifacts/miniwob/<pair-id>/` | `benchmark-summary.json` |
+| External | `artifacts/external/<pair-id>/` | `external-summary.json`; `suite-summary.json` in the first attempted pair (historical pilot: `artifacts/miniwob/`) |
 | Smoke | `artifacts/smoke/<pair-id>/` | `pair-summary.json` |
 
 Per-run `summary.json` retains execution audit and `usage`; external tracks add

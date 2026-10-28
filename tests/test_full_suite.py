@@ -70,17 +70,15 @@ class FullSuiteTests(unittest.TestCase):
                 self.assertEqual(code, 3)
                 self.assertEqual(len(launched), 1)
 
-    def test_miniwob_without_suite_counts_and_invalid_json(self):
-        # MiniWoB is a single pair. Valid output plus exit zero can advance.
-        next_result = {"requested_pairs": 1, "completed_pairs": 1}
-        code, launched, _, _ = self.invoke(
-            [(0, {"results": {"kitsune": {}}}), (0, next_result)],
-            sequential=True, first="miniwob")
-        self.assertEqual(code, 0)
-        self.assertEqual(len(launched), 2)
-        code, launched, _, _ = self.invoke([(0, "not json")], first="miniwob")
+    def test_external_needs_suite_counts_like_other_tracks(self):
+        # The old single-pair MiniWoB output (results only, no counts) no longer advances the suite.
+        code, launched, _, _ = self.invoke([(0, {"results": {"kitsune": {}}})], sequential=True, first="external")
         self.assertEqual(code, 3)
         self.assertEqual(len(launched), 1)
+        ok = {"requested_pairs": 10, "completed_pairs": 10}
+        code, launched, _, _ = self.invoke([(0, ok), (0, ok)], sequential=True, first="external")
+        self.assertEqual(code, 0)
+        self.assertEqual(len(launched), 2)
 
     def test_scorable_task_failures_do_not_stop_suite(self):
         result = {"requested_pairs": 24, "completed_pairs": 24,
@@ -96,12 +94,17 @@ class FullSuiteTests(unittest.TestCase):
         tracks = [(f"personal-v{v}", ["personal", "--all", "--variant", str(v)]) for v in range(3)]
         tracks += [(f"gallery-{layout}-v{v}", ["gallery", "--layout", layout, "--variant", str(v)])
                    for layout in ("crowded", "isolated") for v in range(3)]
-        tracks.append(("miniwob", ["benchmark"]))
+        tracks.append(("coexistence-user-seeded", ["coexistence", "--all-personal", "--variant", "0"]))
+        tracks += [(f"coexistence-typing-v{v}", ["coexistence", "--task", "co-typing-01", "--variant", str(v)])
+                   for v in range(3)]
+        tracks.append(("coexistence-protect", ["coexistence", "--all-personal", "--variant", "0",
+                                               "--protect-user-tabs", "--targets", "kitsune"]))
+        tracks.append(("external", ["external"]))
         self.assertEqual(suite.commands(), tracks)
         result = {"requested_pairs": 1, "completed_pairs": 1, "results": {"kitsune": {}}}
         for sequential in (False, True):
             with self.subTest(sequential=sequential):
-                code, launched, _, entries = self.invoke([(0, result)] * 19,
+                code, launched, _, entries = self.invoke([(0, result)] * 31,
                                                          sequential=sequential, tracks=suite.commands())
                 self.assertEqual(code, 0)
                 project = launched[0][launched[0].index("--kitsune-project") + 1]
@@ -109,7 +112,11 @@ class FullSuiteTests(unittest.TestCase):
                 for name, argv in tracks:
                     base = [suite.sys.executable, "-m", "kitsune_benchmark", *argv, "--harness", "claude",
                             "--claude-model", "claude-opus-5-5", "--kitsune-project", project, "--execute"]
-                    targets = ("playwright", "kitsune") if not sequential and name != "miniwob" else ("playwright,kitsune",)
+                    if name.startswith("coexistence"):  # always paired in one process; the arm fixes its target
+                        expected.append(base + ([] if "--targets" in argv else ["--targets", "playwright,kitsune"]))
+                        outputs.append(f"{name}.json")
+                        continue
+                    targets = ("playwright", "kitsune") if not sequential else ("playwright,kitsune",)
                     for target in targets:
                         expected.append(base + ["--targets", target])
                         outputs.append(f"{name}-{target}.json" if len(targets) == 2 else f"{name}.json")
@@ -123,7 +130,7 @@ class FullSuiteTests(unittest.TestCase):
         for extra, model in ((("--harness", "codex", "--model", "gpt-6.1-sol"), "gpt-6.1-sol"),
                              (("--harness", "codex"), suite_config_model())):
             with self.subTest(extra=extra):
-                code, launched, _, _ = self.invoke([(0, result)] * 19, tracks=suite.commands(), extra=extra)
+                code, launched, _, _ = self.invoke([(0, result)] * 31, tracks=suite.commands(), extra=extra)
                 self.assertEqual(code, 0)
                 self.assertTrue(all(cmd[cmd.index("--codex-model") + 1] == model and "--claude-model" not in cmd
                                     for cmd in launched))
@@ -163,10 +170,10 @@ class FullSuiteTests(unittest.TestCase):
         self.assertEqual(len(entries), 1)
         self.assertEqual(self.summary["entries"], entries)
 
-    def test_miniwob_receives_ba_order(self):
-        code, launched, _, entries = self.invoke([(0, {"results": {"kitsune": {}}}),
-                                                 (0, {"requested_pairs": 1, "completed_pairs": 1})],
-                                                sequential=True, first="miniwob", extra=("--order", "ba"))
+    def test_external_receives_ba_order(self):
+        ok = {"requested_pairs": 10, "completed_pairs": 10}
+        code, launched, _, entries = self.invoke([(0, ok), (0, ok)],
+                                                sequential=True, first="external", extra=("--order", "ba"))
         self.assertEqual(code, 0)
         self.assertEqual(launched[0][launched[0].index("--targets") + 1], "kitsune,playwright")
         self.assertEqual(entries[0]["order"], "ba")

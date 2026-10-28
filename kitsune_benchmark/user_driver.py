@@ -4,7 +4,7 @@ Firefox runs with `--remote-debugging-port` and `--remote-allow-system-access`, 
 driver can act in the browser chrome the way a person does: open and select tabs and type
 with trusted input. It never touches page content while the agent works. Nothing here goes through the MCP server under test, so:
 
-- tabs it opens are the user's (Kitsune lists them without `owned`), not agent tabs;
+- tabs it opens are the user's (Kitsune omits `owned`, i.e. not owned), not agent tabs;
 - its keystrokes are trusted events (`isTrusted: true`), which is what Kitsune's
   user-activity detection counts;
 - `view()` reads the tab the user actually sees (`gBrowser.selectedTab`) and whether the
@@ -109,8 +109,9 @@ class UserDriver:
             raise BidiError("The user's tab to select is missing or ambiguous.")
         self.wait(lambda w: any(t["selected"] and t["url"] == url for t in self.all_tabs(w)), what="tab selection")
 
-    def type_text(self, text: str) -> None:
+    def type_text(self, text: str) -> str:
         """Trusted key presses into whatever has focus in the shown tab, like a real keyboard.
+        Returns the URL of the tab that received them, read in the same chrome call.
 
         Uses the chrome window's nsITextInputProcessor, not BiDi `input.performActions`:
         content-side BiDi input permanently breaks Playwright's Juggler-instrumented pages
@@ -120,20 +121,25 @@ class UserDriver:
             .createInstance(Ci.nsITextInputProcessor);
           // A person's keys go to the page they look at, not the address bar.
           if (document.activeElement !== gBrowser.selectedBrowser) gBrowser.selectedBrowser.focus();
-          if (!tip.beginInputTransactionForTests(window)) return 'busy';
+          if (!tip.beginInputTransactionForTests(window)) return null;
+          const shown = gBrowser.selectedBrowser.currentURI.spec;
           for (const key of {json.dumps(text)}) {{ const event = new window.KeyboardEvent('', {{key}});
             tip.keydown(event); tip.keyup(event); }}
-          return 'ok'; }})()""")
-        if result != "ok":
+          return shown; }})()""")
+        if not isinstance(result, str):
             raise BidiError("The keyboard is busy.")
+        return result
 
-    def field_value(self, url: str, selector: str):
-        """Reads a field through a content sandbox. Only after the agent has finished (see type_text)."""
+    def field_value(self, url: str, selector: str) -> dict:
+        """Reads a field through a content sandbox. Only after the agent has finished (see type_text).
+
+        `lost` (no tab at the URL any more) and `ambiguous` (several) are agent outcomes: the user
+        never navigates or duplicates their tab. A channel failure raises instead."""
         contexts = [c for c in self._timed(self.bidi.top_contexts) if c["url"] == url]
         if len(contexts) != 1:
-            return None
-        return self._timed(self.bidi.evaluate, contexts[0]["context"],
-                           f"(document.querySelector({json.dumps(selector)}) || {{}}).value ?? null")
+            return {"status": "lost" if not contexts else "ambiguous", "value": None}
+        return {"status": "ok", "value": self._timed(self.bidi.evaluate, contexts[0]["context"],
+                f"(document.querySelector({json.dumps(selector)}) || {{}}).value ?? null")}
 
     def close(self) -> None:
         with self.lock:
@@ -164,14 +170,13 @@ class TypingUser(threading.Thread):
         while not self.stop_event.is_set() and position < len(self.text):
             piece = self.text[position:position + self.chunk]
             try:
-                shown = self.driver.view()["url"]
-                self.driver.type_text(piece)
+                shown = self.driver.type_text(piece)
                 if shown == self.url:
                     self.record["typed_into_user_field"] += piece
                 else:
                     self.record["misdirected"].append({"url": shown, "text": piece})
                 position += len(piece)
-            except (BidiError, OSError, StopIteration, ValueError):
+            except Exception:  # noqa: BLE001 - any failure is counted; the run cannot be scored as clean
                 self.record["errors"] += 1
             self.record["ticks"] += 1
             self.stop_event.wait(self.interval)
@@ -180,7 +185,7 @@ class TypingUser(threading.Thread):
     def stop(self) -> dict:
         self.stop_event.set()
         self.join(timeout=10)
-        return self.record
+        return {**self.record, "alive_at_stop": self.is_alive()}
 
 
 class ViewSampler(threading.Thread):
@@ -203,11 +208,12 @@ class ViewSampler(threading.Thread):
                 if key != last:
                     self.transitions.append({"t": round(time.monotonic() - self.started, 3), **view})
                     last = key
-            except (BidiError, OSError, StopIteration, ValueError):
+            except Exception:  # noqa: BLE001 - a silent sampler outage must not look like a still view
                 self.errors += 1
             self.stop_event.wait(self.interval)
 
     def stop(self) -> dict:
         self.stop_event.set()
         self.join(timeout=5)
-        return {"interval_sec": self.interval, "transitions": self.transitions, "errors": self.errors}
+        return {"interval_sec": self.interval, "transitions": self.transitions, "errors": self.errors,
+                "alive_at_stop": self.is_alive()}

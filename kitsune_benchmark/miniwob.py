@@ -1,4 +1,4 @@
-"""Pinned MiniWoB++ HTML tasks and original client-side reward telemetry.
+"""Pinned MiniWoB++ HTML tasks and original client-side reward telemetry (the external track's graded half).
 
 This is a Firefox/MCP UI-only pilot, not the standard Chrome/Gym benchmark.
 Telemetry comes from upstream core.endEpisode, never the agent's final answer.
@@ -20,8 +20,7 @@ import threading
 import time
 from urllib.parse import parse_qs, urlsplit
 
-from .adapter import with_claude_overrides
-from .smoke import ROOT, TARGETS, run_pair
+from .smoke import ROOT
 from .specs import Task
 
 # taskset-v1.2: Kitsune v0.3.1 publishes Playwright MCP 0.0.83's 25 default tools under the same names, so both
@@ -37,7 +36,7 @@ UI_TOOLS = {"playwright": CORE_TOOLS, "kitsune": CORE_TOOLS}
 
 
 def config() -> dict:
-    return json.loads((ROOT / "configs/benchmarks/miniwob.json").read_text())
+    return json.loads((ROOT / "configs/benchmarks/external.json").read_text())
 
 
 def verify_source(source: Path, revision: str) -> None:
@@ -131,11 +130,15 @@ class Trial:
         valid_trace = execution_status == "completed_unscored"
         valid_episode = self.page_loads == 1 and self.starts == 1 and self.errors == 0
         scorable = valid_trace and valid_episode
-        return {"benchmark": "MiniWoB++", "track": "firefox-mcp-ui-pilot",
+        raw = self.terminal["raw_reward"] if self.terminal else None
+        # Success is the full upstream reward. Partial-credit tasks (click-checkboxes) can end with
+        # 0 < raw < 1; that is reported as positive_reward, never as success.
+        return {"benchmark": "MiniWoB++", "track": "external-v1",
                 "task_id": self.task_id, "seed": self.seed, "episode_timeout_ms": self.timeout_ms,
                 "page_loads": self.page_loads, "episode_starts": self.starts,
                 "telemetry_errors": self.errors, "scorable": scorable,
-                "task_success": bool(self.terminal and self.terminal["raw_reward"] > 0) if scorable else None,
+                "task_success": (raw is not None and raw >= 1) if scorable else None,
+                "positive_reward": (raw is not None and raw > 0) if scorable else None,
                 "outcome": "official_terminal_reward" if self.terminal else "no_terminal_reward",
                 "official_reward": self.terminal,
                 "integrity": "Client-side upstream reward instrumentation; not hardened against malicious agents.",
@@ -143,9 +146,10 @@ class Trial:
 
 
 class BenchmarkServer:
-    def __init__(self, source: Path, spec: dict) -> None:
+    def __init__(self, source: Path, spec: dict, task: dict) -> None:
         self.source = source
         self.spec = spec
+        self.task = task
         self.trials: dict[str, Trial] = {}
         self.by_target: dict[str, str] = {}
         self.lock = threading.RLock()
@@ -165,7 +169,7 @@ class BenchmarkServer:
 
             def do_GET(self):
                 parsed = urlsplit(self.path)
-                if parsed.path == "/miniwob/" + controller.spec["task_id"] + ".html":
+                if parsed.path == "/miniwob/" + controller.task["task_id"] + ".html":
                     token = parse_qs(parsed.query).get("trial", [None])[0]
                     with controller.lock:
                         trial = controller.trials.get(token)
@@ -217,12 +221,12 @@ class BenchmarkServer:
     def begin(self, target: str) -> Task:
         assert self.http is not None
         token = secrets.token_hex(16)
-        trial = Trial(self.spec["task_id"], self.spec["seed"], self.spec["episode_timeout_ms"])
+        trial = Trial(self.task["task_id"], self.task["seed"], self.spec["episode_timeout_ms"])
         with self.lock:
             self.trials[token] = trial
             self.by_target[target] = token
         url = f"http://127.0.0.1:{self.http.server_port}/miniwob/{trial.task_id}.html?trial={token}"
-        return Task(f"miniwob-{trial.task_id}-seed-{trial.seed}",
+        return Task(f"{self.task['id']}-seed-{trial.seed}",
             f"Open {url} in a new tab. Click START exactly once, then follow the task instruction "
             "displayed on the page. Stop after completing the task. Do not restart, reload, or retry the episode. "
             "Use only the provided UI observation and interaction tools. Do not inspect or modify source code, "
@@ -244,27 +248,6 @@ class BenchmarkServer:
             self.thread.join(timeout=3)
 
 
-def run_benchmark(*, execute: bool = False, fetch: bool = False,
-                  kitsune_project: str | None = None, executable: str = "codex",
-                  harness: str = "codex", claude_model: str | None = None,
-                  max_budget_usd_per_run: float | None = None, targets: tuple[str, ...] = TARGETS,
-                  codex_model: str | None = None) -> dict:
-    spec = with_claude_overrides(config(), claude_model, max_budget_usd_per_run, codex_model)
-    source = fetch_source(spec) if fetch else ROOT / spec["source_directory"]
-    if not execute:
-        return {"mode": "benchmark_plan_only", "model_invoked": False, "config": spec,
-                "source_present": source.exists(), "ui_tools": UI_TOOLS}
-    verify_source(source, spec["source_revision"])
-    with BenchmarkServer(source, spec) as benchmark:
-        result = run_pair(execute=True, kitsune_project=kitsune_project, executable=executable,
-            experiment_spec=spec, artifact_scope="miniwob", task_for_target=benchmark.begin,
-            evaluate=benchmark.evaluate, enabled_tools=UI_TOOLS, harness=harness, targets=targets)
-    result["benchmark_config"] = spec
-    result["upstream_task_sha256"] = hashlib.sha256(
-        (source / "miniwob/html/miniwob" / (spec["task_id"] + ".html")).read_bytes()).hexdigest()
-    path = Path(result["pair_dir"]) / "benchmark-summary.json"
-    with path.open("x") as stream:
-        json.dump(result, stream, indent=2)
-        stream.write("\n")
-    path.chmod(0o600)
-    return result
+
+def task_sha256(source: Path, task_id: str) -> str:
+    return hashlib.sha256((source / "miniwob/html/miniwob" / (task_id + ".html")).read_bytes()).hexdigest()
