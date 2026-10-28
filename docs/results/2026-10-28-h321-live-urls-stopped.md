@@ -52,6 +52,10 @@ Live runs on Kitsune, measured by tool-result characters: the 6 runs above plus 
 So for this agent on live sites, the size of `browser_find` results is the main lever. Snapshot truncation is not.
 This report does not test a change to `browser_find`.
 
+## Follow-up
+
+kitsune#321 was closed as not planned. The `browser_find` lever is kitsune#323. The intervention commit `9608032` is kept as the Kitsune tag `h321-intervention`; its branch `exp/drop-urls-when-truncated` was deleted.
+
 ## Raw evidence
 
 Private: `artifacts/h321/` (runs.jsonl, driver logs), with pair directories under `artifacts/external` and
