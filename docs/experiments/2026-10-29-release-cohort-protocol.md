@@ -25,7 +25,7 @@ units (the `lite` plan below), so the two releases can be compared track by trac
 | What | Value |
 | --- | --- |
 | Kitsune | Release tag `<TAG>` (for example `v0.8.0`). A clean checkout goes to `artifacts/vendor/kitsune-<TAG>/`, and its revision and `git describe` are recorded in `suite-manifest.json` |
-| Benchmark | Tag **`taskset-v3.1.1`**, created before the run: `taskset-v3.1` + kitsune-benchmark#35 only (see below). The checkout must be clean |
+| Benchmark | Tag **`taskset-v3.1.1`**, created before the run on `main`: `taskset-v3.1` + kitsune-benchmark#35 (setup compatibility) + #45 (`--plan lite`) (see below). The checkout must be clean |
 | Harness | Claude Code `2.1.303`, `--harness claude` (claude.ai subscription, no API credit, no fallback) |
 | Model | `claude-opus-5-5`, effort medium |
 | Comparison target | Playwright MCP `0.0.83`, the same 23-tool UI allowlist |
@@ -34,7 +34,7 @@ units (the `lite` plan below), so the two releases can be compared track by trac
 **Why `taskset-v3.1.1`.** Kitsune after v0.7.0 (#303) refuses a tab-less `browser_navigate` with `no_current_tab`
 until a tab is selected. The personal relay's setup starts with exactly that call. kitsune-benchmark#35 lets setup
 select the fresh profile's only tab and retry, but only when that refusal occurs. It is the only change to
-`kitsune_benchmark/` since `taskset-v3.1`:
+`kitsune_benchmark/` since `taskset-v3.1`. #45 only adds the `lite` plan to `scripts/run-full-suite.py`. Together:
 
 - Kitsune v0.7.0 never takes that branch, so its results are reproducible on `taskset-v3.1.1` unchanged.
 - Setup calls are harness calls, not recorded in `tab_calls`, so grading is unaffected.
