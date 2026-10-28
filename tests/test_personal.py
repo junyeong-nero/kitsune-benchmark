@@ -515,6 +515,41 @@ for line in sys.stdin:
                 self.assertEqual(session.evidence["harness_calls"], 1)
                 self.assertGreaterEqual(session.evidence["harness_seconds"], 0)
 
+    def test_setup_selects_the_initial_tab_only_when_kitsune_needs_a_current_tab(self):
+        # kitsune#303 (after v0.7.0): a tab-less navigate is refused until a tab is selected.
+        refused = {"result": {"isError": True, "content": [{"type": "text", "text": json.dumps(
+            {"ok": False, "code": "no_current_tab", "error": "No current tab."})}]}}
+        ok = {"result": {"content": [{"type": "text", "text": "{}"}]}}
+        config = {"target": "kitsune", "bootstrap_url": "http://127.0.0.1:1/t/x/start",
+                  "urls": ["http://127.0.0.1:1/t/x/a", "http://127.0.0.1:1/t/x/b"], "active_index": 1,
+                  "evidence_path": "/dev/null"}
+        for first, selected in ((refused, True), (ok, False)):
+            with self.subTest(selected=selected):
+                session = NativeSession(config)
+                calls = []
+                def request(method, params, first=first):
+                    calls.append((params["name"], params["arguments"]))
+                    return first if len(calls) == 1 else ok
+                tabs = [{"id": 7, "url": "about:blank", "active": True}]
+                with patch.object(session, "request", side_effect=request), \
+                        patch.object(session, "wait_inventory", side_effect=[tabs, AssertionError("stop")]), \
+                        self.assertRaises(AssertionError):
+                    session.prepare()
+                names = [name for name, _ in calls]
+                expected = (["browser_navigate", "browser_tabs", "browser_navigate"] if selected else ["browser_navigate"])
+                self.assertEqual(names[:len(expected)], expected)
+                if selected:
+                    self.assertEqual(calls[1][1], {"action": "select", "tab_id": 7})
+                    self.assertNotIn("native_error", session.evidence)
+                self.assertEqual(session.evidence.get("setup_selected_initial_tab", False), selected)
+        other = {"result": {"isError": True, "content": [{"type": "text", "text": json.dumps({"code": "timeout"})}]}}
+        session = NativeSession(config)
+        with patch.object(session, "request", return_value=other), \
+                patch.object(session, "wait_inventory", return_value=[{"id": 7, "url": "about:blank", "active": True}]), \
+                self.assertRaises(ValueError):
+            session.prepare()
+        self.assertEqual(session.evidence["native_error"]["code"], "timeout")
+
     def test_native_tool_failure_omits_sensitive_and_malformed_fields(self):
         responses = [
             {"error": {"code": -32001, "data": {"stage": "https://private.invalid", "tool": "sk-secret",
