@@ -6,8 +6,8 @@
 
 - Model and harness: `claude-opus-5-5`, medium, Claude Code `2.1.303` on the subscription.
 - Kitsune `v0.7.0`.
-- Benchmark source: `e2c9900` (`taskset-v3-8-ge2c9900`, clean). The `taskset-v3.1` tag did not exist
-  yet; this checkout is the content it is meant to freeze.
+- Benchmark source: `e2c9900`, clean. That commit was later tagged `taskset-v3.1`; the manifests,
+  written before the tag, record it as `taskset-v3-8-ge2c9900`.
 - One attempt, AB order (Playwright first) in one process, no retries.
 - 110 agent runs, all scorable. Every track command exited 0.
 
