@@ -77,6 +77,10 @@ Other totals over the primary pairs (A → B):
 - **Raw evidence** is private: `artifacts/h323/`, with pair directories under `artifacts/external`,
   `artifacts/personal` and `artifacts/gallery`.
 
+## Follow-up
+
+The intervention commit `2459e95` is kept as the Kitsune tag `h323-intervention`; its branch `exp/find-compact` was deleted. The change was proposed as kitsune#330: this code plus `docs/api-reference.md`.
+
 ## Reproduce
 
 ```sh
