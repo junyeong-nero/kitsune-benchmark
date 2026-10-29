@@ -17,6 +17,7 @@ from .external import run_external
 from .gallery import run_gallery
 from .personal import config as personal_config, pair_complete, run_personal, runnable_ids
 from .coexistence import run_coexistence
+from .hostile import run_hostile
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -97,6 +98,17 @@ def main(argv: list[str] | None = None) -> int:
     coexistence.add_argument("--kitsune-project")
     coexistence.add_argument("--targets", default="playwright,kitsune")
     coexistence.add_argument("--budget-usd", type=float)
+    hostile = subparsers.add_parser("hostile", help="Hostile-UI capability matrix: real-web components x tool strategies, "
+                                    "no model calls; plan by default")
+    hostile.add_argument("--execute", action="store_true", help="Start isolated browsers and run the matrix (no model)")
+    hostile.add_argument("--component", action="append", dest="component_ids", help="Component ID; repeatable")
+    hostile.add_argument("--targets", default="playwright,kitsune")
+    hostile.add_argument("--kitsune-project")
+    hostile.add_argument("--headed", action="store_true", help="Show the browser windows")
+    hostile.add_argument("--trusted", action="store_true",
+                         help="Also run OS-input strategies (browser_trusted_click, Kitsune only); needs --headed and "
+                              "moves the real pointer")
+    hostile.add_argument("--out", help="Output directory (default artifacts/hostile/runs/<UTC time>)")
     for child in (smoke, benchmark, personal, gallery, coexistence):
         child.add_argument("--harness", choices=HARNESSES, default="claude",
                            help="Agent CLI. Default claude (Claude Code on the claude.ai subscription login; "
@@ -115,7 +127,7 @@ def main(argv: list[str] | None = None) -> int:
     doctor.add_argument("--claude-model", help="Model ID to validate with the claude-api harnesses")
     args = parser.parse_args(argv)
     claude = getattr(args, "harness", "codex").startswith("claude")
-    executable = getattr(args, "claude", None) if claude else args.codex
+    executable = getattr(args, "claude", None) if claude else getattr(args, "codex", None)
     overrides = {"claude_model": getattr(args, "claude_model", None),
                  "max_budget_usd_per_run": getattr(args, "max_budget_usd_per_run", None)}
     if args.command != "doctor" and not claude and any(value is not None for value in overrides.values()):
@@ -168,6 +180,16 @@ def main(argv: list[str] | None = None) -> int:
             if not args.execute:
                 return 0
             return 0 if result["completed_pairs"] == result["requested_pairs"] else 3
+        if args.command == "hostile":
+            result = run_hostile(execute=args.execute, component_ids=args.component_ids,
+                                 targets=tuple(args.targets.split(",")), kitsune_project=args.kitsune_project,
+                                 headed=args.headed, trusted=args.trusted, out=args.out)
+            if args.execute:
+                print(result["matrix"])
+                print(f"results: {result['out_dir']}")
+            else:
+                print(json.dumps({k: v for k, v in result.items() if k != "plan"}, indent=2))
+            return 0
         if args.command == "gallery":
             result = run_gallery(execute=args.execute, task_ids=args.task_ids, category=args.category, variant=args.variant,
                                  layout=args.layout, kitsune_project=args.kitsune_project, executable=executable,
