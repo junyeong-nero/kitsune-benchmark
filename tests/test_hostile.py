@@ -132,7 +132,8 @@ class RunnerTests(unittest.TestCase):
 
         spec = catalog()
         component = next(c for c in spec["components"] if c["id"] == "trusted-click")
-        with HostileServer() as server, patch("kitsune_benchmark.hostile.SETTLE_SEC", 0.2):
+        with HostileServer() as server, patch("kitsune_benchmark.hostile.SETTLE_SEC", 0.2), \
+                patch("kitsune_benchmark.hostile.STEP_PAUSE", 0):
             session = Session(server)
             record = Runner(session, server, spec).run(component, "click")
             self.assertEqual(record["outcome"], "not_accepted", "an ok tool response is not success")

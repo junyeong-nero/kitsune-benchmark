@@ -19,6 +19,7 @@ import json
 from pathlib import Path
 import re
 import secrets
+import sys
 import tempfile
 import threading
 import time
@@ -31,6 +32,9 @@ BUNDLE = ROOT / "artifacts/hostile/bundle"
 TRUSTED_TOOLS = {"browser_trusted_click"}
 READY_TIMEOUT = 8.0
 SETTLE_SEC = 2.0
+# Between steps, as an agent's own latency would leave: lets a frame render (CSS :hover after a real pointer move,
+# menus opening). The same for every server and strategy.
+STEP_PAUSE = 0.3
 
 REPORT_JS = """(() => {
   const token = location.pathname.split('/')[2];
@@ -294,7 +298,9 @@ class Runner:
         if not opened["ok"] or not self.server.state(token).ready:
             return {**record, "outcome": "page_not_ready", "accepted": None}
         values = component.get("values", {})
-        for step in expand(self.spec["strategies"][strategy], values):
+        for index, step in enumerate(expand(self.spec["strategies"][strategy], values)):
+            if index:
+                time.sleep(STEP_PAUSE)
             needed = set(re.findall(r'"@(\w+)"', json.dumps(step["args"])))
             refs, missing = self.targets(needed, component) if needed else ({}, None)
             if missing:
@@ -350,7 +356,8 @@ def run_hostile(*, execute: bool = False, component_ids: list[str] | None = None
             mine = [c for c in cells if c["target"] == target]
             with tempfile.TemporaryDirectory(prefix=f"hostile-{target}-", dir="/tmp") as folder:
                 launcher = (playwright_server(folder, headed=headed) if target == "playwright" else
-                            kitsune_server(folder, project, headed=headed, caps="core,browse" if trusted else None))
+                            kitsune_server(folder, project, headed=headed, caps="core,browse" if trusted else None,
+                                           extras=("macos",) if trusted and sys.platform == "darwin" else ()))
                 with launcher as upstream:
                     session = NativeSession({"target": target, "upstream": upstream, "bootstrap_url": "about:blank",
                                              "urls": ["about:blank"], "active_index": 0,

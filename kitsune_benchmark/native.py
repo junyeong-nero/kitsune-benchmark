@@ -38,8 +38,9 @@ def playwright_server(folder: str, *, headed: bool = False):
 
 @contextmanager
 def kitsune_server(folder: str, project: str | Path, *, headed: bool = False, caps: str | None = None,
-                   height: int = 805):
-    """Starts a private bridge and Firefox with the Kitsune extension; yields the Kitsune MCP command."""
+                   height: int = 805, extras: tuple[str, ...] = ()):
+    """Starts a private bridge and Firefox with the Kitsune extension; yields the Kitsune MCP command.
+    `extras` are the Kitsune project's optional dependency groups (e.g. "macos" for OS input on macOS)."""
     project = Path(project).expanduser().resolve()
     env = codex_environment(resolve("codex"))  # resolve only; no Codex process, login or model call
     env["PLAYWRIGHT_BROWSERS_PATH"] = str(ROOT / "artifacts/browsers")
@@ -58,8 +59,8 @@ def kitsune_server(folder: str, project: str | Path, *, headed: bool = False, ca
                                        stdout=log, stderr=log, start_new_session=True)
             stack.callback(terminate_group, process)
             return process
-        bridge = spawn(["uv", "run", "--locked", "--project", str(project), "python", "-m", "kitsune.bridge"],
-                       "bridge.log")
+        uv = ["uv", "run", "--locked", "--project", str(project), *(f"--extra={e}" for e in extras)]
+        bridge = spawn([*uv, "python", "-m", "kitsune.bridge"], "bridge.log")
         await_bridge(http_port, env["KITSUNE_TOKEN"], bridge)
         args = [str(ROOT / "node_modules/.bin/web-ext"), "run", "--no-config-discovery", "--no-input",
                 "--source-dir", str(destination), "--artifacts-dir", str(Path(folder) / "web-ext"),
@@ -70,4 +71,4 @@ def kitsune_server(folder: str, project: str | Path, *, headed: bool = False, ca
         browser = spawn(args, "firefox.log")
         await_bridge(http_port, env["KITSUNE_TOKEN"], browser, extension=True)
         with patch.dict(os.environ, env):
-            yield ["uv", "run", "--locked", "--project", str(project), "kitsune"]
+            yield [*uv, "kitsune"]

@@ -67,7 +67,12 @@ uv run --locked python -m kitsune_benchmark hostile --execute --component lib-ra
 - **the real pointer moves**;
 - on macOS the bridge needs Accessibility permission.
 
-Run it only while nobody uses the machine.
+Run it only while nobody uses the machine. On macOS the Kitsune MCP server and bridge are started with the
+project's `macos` extra (pyobjc Quartz), installed only into the Kitsune checkout's environment.
+
+**Step pause.** The runner waits 0.3 s between the steps of a strategy, on every server. An agent's own latency
+between calls is longer; without the pause a snapshot taken right after a real pointer move can precede the frame
+that applies CSS `:hover`.
 
 ## Limits
 
