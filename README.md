@@ -9,11 +9,11 @@ CPU/RAM measurements.
 
 ## Current focus and status
 
-Latest release check: [Kitsune v0.7.0 on Opus subscription, full suite + coexistence](docs/results/2026-10-26-opus-subscription-v0.7.0.md),
-the first `taskset-v3` cohort: 480 scorable runs, no retries (422 `taskset-v3` runs plus 58 pre-freeze coexistence-draft runs). Personal: Playwright
-83/84 vs Kitsune 84/84; crowded gallery 63/63 vs 62/63, isolated both 63/63. On
-joint successes Kitsune used 19% / 16% / 5% less input at about the same call count.
-Not comparable with the earlier v1.x/v2 reports.
+Latest release check: [Kitsune v0.7.1 on Opus subscription, release cohort (lite plan)](docs/results/2026-10-29-opus-subscription-v0.7.1.md)
+on `taskset-v3.1.1`: 306 scorable runs, no retries. Personal 56/56 both; crowded gallery Playwright 21/21 vs Kitsune
+20/21; isolated 21/21 both. On jointly solved units Kitsune used 17% / **43%** / 8% less input than Playwright
+(personal / crowded / isolated; v0.7.0 on the same units: 19% / 6% / -2%). Coexistence: user view 2/28 vs 28/28.
+Previous: [v0.7.0 full suite](docs/results/2026-10-26-opus-subscription-v0.7.0.md). Not comparable with v1.x/v2 reports.
 
 The primary track evaluates **personal browsing**: continuing work in existing
 tabs and a pre-established test session, gathering information, transferring it
@@ -21,9 +21,10 @@ to drafts, and respecting do-not-submit/preserve-context boundaries.
 
 | Track | Implemented scope | Actual model evidence |
 | --- | --- | --- |
-| **Personal browsing** | 28 original specifications, **all runnable** local tasks (six-task pilot default, `--all` for 28); three data variants each; frozen as `taskset-v3` | Opus subscription on Kitsune v0.7.0, 28 × 3 (2026-10-26): 83/84 Playwright, 84/84 Kitsune ([report](docs/results/2026-10-26-opus-subscription-v0.7.0.md)). Earlier: 24 variant-0 Haiku pairs 21/24 vs 23/24; six-task Codex pilot 3/6 vs 4/6 |
-| **Coexistence** (frozen `coexistence-local-v1`, `taskset-v3.1`) | The user is in the browser too: user-owned starting tabs, view telemetry, a typing user ([protocol](docs/coexistence.md)). 28 personal tasks user-seeded, the Kitsune `protect-user-tabs` arm and `co-typing-01`; 25 more specified only | Opus subscription on Kitsune v0.7.0, frozen plan, one attempt (2026-10-28): v2 28/28 both, **v3 user view 2/28 Playwright vs 28/28 Kitsune**; `co-typing-01` v0-2 user input 0/3 vs 3/3; protect arm 28/28 ([report](docs/results/2026-10-28-new-tracks-v0.7.0.md)) |
-| **External** (`external-v1`) | 7 pinned MiniWoB++ tasks graded by the upstream reward (incl. a `login-user` form) + 3 live public-web tasks (Steam, Wikipedia, MDN), recorded but never graded ([protocol](docs/external.md)) | Opus subscription on Kitsune v0.7.0 (2026-10-28): MiniWoB 7/7 both; 3 live tasks completed by both ([report](docs/results/2026-10-28-new-tracks-v0.7.0.md)) |
+| **Personal browsing** | 28 original specifications, **all runnable** local tasks (six-task pilot default, `--all` for 28); three data variants each; frozen as `taskset-v3` | Opus subscription on Kitsune v0.7.1, lite plan 28 × v0–v1 (2026-10-29): 56/56 both ([report](docs/results/2026-10-29-opus-subscription-v0.7.1.md)). v0.7.0, 28 × 3 (2026-10-26): 83/84 Playwright, 84/84 Kitsune ([report](docs/results/2026-10-26-opus-subscription-v0.7.0.md)). Earlier: 24 variant-0 Haiku pairs 21/24 vs 23/24; six-task Codex pilot 3/6 vs 4/6 |
+| **Coexistence** (frozen `coexistence-local-v1`, `taskset-v3.1`) | The user is in the browser too: user-owned starting tabs, view telemetry, a typing user ([protocol](docs/coexistence.md)). 28 personal tasks user-seeded, the Kitsune `protect-user-tabs` arm and `co-typing-01`; 25 more specified only | Opus subscription on Kitsune v0.7.1, frozen plan (2026-10-29): v2 28/28 both, **v3 user view 2/28 Playwright vs 28/28 Kitsune**; `co-typing-01` v0-2 user input 0/3 vs 3/3; protect arm 28/28 ([report](docs/results/2026-10-29-opus-subscription-v0.7.1.md)). Same on v0.7.0 ([2026-10-28](docs/results/2026-10-28-new-tracks-v0.7.0.md)) |
+| **External** (`external-v1`) | 7 pinned MiniWoB++ tasks graded by the upstream reward (incl. a `login-user` form) + 3 live public-web tasks (Steam, Wikipedia, MDN), recorded but never graded ([protocol](docs/external.md)) | Opus subscription on Kitsune v0.7.1 (2026-10-29): MiniWoB 7/7 both; 3 live tasks completed by both ([report](docs/results/2026-10-29-opus-subscription-v0.7.1.md)). Same on v0.7.0 ([2026-10-28](docs/results/2026-10-28-new-tracks-v0.7.0.md)) |
+| Hostile-UI matrix (draft, no model) | 26 real-web components (17 defense pages + 9 real UI libraries) × scripted tool strategies ([track](docs/hostile.md)) | Kitsune v0.7.1: Playwright 23/26 vs Kitsune 20/26 with synthetic input; Kitsune 21/26 on a dev build with opt-in `browser_trusted_click` ([v0.7.1](docs/results/2026-10-29-opus-subscription-v0.7.1.md#hostile-ui-matrix-on-v071-no-model-synthetic-input), [first run](docs/results/2026-10-29-hostile-headless.md)) |
 | Read-only smoke | Example Domain, no external task-success grader | One completed historical `gpt-6.1-sol` pair on 2026-10-18 |
 
 Execution defaults to **Claude Code `2.1.303` on the claude.ai subscription** (`--harness claude`; no API credit). API-key billing needs `--harness claude-api --allow-api-billing`. The Codex harness (`gpt-6-luna`, Codex CLI `0.163.0`) remains available.
