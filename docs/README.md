@@ -49,6 +49,7 @@ pair is not a general success rate, tool ranking or security certification.
 | [Codex integration](codex-harness.md) | Authentication, isolation, native tool policy, process lifecycle and trace audit |
 | [Local resource methodology](resources.md) | CPU/RSS sampling scope, attribution and interpretation |
 | [Optimization findings](optimization-findings.md) | Causal cache evidence, token/observation candidates, native diagnostic logging and offline analysis |
+| [Hostile-UI capability matrix](hostile.md) | Draft, no model: real-web defenses and real UI libraries × tool strategies, per MCP server; opt-in OS input |
 | [External track](external.md) | `external-v1`: pinned MiniWoB++ tasks, reward instrumentation, live-task recording and non-standard track limits |
 | [MCP comparison candidates](comparison-candidates.md) | Future MCP/browser cohorts; not benchmark task sources or measured adapters |
 | [Disclosure experiment plan](experiments/2026-10-22-disclosure-plan.md) | Preregistered 2×2 observation/action-guidance experiment and budget |
