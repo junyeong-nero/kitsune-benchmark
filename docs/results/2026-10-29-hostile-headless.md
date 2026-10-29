@@ -170,9 +170,11 @@ Kitsune strategies that use `browser_trusted_click` (`restore_pointer: false` be
 
 ## Next
 
-- File Kitsune issues:
-  - findings 3–5 (observation: refs for hover and drop targets, canvas, cross-origin frames);
-  - finding 6 (move the synthetic pointer to the target before pressing).
+- Filed as Kitsune issues:
+  - kitsune#340: `browser_click` presses without a `pointermove` (finding 6);
+  - kitsune#341: `role="img"` elements and canvases get no ref (findings 3–4);
+  - kitsune#342: named non-interactive hover and drop targets get no ref (finding 3);
+  - kitsune#343: cross-origin iframe content is opaque (finding 5).
 
   Findings 1 and 2 are documented limits of synthetic input, and `browser_trusted_click` covers them.
 - Raw evidence (private): `artifacts/hostile/runs/headless-57c56a7/` and `trusted-headed-57c56a7/`.
