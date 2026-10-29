@@ -1,4 +1,4 @@
-# Hostile-UI capability matrix, synthetic input (2026-10-29)
+# Hostile-UI capability matrix: synthetic input and opt-in OS input (2026-10-29)
 
 [Track](../hostile.md) · [Catalog](../../tasks/hostile/catalog.json)
 
@@ -10,10 +10,16 @@ Success is reported by each component's own handler.
 - **Kitsune:** `v0.7.0-26-g57c56a7` (main with #319, #318, #313, #316 and #330), clean pinned worktree, default
   capabilities. Its revision was checked before and after the run.
 - **Playwright MCP:** `0.0.83`, `--isolated --headless`.
-- **Browser:** private Firefox 1553, headless on both targets. `--trusted` was not used, so this is synthetic input
-  only.
+- **Browser:** private Firefox 1553.
+- **Runs:**
+  1. headless on both targets, synthetic input only;
+  2. `--headed --trusted`, which adds `browser_trusted_click` strategies on Kitsune through the macOS Quartz backend.
+     The real pointer moved.
+- **Step pause:** 0.3 s between steps on both servers, standing in for an agent's own latency between calls.
+- **Headed vs headless:** no synthetic-input cell differed.
 
-**Components solved by at least one strategy: Playwright 23/26, Kitsune 18/26.**
+**Components solved by at least one strategy: Playwright 23/26; Kitsune 18/26 with synthetic input, 21/26 with OS
+input added.**
 
 | | Components |
 | --- | --- |
@@ -87,8 +93,7 @@ Event counts come from each page's `report.js`.
 1. **`isTrusted`-gated handlers ignore Kitsune's default input.**
    - `trusted-click` received `pointerdown`, `mousedown`, `pointerup`, `mouseup` and `click`, all `:synthetic`.
    - Playwright's input arrives `:trusted`, through Juggler.
-   - Kitsune's remedy is `browser_trusted_click` (OS input). It is not measured here; it is the `--trusted --headed`
-     mode.
+   - Kitsune's remedy is `browser_trusted_click` (OS input), which **fixes it** in the opt-in run.
 2. **CSS `:hover` menus never open.** A synthetic hover cannot set `:hover`, so "Pricing" never appears in the
    snapshot. Kitsune's guide documents this; the matrix confirms it. Playwright's hover moves the real (browser-level)
    pointer.
@@ -106,6 +111,37 @@ Event counts come from each page's `report.js`.
      press**. Playwright moves the pointer to the target first.
    - Hypothesis: Radix ignores a `pointerup` when the pointer has not moved since the menu opened. Moving the pointer
      to the target before pressing, as a person's pointer does, would likely fix this and similar widgets.
+
+## Opt-in OS input (`--trusted --headed`, Kitsune)
+
+Kitsune strategies that use `browser_trusted_click` (`restore_pointer: false` before a follow-up click):
+
+| Component | Mechanism | Strategy | playwright | kitsune |
+| --- | --- | --- | --- | --- |
+| trusted-click | Handler ignores events with isTrusted false | click | ✅ | ❌ not_accepted |
+| trusted-click | Handler ignores events with isTrusted false | trusted_click | – | ✅ |
+| pointer-sequence | Needs pointerdown + pointerup of one primary pointer released inside the element; ignores click | trusted_click | – | ✅ |
+| hit-test | elementFromPoint(clientX, clientY) must be the button | trusted_click | – | ✅ |
+| mousedown-menu | Menu opens on mousedown, item selected on mouseup | trusted_click_then_click | – | ✅ |
+| css-hover-menu | Submenu shown only by CSS :hover of the real pointer | trusted_click_then_click | – | ✅ |
+| hover-intent | Button appears after mousemove over the tile for 400 ms | trusted_click_then_click | – | ❌ target_not_found |
+| user-activation | window.open needs transient user activation | trusted_click | – | ✅ |
+| closed-shadow | Button inside a closed shadow root | trusted_click | – | ✅ |
+| cross-origin-iframe | Button in a cross-origin iframe | trusted_click | – | ❌ target_not_found |
+| canvas-button | Canvas hit-testing at the centre; no DOM element for the button | trusted_click | – | ❌ target_not_found |
+| lib-radix-dropdown | Trigger opens on pointerdown, items select on pointerup/click | trusted_click_then_click | – | ✅ |
+| lib-radix-select | Custom listbox, pointer selection and typeahead | trusted_click_then_click | – | ✅ |
+| lib-daypicker | Calendar grid with its own focus model | trusted_click | – | ✅ |
+
+- **Fixed by OS input:**
+  - finding 1 (`isTrusted`);
+  - finding 2 (CSS `:hover`): the real pointer stays on "Products", and "Pricing" appears after one frame;
+  - finding 6 (Radix Select): a real pointer moves before the press, which supports the pointermove hypothesis.
+- **Not fixed: findings 3–5** (hover tile, drop mark, canvas, cross-origin frame). These are observation gaps: the
+  element has no ref, so no input method can target it. `browser_trusted_click` also accepts viewport coordinates,
+  but no core tool gives the agent those coordinates for an element without a ref.
+- **Still failing on both servers:** `hover-intent` (no ref for the tile on Kitsune; Playwright's hover moves the
+  pointer only once) and `long-press`.
 
 ## Where Kitsune is ahead
 
@@ -134,7 +170,9 @@ Event counts come from each page's `report.js`.
 
 ## Next
 
-- Run `--trusted --headed` to see which of findings 1–6 `browser_trusted_click` resolves. It moves the real pointer,
-  so it needs an idle machine.
-- File Kitsune issues for findings 3–6. Findings 1 and 2 are known and documented limits of synthetic input.
-- Raw evidence (private): `artifacts/hostile/runs/headless-57c56a7/`.
+- File Kitsune issues:
+  - findings 3–5 (observation: refs for hover and drop targets, canvas, cross-origin frames);
+  - finding 6 (move the synthetic pointer to the target before pressing).
+
+  Findings 1 and 2 are documented limits of synthetic input, and `browser_trusted_click` covers them.
+- Raw evidence (private): `artifacts/hostile/runs/headless-57c56a7/` and `trusted-headed-57c56a7/`.
