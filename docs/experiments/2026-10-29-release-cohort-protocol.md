@@ -94,7 +94,11 @@ external are the same in both plans.
    - there are no audit violations and no missing allowlisted tools;
    - personal runs assert the 1280×720 content viewport on both targets;
    - Kitsune's revision is unchanged across the suite.
-5. **Analyse and report** (see below).
+5. **Analyse and report** (see below). Since v0.7.1, the review is scripted:
+   `uv run --locked python scripts/analyze-release.py artifacts/opus-subscription-<TAG> --compare <previous suite dir>`.
+   It prints the audit, outcomes, Kitsune/Playwright ratios (also on the units shared with the previous cohort), the
+   units where Kitsune costs more than 1.10× Playwright, tool errors, and behaviour signals: observation right after an
+   action, blind waits, `browser_find` and snapshot sizes.
 
 ## Reported measures
 
