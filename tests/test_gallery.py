@@ -15,6 +15,7 @@ from urllib.request import HTTPCookieProcessor, ProxyHandler, Request, build_ope
 from kitsune_benchmark.gallery import (BY_ID, LAYOUTS, PUZZLES, STATIC, TASKS, GalleryServer, GalleryTrial, config, failure_class,
                                       select)
 from kitsune_benchmark.smoke import ROOT
+from kitsune_benchmark.specs import Server
 
 MEDIA_TOOLS = all(shutil.which(t) for t in ("ffmpeg", "espeak"))
 VALID = {"execution_status": "completed_unscored"}
@@ -227,6 +228,16 @@ class GalleryTests(unittest.TestCase):
             with client.open(t.url("/api/cities?q=" + quote("부"))) as response:
                 self.assertIn("부천", json.load(response))
             self.assertEqual(t.state, {"shipping-country": "일본"})
+
+    def test_prepare_server_runs_the_task_in_a_harness_opened_tab(self):
+        # kitsune#373: an agent-owned task tab is exempt from Kitsune's hold on the tab the user views.
+        with tempfile.TemporaryDirectory() as folder, GalleryServer(BY_ID["mm-audio"], 0, "crowded") as server:
+            for target in ("playwright", "kitsune"):
+                server.begin(target)
+                wrapped = server.prepare_server(target, Server(target, "node", ("cli.js",)), None, Path(folder))
+                stored = json.loads(Path(wrapped.args[-1]).read_text())
+                self.assertEqual((stored["task_tab"], stored["active_index"]), ("agent", 0))
+                self.assertEqual(stored["urls"][0], server.trials[server.by_target[target]].url("/gallery"))
 
 
 @unittest.skipUnless(os.environ.get("PERSONAL_BROWSER_TEST") == "1" and MEDIA_TOOLS, "opt-in real Firefox reference solutions; no model calls")

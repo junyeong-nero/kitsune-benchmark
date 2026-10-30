@@ -761,7 +761,7 @@ class GalleryServer:
         write_json(path, {"target": target, "upstream": [server.command, *server.args],
             "bootstrap_url": trial.url("/start"), "urls": [trial.url(p) for p in trial.paths],
             "active_index": trial.active_index, "evidence_path": str(evidence), "origin": self.origin,
-            "enabled_tools": list(server.enabled_tools),
+            "task_tab": "agent", "enabled_tools": list(server.enabled_tools),
             "diagnostics_path": str(pair_dir / (target + "-native-rpc.jsonl")),
             "metadata_path": str(pair_dir / (target + "-native-metadata.json"))})
         return replace(server, command=sys.executable, args=(str(ROOT / "kitsune_benchmark/personal_session.py"), str(path)))

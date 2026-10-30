@@ -20,6 +20,18 @@ import time
 from urllib.parse import urlsplit
 
 
+def result_json(result: dict, key: str):
+    """`key` of a native result's structured content, else of its first JSON text item that has it."""
+    sources = [result.get("structuredContent")]
+    for item in result.get("content", []):
+        if item.get("type") == "text":
+            try:
+                sources.append(json.loads(item.get("text", "")))
+            except ValueError:
+                pass
+    return next((source[key] for source in sources if isinstance(source, dict) and key in source), None)
+
+
 def tabs_from_result(target: str, result: dict) -> list[dict]:
     if result.get("isError"):
         raise ValueError("Tab inventory failed.")
@@ -65,6 +77,7 @@ class NativeSession:
         self.pending = queue.Queue()
         self.serial = 0
         self.tab_indexed = False
+        self.tab_list_result = None  # the latest inventory, as the native server listed it
         self.started_mono = time.monotonic()
         self.metadata = {"enabled_tools": config.get("enabled_tools", []), "tools_pages": []}
         self.evidence = {"setup_complete": False, "target": config.get("target"), "initial_tabs": [], "snapshots": [], "tab_calls": [],
@@ -157,7 +170,8 @@ class NativeSession:
             if time.monotonic() >= deadline:
                 raise ValueError("Native MCP request timed out.")
 
-    def tool(self, name: str, arguments: dict) -> dict:
+    def tool(self, name: str, arguments: dict, refusal_code: str | None = None) -> dict:
+        """A native tool's result; failures raise, except a refusal with `refusal_code`, which is returned."""
         started = time.monotonic()
         try:
             result = self.request("tools/call", {"name": name, "arguments": arguments})
@@ -191,6 +205,8 @@ class NativeSession:
                         value = source.get(key)
                         if type(value) in (int, float) and 0 <= value < float("inf"):
                             fields[key] = value
+                if refusal_code is not None and fields.get("code") == refusal_code and "result" in result:
+                    return result["result"]
                 self.evidence["native_error"] = fields
                 raise ValueError("Harness browser tool failed: " + json.dumps(fields, sort_keys=True))
             return result["result"]
@@ -201,7 +217,9 @@ class NativeSession:
         result = self.tool("browser_tabs", {"action": "list"})
         texts = [item.get("text", "") for item in result.get("content", []) if item.get("type") == "text"]
         self.tab_indexed = '"index"' in json.dumps(result.get("structuredContent")) + "".join(texts)
-        return tabs_from_result(self.config["target"], result)
+        tabs = tabs_from_result(self.config["target"], result)
+        self.tab_list_result = result
+        return tabs
 
     def wait_inventory(self, predicate, timeout: float = 10) -> list[dict]:
         deadline = time.monotonic() + timeout
@@ -221,6 +239,49 @@ class NativeSession:
             self.evidence["harness_seconds"] += elapsed
             self.diagnostic("readiness_wait", duration_sec=elapsed)
 
+    def open_agent_task_tab(self, initial_url: str):
+        """Config task_tab "agent": run the task in a tab the harness opens, so Kitsune lists it as owned and its
+        hold on the tab the user views (kitsune#364) does not apply to the agent's actions there.
+
+        The new tab loads the bootstrap page (session cookie), then the task page. The fresh profile's initial tab
+        is the user's: it is closed while the task tab is its only neighbour, so the browser shows the task tab.
+        Kitsune refuses that close with user_tab; the harness repeats the identical close with the refusal's
+        confirm token, the only approval setup uses (evidence setup_closed_initial_blank)."""
+        task = self.config["urls"][self.config["active_index"]]
+        self.tool("browser_tabs", {"action": "new", "url": self.config["bootstrap_url"]})
+        self.tool("browser_navigate", {"url": task})  # the new tab is current
+        tabs = self.wait_inventory(lambda tabs: sorted(t["url"] for t in tabs) == sorted([initial_url, task]))
+        initial = [tab for tab in tabs if tab["url"] != task]
+        if len(initial) != 1:
+            raise ValueError("The task page did not open in a tab of its own.")
+        field = "index" if self.config["target"] == "playwright" or self.tab_indexed else "tab_id"
+        close = {"action": "close", field: initial[0]["id"]}
+        via = "close"
+        result = self.tool("browser_tabs", close, refusal_code="user_tab")
+        if result.get("isError"):
+            token = (result_json(result, "state") or {}).get("confirmToken")
+            if not isinstance(token, str):
+                raise ValueError("The initial tab's close refusal carries no confirm token.")
+            self.tool("browser_tabs", {**close, "confirm_token": token})
+            via = "confirm_token"
+        self.evidence["setup_closed_initial_blank"] = {"via": via}
+        self.wait_inventory(lambda tabs: [t["url"] for t in tabs] == [task])
+
+    def check_agent_task_tab(self, tabs: list[dict], task: str):
+        """Record, and on Kitsune require, that the harness owns every starting tab and the task tab is shown."""
+        listed = result_json(self.tab_list_result, "tabs") if self.config["target"] == "kitsune" else None
+        if listed is None:  # Playwright has no tab ownership, and its select shows the tab it makes current
+            self.evidence.update(setup_task_tab_owned=None, setup_task_tab_shown=None, setup_tabs_owned=None)
+            return
+        if not isinstance(listed, list) or len(listed) != len(tabs):
+            raise ValueError("Unrecognized Kitsune tab list.")
+        position = next(i for i, tab in enumerate(tabs) if tab["url"] == task)
+        owned = [bool(tab.get("owned")) for tab in listed]
+        shown = bool(listed[position].get("active"))
+        self.evidence.update(setup_task_tab_owned=owned[position], setup_task_tab_shown=shown, setup_tabs_owned=owned)
+        if not all(owned) or not shown:
+            raise ValueError("The harness does not own every starting tab, or the task tab is not shown.")
+
     def prepare(self):
         if self.evidence["setup_complete"]:
             return
@@ -231,20 +292,25 @@ class NativeSession:
         tabs = self.wait_inventory(lambda tabs: len(tabs) >= 1)
         if len(tabs) != 1:
             raise ValueError("Expected exactly one initial tab in a fresh profile.")
-        try:
-            self.tool("browser_navigate", {"url": self.config["bootstrap_url"]})
-        except ValueError:
-            # Kitsune after v0.7.0 (kitsune#303) refuses a tab-less navigate until a tab is selected. Select the
-            # fresh profile's only tab and retry; earlier versions never reach this branch, so their setup is unchanged.
-            if (self.evidence.get("native_error") or {}).get("code") != "no_current_tab":
-                raise
-            self.evidence.pop("native_error")
-            field = "index" if self.config["target"] == "playwright" or self.tab_indexed else "tab_id"
-            self.tool("browser_tabs", {"action": "select", field: tabs[0]["id"]})
-            self.evidence["setup_selected_initial_tab"] = True
-            self.tool("browser_navigate", {"url": self.config["bootstrap_url"]})
-        self.tool("browser_navigate", {"url": self.config["urls"][0]})
-        for url in self.config["urls"][1:]:
+        if self.config.get("task_tab") == "agent":
+            self.open_agent_task_tab(tabs[0]["url"])
+            others = [url for i, url in enumerate(self.config["urls"]) if i != self.config["active_index"]]
+        else:
+            try:
+                self.tool("browser_navigate", {"url": self.config["bootstrap_url"]})
+            except ValueError:
+                # Kitsune after v0.7.0 (kitsune#303) refuses a tab-less navigate until a tab is selected. Select the
+                # fresh profile's only tab and retry; earlier versions never reach this branch, so their setup is unchanged.
+                if (self.evidence.get("native_error") or {}).get("code") != "no_current_tab":
+                    raise
+                self.evidence.pop("native_error")
+                field = "index" if self.config["target"] == "playwright" or self.tab_indexed else "tab_id"
+                self.tool("browser_tabs", {"action": "select", field: tabs[0]["id"]})
+                self.evidence["setup_selected_initial_tab"] = True
+                self.tool("browser_navigate", {"url": self.config["bootstrap_url"]})
+            self.tool("browser_navigate", {"url": self.config["urls"][0]})
+            others = self.config["urls"][1:]
+        for url in others:
             self.tool("browser_tabs", {"action": "new", "url": url})
         tabs = self.wait_inventory(lambda tabs: sorted(t["url"] for t in tabs) == sorted(self.config["urls"]))
         desired = self.config["urls"][self.config["active_index"]]
@@ -256,6 +322,8 @@ class NativeSession:
         tabs = self.wait_inventory(lambda tabs: any(tab["url"] == desired and tab["active"] for tab in tabs))
         if not any(tab["url"] == desired and tab["active"] for tab in tabs):
             raise ValueError("Active starting tab was not established.")
+        if self.config.get("task_tab") == "agent":
+            self.check_agent_task_tab(tabs, desired)
         self.evidence.update(setup_complete=True, initial_tabs=tabs, snapshots=[tabs])
         self.save()
         self.diagnostic("setup_completed", duration_sec=time.monotonic() - setup_started)
