@@ -126,6 +126,22 @@ turning the protection on by default would cost. In Kitsune ≥ 0.7.0 the protec
 with error code `user_tab`. Selecting and reading user tabs stay allowed, so the arm's setup is
 unchanged. The relay counts these refusals (`user_tab_refusals`).
 
+**On Kitsune after v0.7.1 this arm equals the default.** Kitsune main turns the protection on by default
+([kitsune#371](https://github.com/junyeong-nero/kitsune/issues/371)) and adds a hold on writes to the tab
+the user is viewing. Both act through `needs_user` holds and approval prompts (kitsune#364, #376), not the
+`user_tab` code, so `user_tab_refusals` stays 0 there. `KITSUNE_PROTECT_USER_TABS=1` then sets what the
+default arm already runs. The arm stays as frozen; the [holds](#kitsune-holds-and-redo-after-decline) show
+what protection does on Kitsune main, and the unprotected arm below measures an agent without it.
+
+### `unprotected-user-tabs` (outside the frozen scope): a Kitsune arm
+
+`--unprotected-user-tabs` runs Kitsune with `KITSUNE_PROTECT_USER_TABS=0 KITSUNE_HOLD_VIEWED_TAB=0`, both
+protections off (#58). It is not a catalog condition and not part of the frozen run plan. Its
+evaluations and summaries carry `unprotected_user_tabs: true`; report it as its own column, like the
+protection arm, and never pool it with default-Kitsune totals. It cannot be combined with
+`--protect-user-tabs`. On Kitsune ≤ v0.7.1 the protection is already off by default and
+`KITSUNE_HOLD_VIEWED_TAB` does not exist, so there this arm equals the default.
+
 ### Coexistence fixtures
 
 `co-typing-01` is runnable. The user types a journal entry in the tab they see,
@@ -199,6 +215,50 @@ fails them; before, they inherited the strict-close condition. When primary
 success is `null` because starting-tab custody is `unknown`, the v3 contracts are
 `null` too.
 
+### Kitsune holds and redo after decline
+
+Since #58, every Kitsune evaluation carries `holds`, and `by_target.kitsune.holds` sums it over every
+attempted run (the personal and gallery tracks report it too). It is computed from session evidence
+(`kitsune_benchmark/holds.py`), sits beside `user_tab_refusals` and changes no verdict.
+
+- **A hold** is a call Kitsune held for the user's approval: an approval prompt the relay answered
+  (`elicitations` with reason `approval`), or a refusal the agent got without a prompt. Such a refusal is
+  code `needs_user` with `state.reason: approval`, or Kitsune 0.7's `user_tab`. The relay records each
+  refusal the agent gets in `held_refusals`, with its position in `tab_calls`. A declined prompt also
+  returns a refusal; it is counted once, as the prompt.
+- `holds_by_detail` counts holds by `state.detail` (`user_viewing`, `user_tab`, `other`, e.g.
+  `confirmation_required`) and by decision: `accepted`, `declined`, `cancelled` (Kitsune's
+  `state.decision`), or `not_asked` (a refusal without a prompt).
+- **Redo after decline.** A declined write is redone when, later in the same run, the agent makes a
+  call of the same tool (for `browser_tabs`, the same action), and that call:
+  - succeeds and names no tab, so it acts on the agent's current tab;
+  - runs on another tab than the declined call's current tab;
+  - runs on a page with the same URL path (query and fragment are ignored).
+
+  Tabs are told apart by the relay's inventory (Kitsune's index), so the search stops at the first tab
+  close the agent attempts after the decline. A held call that named a tab, or evidence whose calls do
+  not line up with its inventories, never counts as redone. Only `declined` prompts count; `cancelled`
+  ones do not.
+- Per run: `holds`, `holds_by_detail`, `refusals`, `declined_writes` and `redone_after_decline`.
+  Summaries add `runs_with_hold`, `runs_with_declined_hold` and `runs_redo_after_decline`.
+- Evidence from before #58 has no `held_refusals` (`refusals_recorded: false`). Its holds are counted
+  from prompts only, and each declined prompt is matched to the next failed call of its tool on the
+  prompt's page (the prompt's `Tab:` line).
+
+Recomputed offline over the lite suite on #55 (Kitsune `dea1ad4`, relay policy decline;
+`scripts/analyze-release.py artifacts/opus-subscription-main-dea1ad4-pr55`). Every hold was a declined
+`user_viewing` hold, and every declined write was redone in another tab on the same page:
+
+| Entry | Kitsune runs | Runs with a declined hold | Holds | Runs that redid a declined write |
+| --- | ---: | ---: | ---: | ---: |
+| `personal-v0` / `personal-v1` | 28 / 28 | 6 / 6 | 8 / 8 | 6 / 6 |
+| `coexistence-user-seeded` | 28 | 8 | 11 | 8 |
+| `coexistence-protect` | 28 | 8 | 10 | 8 |
+| gallery, `coexistence-typing-v0..2` | 42, 3 | 0 | 0 | 0 |
+
+That is 28 runs with a declined hold (personal 12, coexistence 16), all 28 redone, as reported in
+[kitsune#383](https://github.com/junyeong-nero/kitsune/issues/383). The v0.7.1 suite of 2026-10-29 has no holds.
+
 ## Frozen protocol
 
 **Identity.** The benchmark ID is `coexistence-local-v1`. It is set in
@@ -212,6 +272,8 @@ of user tabs.
 `kitsune_benchmark/coexistence.py`, `coexistence_fixtures.py`, `coexistence_session.py`,
 `user_driver.py` and `bidi.py`. These fix the fixtures, user timeline, sampler interval (0.25 s),
 typing pattern and contracts. The personal fixtures, graders and relay are imported unchanged.
+#58 added fields beside them (the relay's `held_refusals`, `holds`, `unprotected_user_tabs`) and the
+unprotected arm's option; fixtures, conditions, contracts, verdicts and the run plan are unchanged.
 
 **Run plan per attempt.** `scripts/run-full-suite.py` runs these entries, always as paired runs in
 one process and in the attempt's order (`--targets playwright,kitsune` for AB, the reverse for BA):
@@ -278,6 +340,8 @@ uv run --locked python -m kitsune_benchmark coexistence --execute
 # All 28 personal tasks user-seeded (56 runs), then the Kitsune protection arm (28 runs).
 uv run --locked python -m kitsune_benchmark coexistence --all-personal --execute
 uv run --locked python -m kitsune_benchmark coexistence --all-personal --protect-user-tabs --targets kitsune --execute
+# Outside the frozen plan: Kitsune with both user-tab protections off (28 runs).
+uv run --locked python -m kitsune_benchmark coexistence --all-personal --unprotected-user-tabs --targets kitsune --execute
 ```
 
 Artifacts go to `artifacts/coexistence/<pair-id>/`. They include
@@ -300,6 +364,9 @@ Artifacts go to `artifacts/coexistence/<pair-id>/`. They include
   - ownership per target;
   - `user_tab` refusal parsing;
   - config and catalog suite agreement.
+- Since #58, `tests/test_holds.py` covers hold counts by detail and decision, redo after decline
+  and its negative cases, and the matching for evidence from before #58. `tests/test_coexistence.py`
+  covers holds beside `user_tab_refusals` and the unprotected arm's environment.
 - `PERSONAL_BROWSER_TEST=1` and `PERSONAL_KITSUNE_TEST=1` run a scripted
   reference agent through the real relay and browsers (`pb-account-01`,
   `co-typing-01`). Use an absolute `KITSUNE_PROJECT`.

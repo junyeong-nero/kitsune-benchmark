@@ -304,6 +304,8 @@ Private artifacts under `artifacts/personal/<pair-id>/` include:
 - `{target}-session.json`: relay provisioning config; no real account credentials.
 - `{target}-session-evidence.json`: verified initial tabs, post-call inventories,
   close/outside-navigation attempts, hidden harness call count/time and setup errors.
+  For Kitsune it also keeps the approval prompts the relay answered (`elicitations`) and,
+  since #58, the refusals the agent got for a held call (`held_refusals`).
 - `{target}-native-rpc.jsonl`: upstream RPC start/completion time, agent/harness
   role, response text/serialized sizes, cache flags and setup/readiness spans.
 - `{target}-native-metadata.json`: initialize result, native tools/list pages and
@@ -319,6 +321,13 @@ It reports token usage for **all runs** and **successful runs** separately, with
 usage-coverage counts, plus successful-run call/time totals. Missing usage is
 not evidence of zero token consumption. Inspect task-level results alongside
 aggregates; a failed short run is not an efficiency win.
+
+**Kitsune holds** (#58): each Kitsune evaluation carries `holds`, and `by_target.kitsune.holds` sums
+them over every attempted run. They count the calls Kitsune held for the user's approval by detail
+(`user_viewing`, `user_tab`, other) and decision, and the declined writes the agent redid in another
+tab (`redone_after_decline`). The definitions are in
+[the coexistence track](coexistence.md#kitsune-holds-and-redo-after-decline); they are reported beside
+the contracts and change no verdict.
 
 **Instrumentation overhead:** the relay queries tab inventories after each
 agent tool call and provisions tabs before forwarding the first request.

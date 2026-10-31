@@ -381,6 +381,49 @@ class EvaluationTests(unittest.TestCase):
             evidence["seeded_owned_by_agent"] = 0  # Playwright has no ownership notion: must be None
             self.assertFalse(self.evaluate(server, "playwright", evidence)["scorable"])
 
+    def test_holds_are_reported_beside_user_tab_refusals(self):
+        # #58: Kitsune main holds writes with needs_user (user_viewing); user_tab_refusals counts only the old code.
+        with tempfile.TemporaryDirectory() as folder, CoexistenceServer(selected_tasks(["pb-account-01"])[0], 0,
+                                                                        unprotected_user_tabs=True) as server:
+            trial = self.prepared(server, "kitsune", folder)
+            evidence = user_evidence(trial)
+            evidence.update(user_tab_refusals=0, elicitations=[{"tool": "browser_type", "reason": "approval",
+                            "detail": "user_viewing", "action": "decline", "decision": "declined"}], held_refusals=[
+                            {"call": 0, "tool": "browser_type", "code": "needs_user", "detail": "user_viewing",
+                             "decision": "declined"}])
+            result = self.evaluate(server, "kitsune", evidence)
+            self.assertEqual((result["unprotected_user_tabs"], result["protect_user_tabs"], result["user_tab_refusals"]),
+                             (True, False, 0))
+            self.assertEqual(result["holds"]["holds_by_detail"]["user_viewing"]["declined"], 1)
+            totals = aggregate_coexistence([{"results": {"kitsune": {"benchmark_evaluation": result}}}])["kitsune"]
+            self.assertEqual((totals["user_tab_refusals"], totals["runs_with_user_tab_refusal"]), (0, 0))
+            self.assertEqual((totals["holds"]["runs_with_declined_hold"], totals["holds"]["holds"]), (1, 1))
+            playwright = self.prepared(server, "playwright", folder)
+            self.assertIsNone(self.evaluate(server, "playwright", user_evidence(playwright))["holds"])
+
+    def test_unprotected_arm_turns_both_kitsune_protections_off(self):
+        plan = run_coexistence(task_ids=["pb-account-01"], unprotected_user_tabs=True, targets=("kitsune",))
+        self.assertEqual((plan["unprotected_user_tabs"], plan["protect_user_tabs"], plan["planned_model_runs"]),
+                         (True, False, 1))
+        for kwargs in ({"protect_user_tabs": True}, {"targets": ("playwright",)}):
+            with self.subTest(kwargs=kwargs), self.assertRaises(ValueError):
+                run_coexistence(unprotected_user_tabs=True, **kwargs)
+        stream = io.StringIO()
+        with patch("subprocess.Popen") as popen, redirect_stdout(stream):
+            self.assertEqual(main(["coexistence", "--unprotected-user-tabs", "--targets", "kitsune"]), 0)
+        popen.assert_not_called()
+        self.assertTrue(json.loads(stream.getvalue())["unprotected_user_tabs"])
+        launched = []
+
+        def pair(**kwargs):
+            launched.append(kwargs["kitsune_env"])
+            raise RuntimeError("stop before any process")
+        with patch("kitsune_benchmark.coexistence.run_pair", pair), \
+                patch("kitsune_benchmark.coexistence.source_revision", return_value={}), self.assertRaises(RuntimeError):
+            run_coexistence(execute=True, task_ids=["pb-account-01"], unprotected_user_tabs=True, targets=("kitsune",),
+                            harness="claude")
+        self.assertEqual(launched, [{"KITSUNE_PROTECT_USER_TABS": "0", "KITSUNE_HOLD_VIEWED_TAB": "0"}])
+
     def test_user_tab_refusals_are_counted_from_kitsune_errors(self):
         refusal = {"id": 3, "result": {"isError": True, "content": [{"type": "text", "text": json.dumps(
             {"ok": False, "code": "user_tab", "error": "Use your own tab."})}]}}
