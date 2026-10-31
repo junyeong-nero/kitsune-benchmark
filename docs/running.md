@@ -348,6 +348,15 @@ Read [individual-run inputs](codex-harness.md#individual-run-inputs) first.
   **There is no token-budget stop.** A timeout is not a fixed token allowance.
 - Setup/execution/unscorable failures stop further targets/tasks. Ordinary
   scorable task failures do not. No automatic retry or model substitution occurs.
+- A failed session setup (personal, gallery, coexistence and the experiment relays)
+  makes no model request (#56). The relay sets the session up while the agent's
+  client waits for its tool list, and after a failure it leaves that request
+  unanswered; the harness reads the failure from `{target}-session-evidence.json`
+  and stops the client. The run is recorded as `execution_status: setup_failed`,
+  `harness_error: true`, with no usage, and the track stops as `unscorable_pair`.
+  Successful runs are unchanged: setup still runs inside the agent run, so
+  `elapsed_sec`, `timing.relay_setup_sec` and `elapsed_minus_relay_setup_sec`
+  keep their meaning.
 - A single track command runs Playwright, then Kitsune, unless `--targets` gives
   another order. Data variants are not repeated identical trials or order
   counterbalancing; use the full-suite `--attempts`/`--order` for that.
@@ -420,8 +429,10 @@ Review/redact raw artifacts before sharing them; do not publish profiles or toke
 
 With an allowlist (UI tracks), each run records `tool_surface`: the allowlisted
 tools the native server actually published (`exposed`) and those it did not
-(`missing`), and the runner prints a warning. Kitsune's default `lean` preset
-publishes 14 of the 22 allowlisted Kitsune tools (`browser_keypress`,
+(`missing`), and the runner prints a warning. `no_allowlisted_tools` flags a run
+whose server published none of them (for example after a failed setup); suite
+summaries count those as `runs_without_allowlisted_tools`. Kitsune's default
+`lean` preset publishes 14 of the 22 allowlisted Kitsune tools (`browser_keypress`,
 `browser_drag` and others are missing), so a Kitsune failure that needs them is a
 tool-surface result, not a capability verdict. Suite summaries count
 `runs_missing_allowlisted_tools` per target. Use `--kitsune-preset full` (and

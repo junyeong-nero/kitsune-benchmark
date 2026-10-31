@@ -196,6 +196,7 @@ def main() -> int:
         session.evidence["error"] = "coexistence_session_setup_or_inventory_failed"
         session.save()
         print("Coexistence fixture MCP setup/inventory failed; inspect private artifacts.", file=sys.stderr)
+        session.hold_failed_setup()
         return 2
     finally:
         session.close()

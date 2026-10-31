@@ -6,6 +6,7 @@ from contextlib import ExitStack
 from collections.abc import Callable
 from dataclasses import replace
 from datetime import datetime, timezone
+from functools import partial
 import hashlib
 import json
 import os
@@ -105,9 +106,21 @@ def tool_surface(metadata_path: Path, enabled_tools: tuple[str, ...]) -> dict | 
     published = sorted({tool["name"] for page in metadata.get("tools_pages", []) if isinstance(page, dict)
                         for tool in page.get("tools", []) if isinstance(tool, dict) and "name" in tool})
     enabled = sorted(enabled_tools)
-    return {"enabled": enabled, "published_count": len(published),
-            "exposed": [name for name in enabled if name in published],
-            "missing": [name for name in enabled if name not in published]}
+    exposed = [name for name in enabled if name in published]
+    return {"enabled": enabled, "published_count": len(published), "exposed": exposed,
+            "missing": [name for name in enabled if name not in published],
+            "no_allowlisted_tools": not exposed}
+
+
+def session_setup(evidence_path: Path) -> bool | None:
+    """A session relay's setup from its evidence (#56): True once complete, False once failed, None while pending."""
+    try:
+        evidence = json.loads(evidence_path.read_text())
+    except (OSError, ValueError):
+        return None
+    if evidence.get("setup_complete") is True:
+        return True
+    return False if evidence.get("error") else None
 
 
 def rewrite_json(path: Path, value: dict) -> None:
@@ -299,10 +312,16 @@ def run_pair(*, execute: bool = False, kitsune_project: str | None = None,
                 resources.set_phase("task_" + target)
                 external = (ResourceRoot(bridge.pid, "bridge", "kitsune", True),
                             ResourceRoot(browser.pid, "browser_launcher", "kitsune", True)) if target == "kitsune" else ()
+                # Session relays (prepare_server) set up lazily and record it in this evidence file.
+                evidence = pair_dir / (target + "-session-evidence.json")
                 result = run(server, task, model, executable=path, timeout=timeout,
                              output_root=str(pair_dir / "runs"), confirm_isolated_browser=True,
                              resource_roots=external, resource_observer=resources, viewport=viewports[target],
-                             harness=harness, effort=effort, max_budget_usd=max_budget_usd)
+                             harness=harness, effort=effort, max_budget_usd=max_budget_usd,
+                             session_setup=partial(session_setup, evidence) if prepare_server is not None else None)
+                if result["execution_status"] == "setup_failed":
+                    print(f"warning: {target} session setup failed; the harness was stopped before the agent started",
+                          file=sys.stderr)
                 result["viewport"] = observed_viewport(viewports[target],
                                                        viewport_reports(target) if viewport_reports else None)
                 run_manifest = Path(result["run_dir"]) / "manifest.json"
@@ -317,7 +336,9 @@ def run_pair(*, execute: bool = False, kitsune_project: str | None = None,
                     surface = tool_surface(pair_dir / (target + "-native-metadata.json"), server.enabled_tools)
                     if surface is not None:
                         result["tool_surface"] = surface
-                        if surface["missing"]:
+                        if surface["no_allowlisted_tools"]:
+                            print(f"warning: {target} published none of the allowlisted tools", file=sys.stderr)
+                        elif surface["missing"]:
                             print(f"warning: {target} did not publish allowlisted tools: "
                                   + ", ".join(surface["missing"]), file=sys.stderr)
                 results[target] = result
