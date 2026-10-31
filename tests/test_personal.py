@@ -367,6 +367,7 @@ class PersonalTests(unittest.TestCase):
             self.assertEqual(wrapped.enabled_tools, upstream.enabled_tools)
             stored = json.loads(Path(wrapped.args[-1]).read_text())
             self.assertEqual(stored["upstream"], ["node", "cli.js"])
+            self.assertNotIn("task_tab", stored, "the personal track keeps its task in the initial tab")
             self.assertEqual(Path(wrapped.args[-1]).stat().st_mode & 0o777, 0o600)
             self.assertFalse(server.evaluate("playwright", {"execution_status": "completed_unscored"})["scorable"])
 
@@ -549,6 +550,106 @@ for line in sys.stdin:
                 self.assertRaises(ValueError):
             session.prepare()
         self.assertEqual(session.evidence["native_error"]["code"], "timeout")
+
+    def test_agent_task_tab_setup_runs_the_task_in_a_harness_opened_tab(self):
+        # task_tab "agent" (gallery, kitsune#373): Kitsune's core tools, as main f57793a serves them. new opens an
+        # owned background tab and makes it current; select only makes a tab current; the user's initial tab is held.
+        def kitsune(tabs, state, name, args):
+            text = lambda value: {"result": {"content": [{"type": "text", "text": json.dumps(value)}]}}
+            refusal = lambda value: {"result": {"isError": True, "content": [{"type": "text", "text": json.dumps(value)}]}}
+            current = next((t for t in tabs if t["id"] == state["current"]), None)
+            if name == "browser_navigate":
+                if current is None:
+                    return refusal({"code": "no_current_tab"})
+                if current["shown"] and not current["owned"]:
+                    return refusal({"code": "user_viewing", "state": {"confirmToken": "never"}})
+                current["url"] = args["url"]
+            elif args["action"] == "new":
+                state["opened"] = state.get("opened", 0) + 1
+                tabs.append({"id": 100 + state["opened"], "url": args["url"], "owned": True, "shown": False})
+                state["current"] = tabs[-1]["id"]
+            elif args["action"] == "select":
+                state["current"] = tabs[args["index"]]["id"]
+            elif args["action"] == "close":
+                tab = tabs[args["index"]]
+                if not tab["owned"] and args.get("confirm_token") != "t1":
+                    return refusal({"code": "user_tab", "state": {"tabId": tab["id"], "confirmToken": "t1"}})
+                tabs.remove(tab)
+                if tab["shown"]:
+                    tabs[min(args["index"], len(tabs) - 1)]["shown"] = True
+            elif args["action"] == "list":
+                return text({"tabs": [{"index": i, "title": "", "url": t["url"],
+                                       **({"current": True} if t["id"] == state["current"] else {}),
+                                       **({"active": True} if t["shown"] else {}),
+                                       **({"owned": True} if t["owned"] else {})} for i, t in enumerate(tabs)]})
+            return text({"ok": True})
+
+        def playwright(tabs, state, name, args):
+            if name == "browser_navigate":
+                tabs[state["current"]]["url"] = args["url"]
+            elif args["action"] == "new":
+                tabs.append({"url": args["url"]})
+                state["current"] = len(tabs) - 1
+            elif args["action"] == "select":
+                state["current"] = args["index"]
+            elif args["action"] == "close":
+                current = tabs[state["current"]]
+                tabs.pop(args["index"])
+                state["current"] = tabs.index(current) if current in tabs else 0
+            elif args["action"] == "list":
+                return {"result": {"content": [{"type": "text", "text": "\n".join(
+                    f"- {i}: " + ("(current) " if i == state["current"] else "") + f"[]({t['url']})" for i, t in enumerate(tabs))}]}}
+            return {"result": {"content": [{"type": "text", "text": "ok"}]}}
+
+        base = "http://127.0.0.1:1/t/x"
+        for target, native, initial, via, owned in (
+                ("kitsune", kitsune, {"id": 1, "url": "about:blank", "owned": False, "shown": True}, "confirm_token", True),
+                ("playwright", playwright, {"url": "about:blank"}, "close", None)):
+            with self.subTest(target=target), tempfile.TemporaryDirectory() as folder:
+                config = {"target": target, "bootstrap_url": base + "/start", "urls": [base + "/gallery", base + "/notes"],
+                          "active_index": 0, "task_tab": "agent", "evidence_path": folder + "/evidence.json"}
+                session = NativeSession(config)
+                tabs, state, calls = [initial], {"current": None if target == "kitsune" else 0}, []
+                def request(method, params, native=native, tabs=tabs, state=state, calls=calls):
+                    calls.append((params["name"], params["arguments"]))
+                    return native(tabs, state, params["name"], params["arguments"])
+                with patch.object(session, "request", side_effect=request):
+                    session.prepare()
+                evidence = session.evidence
+                self.assertTrue(evidence["setup_complete"])
+                self.assertEqual([(t["url"], t["active"]) for t in evidence["initial_tabs"]],
+                                 [(base + "/gallery", True), (base + "/notes", False)])
+                # The bootstrap page loads in the harness's new tab before the task page; nothing navigates the initial tab.
+                actions = [(name, args.get("action") or args["url"]) for name, args in calls if args.get("action") != "list"]
+                self.assertEqual(actions[:2], [("browser_tabs", "new"), ("browser_navigate", base + "/gallery")])
+                self.assertEqual(calls[1][1], {"action": "new", "url": base + "/start"})
+                tokens = [args for _, args in calls if "confirm_token" in args]
+                self.assertEqual(tokens, [{"action": "close", "index": 0, "confirm_token": "t1"}] if via == "confirm_token" else [])
+                self.assertEqual(evidence["setup_closed_initial_blank"], {"via": via})
+                self.assertEqual(evidence["setup_task_tab_owned"], owned)
+                self.assertEqual(evidence["setup_task_tab_shown"], owned)
+                self.assertEqual(evidence["setup_tabs_owned"], [True, True] if owned else None)
+                self.assertNotIn("native_error", evidence)
+                if target == "kitsune":
+                    self.assertEqual([(t["url"], t["owned"], t["shown"]) for t in tabs],
+                                     [(base + "/gallery", True, True), (base + "/notes", True, False)])
+
+        # Without the refusal's token, or with a task tab Kitsune does not list as owned and shown, setup fails.
+        config = {"target": "kitsune", "bootstrap_url": base + "/start", "urls": [base + "/gallery", base + "/notes"],
+                  "active_index": 0, "task_tab": "agent", "evidence_path": "/dev/null"}
+        session = NativeSession(config)
+        tokenless = {"result": {"isError": True, "content": [{"type": "text", "text": json.dumps({"code": "user_tab"})}]}}
+        ok = {"result": {"content": [{"type": "text", "text": "{}"}]}}
+        listed = [[{"id": 0, "url": "about:blank", "active": False}, {"id": 1, "url": base + "/gallery", "active": True}]]
+        with patch.object(session, "request", side_effect=[ok, ok, tokenless]), \
+                patch.object(session, "wait_inventory", side_effect=listed), self.assertRaisesRegex(ValueError, "no confirm token"):
+            session.open_agent_task_tab("about:blank")
+        session.tab_list_result = {"content": [{"type": "text", "text": json.dumps({"tabs": [
+            {"index": 0, "url": base + "/gallery", "current": True, "owned": True}, {"index": 1, "url": base + "/notes", "owned": True}]})}]}
+        tabs = tabs_from_result("kitsune", session.tab_list_result)
+        with self.assertRaisesRegex(ValueError, "not shown"):
+            session.check_agent_task_tab(tabs, base + "/gallery")
+        self.assertEqual((session.evidence["setup_task_tab_owned"], session.evidence["setup_task_tab_shown"]), (True, False))
 
     def test_native_tool_failure_omits_sensitive_and_malformed_fields(self):
         responses = [
