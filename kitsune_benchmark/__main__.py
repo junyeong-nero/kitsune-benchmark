@@ -94,6 +94,9 @@ def main(argv: list[str] | None = None) -> int:
     coexistence.add_argument("--all-personal", action="store_true", help="All 28 personal tasks under the user-seeded condition")
     coexistence.add_argument("--protect-user-tabs", action="store_true",
                              help="Kitsune arm with KITSUNE_PROTECT_USER_TABS=1 (reported separately)")
+    coexistence.add_argument("--unprotected-user-tabs", action="store_true",
+                             help="Kitsune arm with KITSUNE_PROTECT_USER_TABS=0 KITSUNE_HOLD_VIEWED_TAB=0, outside "
+                                  "coexistence-local-v1 (reported separately)")
     coexistence.add_argument("--variant", type=int, choices=(0, 1, 2), default=0)
     coexistence.add_argument("--codex", default="codex")
     coexistence.add_argument("--kitsune-project")
@@ -181,6 +184,7 @@ def main(argv: list[str] | None = None) -> int:
                                      variant=args.variant, kitsune_project=args.kitsune_project, executable=executable,
                                      harness=args.harness, budget_usd=args.budget_usd,
                                      protect_user_tabs=args.protect_user_tabs, elicitation=args.elicitation,
+                                     unprotected_user_tabs=args.unprotected_user_tabs,
                                      targets=tuple(args.targets.split(",")), **overrides)
             print(json.dumps(result, indent=2, ensure_ascii=False))
             if not args.execute:

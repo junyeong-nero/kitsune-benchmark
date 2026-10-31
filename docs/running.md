@@ -384,6 +384,23 @@ Read [individual-run inputs](codex-harness.md#individual-run-inputs) first.
   **There is no token-budget stop.** A timeout is not a fixed token allowance.
 - Setup/execution/unscorable failures stop further targets/tasks. Ordinary
   scorable task failures do not. No automatic retry or model substitution occurs.
+- A failed session setup (personal, gallery, coexistence and the experiment relays)
+  stops the agent's client before its first model request (#56), provided setup
+  fails while the client still waits for its tool list. The relay sets the
+  session up inside the client's first `tools/list` and, after a failure, leaves
+  that request unanswered; the harness reads the failure from the relay's
+  evidence file (`{target}-session-evidence.json`) and stops the client. The run
+  is recorded as `execution_status: setup_failed` with `harness_error: true`, and
+  the track stops as `unscorable_pair`. The guarantee does not hold if the client
+  gave up on `tools/list` first (MCP clients time requests out, typically after
+  about 60 s, while each native setup request may take up to 60 s) or if the
+  relay crashed without recording the failure. `model_request_observed` in the
+  run summary says whether the events show a model request (usage, an assistant
+  message, a turn or a tool call); when it is true the runner warns, and the
+  usage that was spent is reported as usual.
+  Successful runs are unchanged: setup still runs inside the agent run, so
+  `elapsed_sec`, `timing.relay_setup_sec` and `elapsed_minus_relay_setup_sec`
+  keep their meaning.
 - A single track command runs Playwright, then Kitsune, unless `--targets` gives
   another order. Data variants are not repeated identical trials or order
   counterbalancing; use the full-suite `--attempts`/`--order` for that.
@@ -456,8 +473,10 @@ Review/redact raw artifacts before sharing them; do not publish profiles or toke
 
 With an allowlist (UI tracks), each run records `tool_surface`: the allowlisted
 tools the native server actually published (`exposed`) and those it did not
-(`missing`), and the runner prints a warning. Kitsune's default `lean` preset
-publishes 14 of the 22 allowlisted Kitsune tools (`browser_keypress`,
+(`missing`), and the runner prints a warning. `no_allowlisted_tools` flags a run
+whose server published none of them (for example after a failed setup); suite
+summaries count those as `runs_without_allowlisted_tools`. Kitsune's default
+`lean` preset publishes 14 of the 22 allowlisted Kitsune tools (`browser_keypress`,
 `browser_drag` and others are missing), so a Kitsune failure that needs them is a
 tool-surface result, not a capability verdict. Suite summaries count
 `runs_missing_allowlisted_tools` per target. Use `--kitsune-preset full` (and

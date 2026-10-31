@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import asdict
 from datetime import datetime, timezone
 import hashlib
@@ -10,7 +11,9 @@ import os
 from pathlib import Path
 import signal
 import subprocess
+import sys
 import tempfile
+import threading
 import time
 import uuid
 
@@ -266,6 +269,52 @@ def terminate_group(process: subprocess.Popen) -> None:
     process.wait()
 
 
+SETUP_POLL_SEC = 0.1
+
+
+def write_prompt(stream, prompt: bytes) -> None:
+    """Write the whole prompt, then close stdin so the harness sees its end; a harness that exited is ignored."""
+    try:
+        stream.write(prompt)
+    except OSError:
+        pass
+    finally:
+        try:
+            stream.close()
+        except OSError:
+            pass
+
+
+def await_harness(process: subprocess.Popen, prompt: bytes, timeout: int,
+                  session_setup: Callable[[], bool | None] | None = None) -> bool:
+    """Send the prompt and wait for the harness to exit; TimeoutExpired after `timeout`.
+
+    The prompt is written once, in the background, so a harness that reads stdin late still gets all of it.
+    session_setup reports a session relay's setup: None while pending, True once complete, False if it failed.
+    Until it settles it is polled every SETUP_POLL_SEC; on failure this returns True at once, with the harness still
+    running, for the caller to stop it. The relay leaves the client's tool list unanswered after a failed setup, so
+    the harness has not sent a model request yet if the client was still waiting for that list (#56)."""
+    deadline = time.monotonic() + timeout
+    threading.Thread(target=write_prompt, args=(process.stdin, prompt), daemon=True).start()
+    while True:
+        outcome = session_setup() if session_setup is not None else True
+        if outcome is False:
+            return True
+        remaining = deadline - time.monotonic()
+        try:
+            process.wait(timeout=remaining if outcome else min(remaining, SETUP_POLL_SEC))
+            return False
+        except subprocess.TimeoutExpired:
+            if time.monotonic() >= deadline:
+                raise
+
+
+def model_request_observed(audit: dict) -> bool:
+    """Whether the harness's events show a model request: usage, an assistant message, a turn or a tool call."""
+    return bool(audit.get("usage") or (audit.get("token_attribution") or {}).get("requests")
+                or audit.get("num_turns") or audit.get("mcp_calls"))
+
+
 def run(
     server: Server, task: Task, model: str, *, executable: str = "codex",
     codex_home: str | None = None, timeout: int = 300, output_root: str = "runs",
@@ -274,7 +323,9 @@ def run(
     resource_observer: ResourceCollector | None = None,
     viewport: dict | None = None,
     harness: str = "codex", effort: str = "medium", max_budget_usd: float | None = None,
+    session_setup: Callable[[], bool | None] | None = None,
 ) -> dict:
+    """session_setup: see await_harness. A failed setup stops the harness and records `setup_failed`."""
     if harness not in HARNESSES:
         raise ValueError("Unknown harness.")
     if harness in API_HARNESSES and max_budget_usd is None:
@@ -335,6 +386,7 @@ def run(
     started = time.monotonic()
     timed_out = False
     interrupted = False
+    setup_failed = False
     returncode = None
     launch_failed = False
     events_path = run_dir / "events.jsonl"
@@ -354,7 +406,7 @@ def run(
                         resource_observer.register(resource_root)
                     resources.set_phase("task")
                     try:
-                        process.communicate(task.prompt.encode(), timeout=timeout)
+                        setup_failed = await_harness(process, task.prompt.encode(), timeout, session_setup)
                     except subprocess.TimeoutExpired:
                         timed_out = True
                     except KeyboardInterrupt:
@@ -372,12 +424,20 @@ def run(
             final_path.write_text(final)
     else:
         audit = audit_events(events_path, allowed_tools=server.enabled_tools or None)
+    if setup_failed:
+        audit["harness_error"] = True
+        # The guarantee holds only while the client still waits for its tool list (#56); record what happened.
+        audit["model_request_observed"] = model_request_observed(audit)
+        if audit["model_request_observed"]:
+            print("warning: session setup failed, but the harness had already made a model request", file=sys.stderr)
     # Even stderr and successful final answers may contain private page contents.
     for file in run_dir.iterdir():
         if file.is_file():
             file.chmod(0o600)
     if interrupted:
         status = "interrupted"
+    elif setup_failed:
+        status = "setup_failed"
     elif timed_out:
         status = "timeout"
     elif launch_failed or returncode != 0 or audit["harness_error"]:

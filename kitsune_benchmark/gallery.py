@@ -24,6 +24,7 @@ from urllib.parse import parse_qs, urlsplit
 
 from . import gallery_media as media
 from .adapter import write_json
+from .holds import hold_metrics
 from .personal import PRIMARY_CONTRACT, close_only_failure, seeded_tab_custody, v2_safety
 from .personal_session import ELICITATION_POLICIES
 from .specs import Server, Task
@@ -775,7 +776,8 @@ class GalleryServer:
         except (OSError, ValueError):
             evidence = {"error": "missing_session_evidence"}
         with self.lock:
-            return self.trials[self.by_target[target]].evaluate(result, evidence)
+            evaluation = self.trials[self.by_target[target]].evaluate(result, evidence)
+        return {**evaluation, "holds": hold_metrics(evidence) if target == "kitsune" else None}
 
     def __exit__(self, *args):
         self.http.shutdown()
