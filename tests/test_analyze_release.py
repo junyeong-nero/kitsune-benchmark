@@ -74,6 +74,33 @@ class ReleaseReviewTests(unittest.TestCase):
             compared = release.review(folder, compare=folder)
             self.assertEqual(compared["compare"]["shared_units"], 4)
 
+    def test_compare_warns_when_elicitation_policies_differ_or_are_not_recorded(self):
+        # #59: a suite's policy comes from its suite-manifest.json; suites before #59 recorded none.
+        with tempfile.TemporaryDirectory() as now, tempfile.TemporaryDirectory() as then:
+            self.suite(now)
+            self.suite(then)
+            for policy_now, policy_then, warned in (("decline", "decline", None), ("accept", "accept", None),
+                                                    ("accept", "decline", "different policies"),
+                                                    ("decline", None, "none recorded then"),
+                                                    (None, "accept", "none recorded now"),
+                                                    (None, None, "none recorded now")):
+                with self.subTest(now=policy_now, then=policy_then):
+                    for folder, policy in ((now, policy_now), (then, policy_then)):
+                        manifest = Path(folder) / "suite-manifest.json"
+                        manifest.write_text(json.dumps({"plan": "lite", **({"elicitation": policy} if policy else {})}))
+                    report = release.review(now, compare=then)
+                    self.assertEqual((report["elicitation"], report["compare"]["elicitation"]), (policy_now, policy_then))
+                    text = release.markdown(report, 1.10)
+                    self.assertIn(f"- Elicitation policy: {policy_now or 'none recorded'}", text)
+                    self.assertIn(f"Elicitation policy: {policy_now or 'none recorded'} now, "
+                                  f"{policy_then or 'none recorded'} then.", text)
+                    if warned is None:
+                        self.assertIsNone(report["compare"]["warning"])
+                        self.assertNotIn("Warning", text)
+                    else:
+                        self.assertIn(warned, report["compare"]["warning"])
+                        self.assertIn("> **Warning:** elicitation policy", text)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -7,6 +7,10 @@ usage: uv run --locked python scripts/analyze-release.py artifacts/opus-subscrip
 Units are (track entry without its target, task); for example ("gallery-crowded-v0", "ui-shadow"). Ratios are
 Kitsune/Playwright totals over units both targets solved. With --compare, the same ratios are computed on the units
 the two suites share, so a lite run can be compared with the matching units of a full run.
+
+Each suite's elicitation policy (how the relay answered Kitsune's approval prompts) is read from its
+suite-manifest.json. Ratios under different policies, or against a suite that recorded none, are not comparable:
+--compare still computes them and the report warns.
 """
 from __future__ import annotations
 
@@ -15,6 +19,7 @@ import collections
 import json
 from pathlib import Path
 import statistics
+import sys
 
 TARGETS = ("playwright", "kitsune")
 ACTIONS = ("click", "type", "fill_form", "select_option", "press_key", "hover", "drag")
@@ -47,6 +52,25 @@ def load(suite_dir: str | Path) -> dict:
             for target, run in pair["results"].items():
                 units[(entry["name"], task)][target] = run
     return units
+
+
+def elicitation_policy(suite_dir: str | Path) -> str | None:
+    """The suite manifest's elicitation policy; None when it recorded none (suites before #59)."""
+    try:
+        manifest = json.loads((Path(suite_dir) / "suite-manifest.json").read_text())
+    except (OSError, ValueError):
+        return None
+    return manifest.get("elicitation") if isinstance(manifest, dict) else None
+
+
+def policy_warning(now: str | None, then: str | None) -> str | None:
+    if now is None or then is None:
+        return (f"elicitation policy {now or 'none recorded'} now, {then or 'none recorded'} then: a suite without a "
+                "recorded policy may predate the relay's answers (#55) or Kitsune's holds (kitsune#364), so its "
+                "ratios are not comparable")
+    if now != then:
+        return f"elicitation policy {now} now, {then} then: ratios under different policies are not comparable"
+    return None
 
 
 def tool_calls(run: dict) -> list[tuple[str, dict, str, bool]]:
@@ -210,12 +234,15 @@ def behaviour(units: dict) -> dict:
 
 def review(suite_dir, compare=None, threshold=1.10) -> dict:
     units = load(suite_dir)
-    report = {"suite": str(suite_dir), "audit": audit(units), "outcomes": outcomes(units), "ratios": ratios(units),
+    report = {"suite": str(suite_dir), "elicitation": elicitation_policy(suite_dir), "audit": audit(units),
+              "outcomes": outcomes(units), "ratios": ratios(units),
               "outliers": outliers(units, threshold), "behaviour": behaviour(units)}
     if compare:
         old = load(compare)
         shared = set(units) & set(old)
-        report["compare"] = {"suite": str(compare), "shared_units": len(shared),
+        then = elicitation_policy(compare)
+        report["compare"] = {"suite": str(compare), "elicitation": then,
+                             "warning": policy_warning(report["elicitation"], then), "shared_units": len(shared),
                              "ratios_now": ratios(units, shared), "ratios_then": ratios(old, shared)}
     return report
 
@@ -224,6 +251,7 @@ def markdown(report: dict, threshold: float) -> str:
     a = report["audit"]
     lines = [f"# Release review: `{report['suite']}`", "",
              "## Audit", "",
+             f"- Elicitation policy: {report['elicitation'] or 'none recorded'}",
              f"- Runs: {a.get('runs', 0)}; scorable {a.get('scorable', 0)}; "
              + ", ".join(f"{k.split(':', 1)[1]} {v}" for k, v in a.items() if k.startswith("status:")),
              f"- Audit violations {a.get('violations', 0)}, harness errors {a.get('harness_errors', 0)}, runs missing "
@@ -243,7 +271,11 @@ def markdown(report: dict, threshold: float) -> str:
     if "compare" in report:
         c = report["compare"]
         lines += ["", f"## Compared with `{c['suite']}` on {c['shared_units']} shared units", "",
-                  "| Group | Input then | Input now | Calls then | Calls now |", "| --- | ---: | ---: | ---: | ---: |"]
+                  f"Elicitation policy: {report['elicitation'] or 'none recorded'} now, "
+                  f"{c['elicitation'] or 'none recorded'} then.", ""]
+        if c["warning"]:
+            lines += [f"> **Warning:** {c['warning']}.", ""]
+        lines += ["| Group | Input then | Input now | Calls then | Calls now |", "| --- | ---: | ---: | ---: | ---: |"]
         for group, now in c["ratios_now"].items():
             then = c["ratios_then"].get(group, {})
             lines.append(f"| {group} | {then.get('input')} | {now['input']} | {then.get('mcp_calls')} | {now['mcp_calls']} |")
@@ -274,6 +306,8 @@ def main() -> int:
     report = review(args.suite, args.compare, args.outlier)
     if args.json:
         Path(args.json).write_text(json.dumps(report, indent=1, ensure_ascii=False) + "\n")
+    if report.get("compare", {}).get("warning"):
+        print("warning: " + report["compare"]["warning"], file=sys.stderr)
     print(markdown(report, args.outlier), end="")
     return 0
 

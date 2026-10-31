@@ -16,6 +16,7 @@ from pathlib import Path
 from .external import run_external
 from .gallery import run_gallery
 from .personal import config as personal_config, pair_complete, run_personal, runnable_ids
+from .personal_session import ELICITATION_POLICIES
 from .coexistence import run_coexistence
 from .hostile import run_hostile
 
@@ -109,6 +110,11 @@ def main(argv: list[str] | None = None) -> int:
                          help="Also run OS-input strategies (browser_trusted_click, Kitsune only); needs --headed and "
                               "moves the real pointer")
     hostile.add_argument("--out", help="Output directory (default artifacts/hostile/runs/<UTC time>)")
+    for child in (personal, gallery, coexistence):
+        child.add_argument("--elicitation", choices=ELICITATION_POLICIES, default="decline",
+                           help="How the relay answers Kitsune's approval prompts during the agent's turn: decline "
+                                "(default) or accept; browser_ask_user prompts are always declined. Results under "
+                                "different policies are not comparable")
     for child in (smoke, benchmark, personal, gallery, coexistence):
         child.add_argument("--harness", choices=HARNESSES, default="claude",
                            help="Agent CLI. Default claude (Claude Code on the claude.ai subscription login; "
@@ -162,7 +168,7 @@ def main(argv: list[str] | None = None) -> int:
                                   executable=executable, kitsune_project=args.kitsune_project,
                                   harness=args.harness, budget_usd=args.budget_usd,
                                   kitsune_preset=args.kitsune_preset, targets=tuple(args.targets.split(",")),
-                                  **overrides)
+                                  elicitation=args.elicitation, **overrides)
             print(json.dumps(result, indent=2, ensure_ascii=False))
             if not args.execute:
                 return 0
@@ -174,7 +180,7 @@ def main(argv: list[str] | None = None) -> int:
             result = run_coexistence(execute=args.execute, task_ids=runnable_ids() if args.all_personal else args.task_ids,
                                      variant=args.variant, kitsune_project=args.kitsune_project, executable=executable,
                                      harness=args.harness, budget_usd=args.budget_usd,
-                                     protect_user_tabs=args.protect_user_tabs,
+                                     protect_user_tabs=args.protect_user_tabs, elicitation=args.elicitation,
                                      targets=tuple(args.targets.split(",")), **overrides)
             print(json.dumps(result, indent=2, ensure_ascii=False))
             if not args.execute:
@@ -194,7 +200,7 @@ def main(argv: list[str] | None = None) -> int:
             result = run_gallery(execute=args.execute, task_ids=args.task_ids, category=args.category, variant=args.variant,
                                  layout=args.layout, kitsune_project=args.kitsune_project, executable=executable,
                                  harness=args.harness, budget_usd=args.budget_usd, kitsune_preset=args.kitsune_preset,
-                                 targets=tuple(args.targets.split(",")), **overrides)
+                                 targets=tuple(args.targets.split(",")), elicitation=args.elicitation, **overrides)
             print(json.dumps(result, indent=2, ensure_ascii=False))
             if not args.execute:
                 return 0

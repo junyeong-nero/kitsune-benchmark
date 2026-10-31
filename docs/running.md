@@ -157,6 +157,41 @@ uv run --locked python scripts/run-full-suite.py --harness claude-api --allow-ap
   --budget-usd 60 --kitsune-project artifacts/vendor/kitsune-pinned --out artifacts/opus-full
 ```
 
+### Elicitation policy: Kitsune's approval prompts
+
+Since kitsune#364 Kitsune holds some calls for the user's approval (a tab the user
+is viewing, a tab the agent did not open, an ask-before-act action), and since
+kitsune#376 it asks through MCP elicitation. The personal, gallery and coexistence
+relay declares elicitation and answers every prompt itself, so no prompt reaches the
+agent's client. The harness's own setup calls are always approved. During the agent's
+turn `--elicitation` decides:
+
+- `decline` (default): every prompt is declined. The held call does not run, and the
+  run measures whether the agent stops, reports or works around it.
+- `accept`: approval prompts are approved and the held call runs once.
+  `browser_ask_user` prompts are still declined, because no user does what they ask.
+
+Playwright never elicits, so the policy changes only Kitsune runs. External does not
+use the relay and has no `--elicitation`; an accept suite still runs it, unchanged. Each run's session evidence records
+`elicitation_policy` and every prompt in `elicitations`. Plan output, pair manifests
+(`experiment.elicitation`), per-pair and track summaries, and `suite-manifest.json`
+record the policy. `scripts/run-full-suite.py --elicitation accept` passes it to every
+personal, gallery and coexistence entry.
+
+**Results across policies are not comparable.** Do not compare token ratios between
+a decline and an accept suite. Do not compare either with a cohort from before
+kitsune#364, which held nothing, without saying so. `scripts/analyze-release.py`
+shows each suite's policy and warns when `--compare` mixes policies or compares
+with a suite that recorded none (suites before #59).
+
+```sh
+# Authorized model execution only: the accept arm of a lite suite, beside a decline suite on the same tag.
+uv run --locked python scripts/run-full-suite.py --plan lite --elicitation accept \
+  --kitsune-project artifacts/vendor/kitsune-pinned --out artifacts/opus-lite-accept
+uv run --locked python scripts/analyze-release.py artifacts/opus-lite-accept \
+  --compare artifacts/opus-lite-decline > review.md   # warns: the policies differ
+```
+
 ### Repeated, predeclared order (taskset-v3)
 
 `--attempts N` (default 1) repeats every track/variant/layout unit using fresh
