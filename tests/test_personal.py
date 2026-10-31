@@ -19,7 +19,7 @@ from kitsune_benchmark.__main__ import main
 from kitsune_benchmark.personal import (PROTECTED_NOTE, PersonalServer, aggregate_results, catalog, config,
                                        run_personal, seeded_tab_custody, selected_tasks)
 from kitsune_benchmark.personal_session import NativeSession, result_json, tabs_from_result
-from kitsune_benchmark.smoke import ROOT, await_bridge, copy_extension, private_ports
+from kitsune_benchmark.smoke import ROOT, await_bridge, copy_extension, private_ports, session_setup
 from kitsune_benchmark.adapter import resolve, terminate_group
 from kitsune_benchmark.runtime import codex_environment
 from kitsune_benchmark.specs import Server
@@ -419,6 +419,9 @@ class PersonalTests(unittest.TestCase):
         k = aggregate_results([{"results": {"kitsune": r}} for r in [lean, full, {}]])["kitsune"]
         self.assertEqual((k["runs_with_tool_surface"], k["runs_missing_allowlisted_tools"]), (2, 1))
         self.assertEqual(k["missing_allowlisted_tools"], ["browser_drag", "browser_keypress"])
+        empty = {"tool_surface": {"missing": ["browser_click"], "no_allowlisted_tools": True}}
+        k = aggregate_results([{"results": {"kitsune": r}} for r in [lean, full, empty]])["kitsune"]
+        self.assertEqual((k["runs_missing_allowlisted_tools"], k["runs_without_allowlisted_tools"]), (2, 1))
 
 
 class SessionTests(unittest.TestCase):
@@ -855,6 +858,7 @@ for line in sys.stdin:
                 str(root / "config.json")], input=json.dumps({"id": 1, "method": "tools/list"}) + "\n",
                 text=True, capture_output=True, timeout=10)
             self.assertEqual(result.returncode, 2, result.stderr)
+            self.assertEqual(result.stdout, "")  # tools/list is never answered (#56)
             evidence = json.loads((root / "evidence.json").read_text())
             self.assertFalse(evidence["setup_complete"])
             self.assertEqual(evidence["error"], "native_session_setup_or_inventory_failed")
@@ -866,6 +870,58 @@ for line in sys.stdin:
             self.assertEqual((root / "evidence.json").stat().st_mode & 0o777, 0o600)
             for sensitive in ("private", "password", "credentials", "https://", "sk-"):
                 self.assertNotIn(sensitive, json.dumps(evidence))
+
+    def test_relays_hold_the_tool_list_after_a_failed_setup_until_the_client_exits(self):
+        # #56: the client must not get a tool list (and start the agent) after a failed setup; the harness stops it.
+        fake = '''import json, sys
+for line in sys.stdin:
+    message = json.loads(line)
+    if "id" not in message:
+        continue
+    if message["method"] == "initialize":
+        result = {"protocolVersion": "2024-11-05", "capabilities": {"tools": {}}, "serverInfo": {"name": "fake", "version": "1"}}
+    elif message["params"]["name"] == "browser_tabs":
+        result = {"content": [{"type": "text", "text": sys.argv[1]}]}
+    else:
+        result = {"isError": True, "content": [{"type": "text", "text": json.dumps({"code": "needs_user"})}]}
+    print(json.dumps({"jsonrpc": "2.0", "id": message["id"], "result": result}), flush=True)
+'''
+        one = "- 0: (current) [](about:blank)"
+        cases = (("personal", "personal_session.py", {}, one, "native_session_setup_or_inventory_failed"),
+                 ("gallery", "personal_session.py", {"task_tab": "agent"}, one, "native_session_setup_or_inventory_failed"),
+                 ("coexistence", "coexistence_session.py", {"user_driver": {"bidi_url": "ws://127.0.0.1:9"}},
+                  one + "\n- 1: [](about:blank)", "coexistence_session_setup_or_inventory_failed"))
+        messages = [{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2024-11-05", "capabilities": {}}},
+                    {"jsonrpc": "2.0", "method": "notifications/initialized"}, {"jsonrpc": "2.0", "id": 2, "method": "tools/list"}]
+        for track, script, extra, tabs, error in cases:
+            with self.subTest(track=track), tempfile.TemporaryDirectory() as folder:
+                root = Path(folder)
+                (root / "native.py").write_text(fake)
+                (root / "config.json").write_text(json.dumps({
+                    "target": "playwright", "upstream": [sys.executable, str(root / "native.py"), tabs],
+                    "bootstrap_url": "http://local/t/start", "urls": ["http://local/t/article"], "active_index": 0,
+                    "evidence_path": str(root / "evidence.json"), "origin": "http://local", **extra}))
+                relay = subprocess.Popen([sys.executable, str(ROOT / "kitsune_benchmark" / script), str(root / "config.json")],
+                                         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+                try:
+                    relay.stdin.write("".join(json.dumps(message) + "\n" for message in messages))
+                    relay.stdin.flush()
+                    self.assertEqual(json.loads(relay.stdout.readline())["id"], 1)
+                    deadline = time.monotonic() + 10
+                    while session_setup(root / "evidence.json") is not False and time.monotonic() < deadline:
+                        time.sleep(0.05)
+                    self.assertIs(session_setup(root / "evidence.json"), False)
+                    time.sleep(0.3)
+                    self.assertIsNone(relay.poll())  # holding, not exited
+                    relay.stdin.close()
+                    self.assertEqual(relay.wait(timeout=10), 2)
+                    self.assertEqual(relay.stdout.read(), "")
+                    self.assertEqual(json.loads((root / "evidence.json").read_text())["error"], error)
+                finally:
+                    if relay.poll() is None:
+                        relay.kill()
+                        relay.wait()
+                    relay.stdout.close()
 
     def test_native_inventory_parsers(self):
         playwright = {"content": [{"type": "text", "text": "### Result\n- 0: [A](http://localhost/a)\n- 1: (current) [B](http://localhost/b)"}]}

@@ -626,6 +626,7 @@ def aggregate_results(pairs: list[dict]) -> dict:
             # Allowlisted tools the server did not publish, e.g. under Kitsune's lean preset (#1).
             "runs_with_tool_surface": sum("tool_surface" in r for r in runs),
             "runs_missing_allowlisted_tools": sum(bool(r.get("tool_surface", {}).get("missing")) for r in runs),
+            "runs_without_allowlisted_tools": sum(r.get("tool_surface", {}).get("no_allowlisted_tools") is True for r in runs),
             "missing_allowlisted_tools": sorted({t for r in runs for t in r.get("tool_surface", {}).get("missing", [])})}
     return totals
 

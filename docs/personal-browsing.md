@@ -158,6 +158,11 @@ using **native browser tools**, verifies tab URLs and the active tab, then
 forwards native schemas and tool results without translating them. It waits
 for asynchronous tab creation to settle. No custom browser action, JavaScript
 execution, filesystem access, or privileged tool is added to the agent.
+If setup fails, the relay records the error and never answers that first
+request, so the agent's client never gets a tool list; the harness stops it
+and records `setup_failed` (#56). That is before any model request as long as
+the client was still waiting for the list (it did not time the request out);
+the run's `model_request_observed` records whether one was made.
 
 The profiles are fresh but **the task session is populated before model tool
 use**. This models session continuity; it is not an evaluation of real OAuth,

@@ -448,6 +448,13 @@ class NativeSession:
             self.save()
         emit({**result, "id": message["id"]})
 
+    def hold_failed_setup(self):
+        """After a failed setup, leave the client's pending request unanswered until it exits (#56). The client cannot
+        start the agent without its tool list; the harness reads the failure from the evidence and stops it."""
+        if not self.evidence["setup_complete"]:
+            for _ in sys.stdin:
+                pass
+
     def close(self):
         if self.process:
             try:
@@ -484,6 +491,7 @@ def main() -> int:
         session.evidence["error"] = "native_session_setup_or_inventory_failed"
         session.save()
         print("Personal fixture MCP setup/inventory failed; inspect private artifacts.", file=sys.stderr)
+        session.hold_failed_setup()
         return 2
     finally:
         session.close()
