@@ -13,7 +13,7 @@ import tempfile
 import threading
 import time
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from kitsune_benchmark.__main__ import main
 from kitsune_benchmark.bidi import Bidi, BidiError
@@ -235,6 +235,30 @@ class EvaluationTests(unittest.TestCase):
         server.begin(target)
         server.prepare_server(target, Server(target, "node", ("cli.js",), enabled_tools=("browser_tabs",)), None, Path(folder))
         return server.trials[server.by_target[target]]
+
+    def test_setup_completes_only_once_the_simulated_user_runs(self):
+        # #56: a failure starting the view sampler or typing user is a setup failure, not a completed setup.
+        urls = ["http://local/t/journal", "http://local/t/notice"]
+        tabs = [{"id": 0, "url": urls[0], "active": True, "title": ""}, {"id": 1, "url": urls[1], "active": False, "title": ""}]
+        for failure in (None, RuntimeError("can't start new thread"), BidiError("WebSocket closed.")):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as folder:
+                session = CoexistenceSession({"target": "playwright", "urls": urls, "active_index": 0,
+                                              "bootstrap_url": "http://local/t/start", "evidence_path": folder + "/evidence.json",
+                                              "user_driver": {"bidi_url": "ws://127.0.0.1:9"}})
+                driver = Mock(calls=0, seconds=0.0)
+                driver.view.return_value = {"url": urls[0]}
+                sampler = Mock()
+                sampler.start.side_effect = failure
+                with patch.object(session, "wait_inventory", side_effect=[[tabs[0]], tabs, tabs]), \
+                        patch.object(session, "tool"), patch.object(session, "raw_tabs"), \
+                        patch("kitsune_benchmark.coexistence_session.UserDriver", return_value=driver), \
+                        patch("kitsune_benchmark.coexistence_session.ViewSampler", return_value=sampler):
+                    if failure is None:
+                        session.prepare()
+                    else:
+                        with self.assertRaises(ValueError):
+                            session.prepare()
+                self.assertIs(session.evidence["setup_complete"], failure is None)
 
     def test_prepare_server_adds_user_channel_and_keeps_allowlist(self):
         with tempfile.TemporaryDirectory() as folder, CoexistenceServer(typing_task(), 0) as server:

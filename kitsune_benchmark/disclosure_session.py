@@ -80,6 +80,7 @@ def main():
         session.evidence["error"] = "disclosure_session_failed"
         session.save()
         print("Disclosure session failed; inspect private artifacts.", file=sys.stderr)
+        session.hold_failed_setup()
         return 2
     finally:
         session.close()

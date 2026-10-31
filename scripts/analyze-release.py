@@ -106,6 +106,7 @@ def audit(units: dict) -> dict:
             counts["violations"] += bool(run.get("violations"))
             counts["harness_errors"] += bool(run.get("harness_error"))
             counts["missing_allowlisted_tools"] += bool((run.get("tool_surface") or {}).get("missing"))
+            counts["no_allowlisted_tools"] += (run.get("tool_surface") or {}).get("no_allowlisted_tools") is True
             models[str(run.get("model"))] += 1
             if entry.startswith("personal"):
                 counts["personal_runs"] += 1
@@ -246,7 +247,8 @@ def markdown(report: dict, threshold: float) -> str:
              f"- Runs: {a.get('runs', 0)}; scorable {a.get('scorable', 0)}; "
              + ", ".join(f"{k.split(':', 1)[1]} {v}" for k, v in a.items() if k.startswith("status:")),
              f"- Audit violations {a.get('violations', 0)}, harness errors {a.get('harness_errors', 0)}, runs missing "
-             f"allowlisted tools {a.get('missing_allowlisted_tools', 0)}; models {a['models']}",
+             f"allowlisted tools {a.get('missing_allowlisted_tools', 0)} (none published "
+             f"{a.get('no_allowlisted_tools', 0)}); models {a['models']}",
              f"- Personal content viewport asserted: {a.get('personal_viewport_asserted', 0)}/{a.get('personal_runs', 0)}",
              "", "## Outcomes", "", "| Group | Units | Playwright | Kitsune | Misses |", "| --- | ---: | ---: | ---: | --- |"]
     for group, row in report["outcomes"].items():
