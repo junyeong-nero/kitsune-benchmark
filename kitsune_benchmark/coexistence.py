@@ -29,6 +29,7 @@ from .coexistence_fixtures import COEXISTENCE_FIXTURES
 from .miniwob import UI_TOOLS
 from .personal import (PersonalServer, PersonalTrial, aggregate_results, catalog as personal_catalog,
                        config as personal_config, pair_complete, runnable_ids as personal_runnable_ids)
+from .personal_session import ELICITATION_POLICIES
 from .smoke import ROOT, TARGETS, run_pair, source_revision
 from .specs import Server, Task
 
@@ -160,9 +161,10 @@ def input_metrics(evidence: dict) -> dict | None:
 
 
 class CoexistenceServer(PersonalServer):
-    def __init__(self, task: dict, variant: int, *, protect_user_tabs: bool = False, unprotected_user_tabs: bool = False):
+    def __init__(self, task: dict, variant: int, *, protect_user_tabs: bool = False, unprotected_user_tabs: bool = False,
+                 elicitation: str = "decline"):
         # Pages report the content viewport like the personal track's (personal-browsing-local-v3).
-        super().__init__(task, variant, report_viewport=True)
+        super().__init__(task, variant, report_viewport=True, elicitation=elicitation)
         self.protect_user_tabs = protect_user_tabs
         self.unprotected_user_tabs = unprotected_user_tabs
         self.bidi_ports = {target: free_port() for target in TARGETS}
@@ -193,7 +195,7 @@ class CoexistenceServer(PersonalServer):
         write_json(path, {"target": target, "upstream": [server.command, *server.args],
             "bootstrap_url": trial.url("/start"), "urls": [trial.url(p) for p in trial.paths],
             "active_index": trial.active_index, "evidence_path": str(evidence), "origin": self.origin,
-            "enabled_tools": list(server.enabled_tools),
+            "enabled_tools": list(server.enabled_tools), "elicitation": self.elicitation,
             "diagnostics_path": str(pair_dir / (target + "-native-rpc.jsonl")),
             "metadata_path": str(pair_dir / (target + "-native-metadata.json")),
             "user_driver": {"bidi_url": f"ws://127.0.0.1:{port}"},
@@ -264,9 +266,12 @@ def run_coexistence(*, execute: bool = False, task_ids: list[str] | None = None,
                     kitsune_project: str | None = None, executable: str = "codex", harness: str = "codex",
                     budget_usd: float | None = None, protect_user_tabs: bool = False,
                     unprotected_user_tabs: bool = False, targets: tuple[str, ...] = TARGETS, claude_model: str | None = None,
-                    max_budget_usd_per_run: float | None = None, codex_model: str | None = None) -> dict:
+                    max_budget_usd_per_run: float | None = None, codex_model: str | None = None,
+                    elicitation: str = "decline") -> dict:
     if type(variant) is not int or variant not in range(3):
         raise ValueError("Variant must be 0, 1 or 2.")
+    if elicitation not in ELICITATION_POLICIES:
+        raise ValueError("Unknown elicitation policy.")
     tasks = selected_tasks(task_ids)
     spec = with_claude_overrides(config(), claude_model, max_budget_usd_per_run, codex_model)
     model, _ = harness_pins(spec, harness)
@@ -285,6 +290,7 @@ def run_coexistence(*, execute: bool = False, task_ids: list[str] | None = None,
         coexist = catalog()
         return {"mode": "coexistence_plan_only", "model_invoked": False, "harness": harness, "model": model,
                 "targets": list(targets), "variant": variant, "protect_user_tabs": protect_user_tabs,
+                "elicitation": elicitation,
                 "unprotected_user_tabs": unprotected_user_tabs,
                 "selected_tasks": [t["id"] for t in tasks], "planned_model_runs": len(targets) * len(tasks),
                 "worst_case_usd": len(targets) * len(tasks) * per_run if per_run else None,
@@ -303,10 +309,11 @@ def run_coexistence(*, execute: bool = False, task_ids: list[str] | None = None,
             stopped = "kitsune_revision_changed"
             break
         experiment = {**spec, "selected_task": task, "variant": variant, "condition": "user-seeded",
+                      "elicitation": elicitation,
                       "catalog_sha256": hashlib.sha256(CATALOG.read_bytes()).hexdigest(),
                       "personal_catalog_sha256": hashlib.sha256((ROOT / personal_config()["catalog"]).read_bytes()).hexdigest()}
         with CoexistenceServer(task, variant, protect_user_tabs=protect_user_tabs,
-                               unprotected_user_tabs=unprotected_user_tabs) as fixture:
+                               unprotected_user_tabs=unprotected_user_tabs, elicitation=elicitation) as fixture:
             port = fixture.bidi_ports["kitsune"]
             pair = run_pair(execute=True, kitsune_project=kitsune_project, executable=executable,
                 experiment_spec=experiment, artifact_scope="coexistence", task_for_target=fixture.begin,
@@ -318,7 +325,7 @@ def run_coexistence(*, execute: bool = False, task_ids: list[str] | None = None,
                 kitsune_firefox_prefs=USER_CHANNEL_PREFS, viewport_reports=fixture.viewport_reports,
                 equalize_kitsune_viewport=True)
         pair.update(coexistence_task=task["id"], variant=variant, protect_user_tabs=protect_user_tabs,
-                    unprotected_user_tabs=unprotected_user_tabs,
+                    unprotected_user_tabs=unprotected_user_tabs, elicitation=elicitation,
                     kitsune_source_after=source_revision(project))
         write_json(Path(pair["pair_dir"]) / "coexistence-summary.json", pair)
         pairs.append(pair)
@@ -337,7 +344,7 @@ def run_coexistence(*, execute: bool = False, task_ids: list[str] | None = None,
     summary = {"mode": "coexistence_executed", "model_invoked": True, "benchmark": spec["id"],
                "harness": harness, "model": model,
                "targets": list(targets), "protect_user_tabs": protect_user_tabs,
-               "unprotected_user_tabs": unprotected_user_tabs, "kitsune_source": source,
+               "unprotected_user_tabs": unprotected_user_tabs, "elicitation": elicitation, "kitsune_source": source,
                "requested_pairs": len(tasks), "attempted_pairs": len(pairs), "stopped_reason": stopped,
                "estimated_cost_usd": round(spent, 6) if per_run is not None else None,
                "suite_budget_usd": budget_usd, "max_budget_usd_per_run": per_run,

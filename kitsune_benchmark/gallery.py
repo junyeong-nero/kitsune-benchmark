@@ -26,6 +26,7 @@ from . import gallery_media as media
 from .adapter import write_json
 from .holds import hold_metrics
 from .personal import PRIMARY_CONTRACT, close_only_failure, seeded_tab_custody, v2_safety
+from .personal_session import ELICITATION_POLICIES
 from .specs import Server, Task
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -641,10 +642,12 @@ FILLER = ["이 페이지는 여러 웹 컴포넌트를 한곳에 모은 테스�
 class GalleryServer:
     """Per-target trials on one local origin; same interface as PersonalServer for run_pair."""
 
-    def __init__(self, task: GalleryTask, variant: int, layout: str):
+    def __init__(self, task: GalleryTask, variant: int, layout: str, elicitation: str = "decline"):
         if layout not in LAYOUTS or variant not in range(3):
             raise ValueError("layout must be crowded|isolated and variant 0, 1 or 2.")
-        self.task, self.variant, self.layout = task, variant, layout
+        if elicitation not in ELICITATION_POLICIES:
+            raise ValueError("Unknown elicitation policy.")
+        self.task, self.variant, self.layout, self.elicitation = task, variant, layout, elicitation
         self.trials: dict[str, GalleryTrial] = {}
         self.by_target: dict[str, str] = {}
         self.evidence_paths: dict[str, Path] = {}
@@ -762,7 +765,7 @@ class GalleryServer:
         write_json(path, {"target": target, "upstream": [server.command, *server.args],
             "bootstrap_url": trial.url("/start"), "urls": [trial.url(p) for p in trial.paths],
             "active_index": trial.active_index, "evidence_path": str(evidence), "origin": self.origin,
-            "task_tab": "agent", "enabled_tools": list(server.enabled_tools),
+            "task_tab": "agent", "enabled_tools": list(server.enabled_tools), "elicitation": self.elicitation,
             "diagnostics_path": str(pair_dir / (target + "-native-rpc.jsonl")),
             "metadata_path": str(pair_dir / (target + "-native-metadata.json"))})
         return replace(server, command=sys.executable, args=(str(ROOT / "kitsune_benchmark/personal_session.py"), str(path)))
@@ -805,13 +808,15 @@ def run_gallery(*, execute: bool = False, task_ids: list[str] | None = None, cat
                 executable: str = "codex", harness: str = "codex", budget_usd: float | None = None,
                 kitsune_preset: str | None = None, targets: tuple[str, ...] = ("playwright", "kitsune"),
                 claude_model: str | None = None, max_budget_usd_per_run: float | None = None,
-                codex_model: str | None = None) -> dict:
+                codex_model: str | None = None, elicitation: str = "decline") -> dict:
     from .adapter import claude_budget, harness_pins, with_claude_overrides
     from .miniwob import UI_TOOLS
     from .personal import aggregate_results, pair_complete
     from .smoke import TARGETS, run_pair, source_revision
     if layout not in LAYOUTS or type(variant) is not int or variant not in range(3):
         raise ValueError("layout must be crowded|isolated and variant 0, 1 or 2.")
+    if elicitation not in ELICITATION_POLICIES:
+        raise ValueError("Unknown elicitation policy.")
     tasks = select(task_ids, category)
     spec = with_claude_overrides(config(), claude_model, max_budget_usd_per_run, codex_model)
     model, _ = harness_pins(spec, harness)
@@ -823,7 +828,7 @@ def run_gallery(*, execute: bool = False, task_ids: list[str] | None = None, cat
         raise ValueError("--budget-usd needs a positive amount and an API-key harness.")
     if not execute:
         return {"mode": "gallery_plan_only", "model_invoked": False, "harness": harness, "model": model,
-                "layout": layout, "variant": variant, "targets": list(targets),
+                "layout": layout, "variant": variant, "targets": list(targets), "elicitation": elicitation,
                 "tasks": [{"id": t.id, "category": t.category, "title": t.title} for t in tasks],
                 "planned_model_runs": len(tasks) * len(targets),
                 "worst_case_usd": len(tasks) * len(targets) * per_run if per_run else None, "integrity": INTEGRITY}
@@ -838,14 +843,16 @@ def run_gallery(*, execute: bool = False, task_ids: list[str] | None = None, cat
         if pairs and source_revision(project) != source:
             stopped = "kitsune_revision_changed"
             break
-        experiment = {**spec, "selected_task": {"id": task.id, "category": task.category}, "variant": variant, "layout": layout}
-        with GalleryServer(task, variant, layout) as fixture:
+        experiment = {**spec, "selected_task": {"id": task.id, "category": task.category}, "variant": variant, "layout": layout,
+                      "elicitation": elicitation}
+        with GalleryServer(task, variant, layout, elicitation) as fixture:
             pair = run_pair(execute=True, kitsune_project=kitsune_project, executable=executable,
                             experiment_spec=experiment, artifact_scope="gallery", task_for_target=fixture.begin,
                             prepare_server=fixture.prepare_server, evaluate=fixture.evaluate, enabled_tools=UI_TOOLS,
                             harness=harness, kitsune_preset=kitsune_preset, targets=targets,
                             equalize_kitsune_viewport=True)
-        pair.update(gallery_task=task.id, variant=variant, layout=layout, kitsune_source_after=source_revision(project))
+        pair.update(gallery_task=task.id, variant=variant, layout=layout, elicitation=elicitation,
+                    kitsune_source_after=source_revision(project))
         write_json(Path(pair["pair_dir"]) / "gallery-summary.json", pair)
         pairs.append(pair)
         if per_run is not None:
@@ -864,7 +871,8 @@ def run_gallery(*, execute: bool = False, task_ids: list[str] | None = None, cat
         return {t: {p["gallery_task"]: p["results"][t]["benchmark_evaluation"].get(key) for p in pairs if t in p["results"]}
                 for t in targets}
     summary = {"mode": "gallery_executed", "model_invoked": True, "harness": harness, "model": model, "layout": layout,
-               "variant": variant, "targets": list(targets), "kitsune_tool_preset": kitsune_preset, "kitsune_source": source,
+               "variant": variant, "targets": list(targets), "kitsune_tool_preset": kitsune_preset, "elicitation": elicitation,
+               "kitsune_source": source,
                "requested_pairs": len(tasks), "attempted_pairs": len(pairs), "stopped_reason": stopped,
                "completed_pairs": sum(pair_complete(p, targets) for p in pairs),
                "estimated_cost_usd": round(spent, 6) if per_run is not None else None,

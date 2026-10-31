@@ -110,8 +110,9 @@ class FullSuiteTests(unittest.TestCase):
                 project = launched[0][launched[0].index("--kitsune-project") + 1]
                 expected, outputs = [], []
                 for name, argv in tracks:
+                    relay = [] if name == "external" else ["--elicitation", "decline"]
                     base = [suite.sys.executable, "-m", "kitsune_benchmark", *argv, "--harness", "claude",
-                            "--claude-model", "claude-opus-5-5", "--kitsune-project", project, "--execute"]
+                            "--claude-model", "claude-opus-5-5", *relay, "--kitsune-project", project, "--execute"]
                     if name.startswith("coexistence"):  # always paired in one process; the arm fixes its target
                         expected.append(base + ([] if "--targets" in argv else ["--targets", "playwright,kitsune"]))
                         outputs.append(f"{name}.json")
@@ -123,7 +124,24 @@ class FullSuiteTests(unittest.TestCase):
                 self.assertEqual(launched, expected)
                 self.assertCountEqual(self.outputs, outputs + ["suite-manifest.json", "suite-summary.json"])
                 self.assertEqual(self.manifest["attempts"], 1)
+                self.assertEqual(self.manifest["elicitation"], "decline")
                 self.assertTrue(all(entry["attempt"] == 1 for entry in entries))
+
+    def test_elicitation_policy_reaches_every_relay_track_and_the_manifest(self):
+        from kitsune_benchmark.personal_session import ELICITATION_POLICIES
+        self.assertEqual(suite.ELICITATION_POLICIES, ELICITATION_POLICIES)
+        result = {"requested_pairs": 1, "completed_pairs": 1}
+        code, launched, _, _ = self.invoke([(0, result)] * 15, tracks=suite.commands("lite"),
+                                           extra=("--plan", "lite", "--elicitation", "accept"))
+        self.assertEqual(code, 0)
+        self.assertEqual(self.manifest["elicitation"], "accept")
+        for command in launched:
+            track = command[3]
+            policy = command[command.index("--elicitation") + 1] if "--elicitation" in command else None
+            self.assertEqual(policy, None if track == "external" else "accept", track)
+        self.assertEqual({command[3] for command in launched}, {"personal", "gallery", "coexistence", "external"})
+        with redirect_stdout(io.StringIO()), self.assertRaises(SystemExit):
+            self.invoke([], extra=("--elicitation", "approve"))
 
     def test_lite_plan_keeps_every_task_with_fewer_variants(self):
         lite = suite.commands("lite")
