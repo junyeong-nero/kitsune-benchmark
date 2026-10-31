@@ -19,6 +19,32 @@ import threading
 import time
 from urllib.parse import urlsplit
 
+# How the relay answers the prompts Kitsune sends through MCP elicitation during the agent's turn (kitsune#376):
+# session config "elicitation", default "decline", so a run measures whether the agent stops and reports. The relay
+# declares form elicitation at initialize and answers every prompt itself; none reaches the agent's client, so
+# results do not depend on it. The harness's own calls are approved as the user.
+ELICITATION_POLICIES = ("decline", "accept")
+# Why Kitsune held a call, by the phrase its approval prompt names it with (server.py _HELD_BECAUSE).
+HELD_BECAUSE = {"you are viewing this tab": "user_viewing", "the agent did not open this tab": "user_tab",
+                "ask-before-act": "confirmation_required"}
+
+
+def elicitation_kind(params: dict) -> tuple[str | None, str | None]:
+    """The reason and detail of a Kitsune prompt: "approval" (server.py APPROVAL_SCHEMA) with the held call's detail
+    from the prompt's "Held because" line, "agent_request" (browser_ask_user, ASK_USER_SCHEMA), else None."""
+    schema = params.get("requestedSchema")
+    properties = schema.get("properties") if isinstance(schema, dict) else None
+    properties = properties if isinstance(properties, dict) else {}
+    choices = lambda field: (properties.get(field) or {}).get("enum") or []
+    if "Approve" in choices("decision"):
+        lines = str(params.get("message", "")).splitlines()
+        detail = next((detail for line in lines for phrase, detail in HELD_BECAUSE.items()
+                       if line.startswith("Held because " + phrase)), None)
+        return "approval", detail
+    if "Done" in choices("answer"):
+        return "agent_request", None
+    return None, None
+
 
 def result_json(result: dict, key: str):
     """`key` of a native result's structured content, else of its first JSON text item that has it."""
@@ -79,10 +105,14 @@ class NativeSession:
         self.tab_indexed = False
         self.tab_list_result = None  # the latest inventory, as the native server listed it
         self.started_mono = time.monotonic()
+        self.elicitation = config.get("elicitation", "decline")
+        if self.elicitation not in ELICITATION_POLICIES:
+            raise ValueError("Unknown elicitation policy.")
         self.metadata = {"enabled_tools": config.get("enabled_tools", []), "tools_pages": []}
         self.evidence = {"setup_complete": False, "target": config.get("target"), "initial_tabs": [], "snapshots": [], "tab_calls": [],
                          "harness_calls": 0, "harness_seconds": 0.0,
-                         "close_attempts": 0, "outside_navigation": 0}
+                         "close_attempts": 0, "outside_navigation": 0,
+                         "elicitation_policy": self.elicitation, "elicitations": [], "harness_elicitations": []}
 
     def start(self):
         self.process = subprocess.Popen(self.config["upstream"], stdin=subprocess.PIPE,
@@ -162,6 +192,9 @@ class NativeSession:
             if "method" in message and "id" not in message:
                 if notify:
                     notify(message)
+            elif message.get("method") == "elicitation/create":
+                self.send({"jsonrpc": "2.0", "id": message["id"],
+                           "result": self.answer_elicitation(message.get("params") or {}, role, (params or {}).get("name"))})
             elif "method" in message:
                 self.send({"jsonrpc": "2.0", "id": message["id"],
                     "error": {"code": -32601, "message": "Server-initiated requests unsupported in benchmark."}})
@@ -170,8 +203,20 @@ class NativeSession:
             if time.monotonic() >= deadline:
                 raise ValueError("Native MCP request timed out.")
 
-    def tool(self, name: str, arguments: dict, refusal_code: str | None = None) -> dict:
-        """A native tool's result; failures raise, except a refusal with `refusal_code`, which is returned."""
+    def answer_elicitation(self, params: dict, role: str, tool: str | None) -> dict:
+        """The relay's answer to a prompt the server sent during a call, recorded in evidence. The harness's own
+        calls are the user's, so it approves them; during the agent's turn the elicitation policy answers. Only
+        approval prompts are accepted: no user does what browser_ask_user asks, so that prompt is declined (Can't)."""
+        reason, detail = elicitation_kind(params)
+        policy = "accept" if role == "harness" else self.elicitation
+        action = "accept" if policy == "accept" and reason == "approval" else "decline"
+        self.evidence["harness_elicitations" if role == "harness" else "elicitations"].append(
+            {"tool": tool, "reason": reason, "detail": detail, "action": action, "message": params.get("message")})
+        self.diagnostic("elicitation_answered", role=role, tool=tool, reason=reason, detail=detail, action=action)
+        return {"action": "accept", "content": {"decision": "Approve"}} if action == "accept" else {"action": "decline"}
+
+    def tool(self, name: str, arguments: dict, refusal_codes: tuple[str, ...] = ()) -> dict:
+        """A native tool's result; failures raise, except a refusal with one of `refusal_codes`, which is returned."""
         started = time.monotonic()
         try:
             result = self.request("tools/call", {"name": name, "arguments": arguments})
@@ -205,7 +250,7 @@ class NativeSession:
                         value = source.get(key)
                         if type(value) in (int, float) and 0 <= value < float("inf"):
                             fields[key] = value
-                if refusal_code is not None and fields.get("code") == refusal_code and "result" in result:
+                if fields.get("code") in refusal_codes and "result" in result:
                     return result["result"]
                 self.evidence["native_error"] = fields
                 raise ValueError("Harness browser tool failed: " + json.dumps(fields, sort_keys=True))
@@ -245,8 +290,10 @@ class NativeSession:
 
         The new tab loads the bootstrap page (session cookie), then the task page. The fresh profile's initial tab
         is the user's: it is closed while the task tab is its only neighbour, so the browser shows the task tab.
-        Kitsune refuses that close with user_tab; the harness repeats the identical close with the refusal's
-        confirm token, the only approval setup uses (evidence setup_closed_initial_blank)."""
+        Kitsune holds that close for the user's approval, the only one setup needs (evidence
+        setup_closed_initial_blank): with elicitation (kitsune#376) the relay approves the server's prompt as the
+        user; earlier Kitsune refuses the close with user_tab, and the harness repeats it with the refusal's
+        confirm token, as it does with needs_user from a Kitsune that does not elicit."""
         task = self.config["urls"][self.config["active_index"]]
         self.tool("browser_tabs", {"action": "new", "url": self.config["bootstrap_url"]})
         self.tool("browser_navigate", {"url": task})  # the new tab is current
@@ -257,13 +304,16 @@ class NativeSession:
         field = "index" if self.config["target"] == "playwright" or self.tab_indexed else "tab_id"
         close = {"action": "close", field: initial[0]["id"]}
         via = "close"
-        result = self.tool("browser_tabs", close, refusal_code="user_tab")
+        asked = len(self.evidence["harness_elicitations"])
+        result = self.tool("browser_tabs", close, refusal_codes=("user_tab", "needs_user"))
         if result.get("isError"):
             token = (result_json(result, "state") or {}).get("confirmToken")
             if not isinstance(token, str):
                 raise ValueError("The initial tab's close refusal carries no confirm token.")
             self.tool("browser_tabs", {**close, "confirm_token": token})
             via = "confirm_token"
+        elif len(self.evidence["harness_elicitations"]) > asked:
+            via = "elicitation"
         self.evidence["setup_closed_initial_blank"] = {"via": via}
         self.wait_inventory(lambda tabs: [t["url"] for t in tabs] == [task])
 
@@ -347,6 +397,13 @@ class NativeSession:
         if "id" not in message:
             self.send(message)
             return
+        if method == "initialize" and isinstance(message.get("params"), dict):
+            # The relay answers the server's prompts itself (answer_elicitation), whatever the agent's client declared.
+            capabilities = message["params"].get("capabilities") or {}
+            self.metadata["client_capabilities"] = capabilities
+            message = {**message, "params": {**message["params"],
+                                             "capabilities": {**capabilities, "elicitation": {"form": {}}}}}
+        asked = len(self.evidence["elicitations"])
         if method == "tools/call":
             arguments = message.get("params", {}).get("arguments", {})
             name = message.get("params", {}).get("name")
@@ -364,6 +421,13 @@ class NativeSession:
                         "isError": True, "content": [{"type": "text", "text": "Only local fixture navigation is allowed."}]}})
                     return
         result = self.request(method, message.get("params"), notify=emit, role="agent")
+        if len(self.evidence["elicitations"]) > asked:
+            # A prompt the call was not approved in leaves the held result, with what the user decided.
+            state = result_json(result.get("result", {}), "state")
+            if isinstance(state, dict) and result_json(result.get("result", {}), "code") == "needs_user":
+                entry = self.evidence["elicitations"][-1]
+                entry.update(detail=entry["detail"] or state.get("detail"), decision=state.get("decision"))
+            self.save()
         if method == "tools/call":
             # Inventory isn't sent to the model. Explicit separate harness counts
             # prevent attributing these calls to the agent's tool-use efficiency.
