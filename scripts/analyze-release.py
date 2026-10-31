@@ -6,7 +6,8 @@ usage: uv run --locked python scripts/analyze-release.py artifacts/opus-subscrip
 
 Units are (track entry without its target, task); for example ("gallery-crowded-v0", "ui-shadow"). Ratios are
 Kitsune/Playwright totals over units both targets solved. With --compare, the same ratios are computed on the units
-the two suites share, so a lite run can be compared with the matching units of a full run.
+the two suites share, so a lite run can be compared with the matching units of a full run. Kitsune's holds (calls kept
+for the user's approval, and declined writes redone in another tab) are recomputed per entry from session evidence.
 """
 from __future__ import annotations
 
@@ -15,6 +16,10 @@ import collections
 import json
 from pathlib import Path
 import statistics
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from kitsune_benchmark.holds import DECISIONS, DETAILS, aggregate_holds, hold_metrics  # noqa: E402
 
 TARGETS = ("playwright", "kitsune")
 ACTIONS = ("click", "type", "fill_form", "select_option", "press_key", "hover", "drag")
@@ -45,7 +50,7 @@ def load(suite_dir: str | Path) -> dict:
             task = (pair.get("personal_task") or pair.get("gallery_task") or pair.get("coexistence_task")
                     or pair.get("external_task") or "?")
             for target, run in pair["results"].items():
-                units[(entry["name"], task)][target] = run
+                units[(entry["name"], task)][target] = {**run, "pair_dir": pair.get("pair_dir")}
     return units
 
 
@@ -209,10 +214,24 @@ def behaviour(units: dict) -> dict:
     return summary
 
 
+def holds(units: dict) -> dict:
+    """Kitsune holds per entry, from each run's session evidence (holds.py); entries without Kitsune runs are left out."""
+    metrics = collections.defaultdict(list)
+    for (entry, _), runs in units.items():
+        if "kitsune" in runs:
+            pair_dir = runs["kitsune"].get("pair_dir")
+            try:  # missing or truncated evidence: no hold record for the run
+                evidence = json.loads((Path(pair_dir) / "kitsune-session-evidence.json").read_text()) if pair_dir else None
+            except (OSError, ValueError):
+                evidence = None
+            metrics[entry].append(hold_metrics(evidence) if isinstance(evidence, dict) else None)
+    return {entry: aggregate_holds(values) for entry, values in metrics.items()}
+
+
 def review(suite_dir, compare=None, threshold=1.10) -> dict:
     units = load(suite_dir)
     report = {"suite": str(suite_dir), "audit": audit(units), "outcomes": outcomes(units), "ratios": ratios(units),
-              "outliers": outliers(units, threshold), "behaviour": behaviour(units)}
+              "outliers": outliers(units, threshold), "behaviour": behaviour(units), "holds": holds(units)}
     if compare:
         old = load(compare)
         shared = set(units) & set(old)
@@ -263,6 +282,22 @@ def markdown(report: dict, threshold: float) -> str:
                        ("truncated_full_snapshots", "Truncated full snapshots")):
         lines.append(f"| {label} | {b['playwright'].get(key)} | {b['kitsune'].get(key)} |")
     lines += ["", "Tool errors (Kitsune): " + (", ".join(f"{v}× {k}" for k, v in b["kitsune"]["tool_errors"].items()) or "none")]
+    lines += ["", "## Kitsune holds", "",
+              "| Entry | Runs | Runs with a hold | Holds | " + " / ".join(DETAILS) + " | " + " / ".join(DECISIONS)
+              + " | Runs with a declined hold | Runs that redid a declined write |",
+              "| --- | ---: | ---: | ---: | --- | --- | ---: | ---: |"]
+    for entry, h in report["holds"].items():
+        if not h["runs"]:
+            continue
+        by = h["holds_by_detail"]
+        lines.append(f"| {entry} | {h['runs']} | {h['runs_with_hold']} | {h['holds']} | "
+                     + " / ".join(str(sum(by[d].values())) for d in DETAILS) + " | "
+                     + " / ".join(str(sum(by[d][c] for d in DETAILS)) for c in DECISIONS)
+                     + f" | {h['runs_with_declined_hold']} | {h['runs_redo_after_decline']} |")
+    unrecorded = sum(h["runs"] - h["runs_refusals_recorded"] for h in report["holds"].values())
+    if unrecorded:
+        lines += ["", f"{unrecorded} Kitsune runs have evidence from before refusals were recorded: their holds are "
+                  "counted from approval prompts only; refusals without a prompt (such as Kitsune 0.7's user_tab) are not seen."]
     return "\n".join(lines) + "\n"
 
 

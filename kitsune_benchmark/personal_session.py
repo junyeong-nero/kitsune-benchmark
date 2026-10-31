@@ -58,6 +58,20 @@ def result_json(result: dict, key: str):
     return next((source[key] for source in sources if isinstance(source, dict) and key in source), None)
 
 
+def held_refusal(result: dict) -> dict | None:
+    """A refusal only the user can lift: code needs_user with state.reason approval (kitsune#376; state.detail names
+    the hold, state.decision the prompt's answer), or Kitsune 0.7's user_tab code. Else None."""
+    if not result.get("isError"):
+        return None
+    code, state = result_json(result, "code"), result_json(result, "state")
+    state = state if isinstance(state, dict) else {}
+    if code == "user_tab":
+        return {"code": code, "detail": "user_tab", "decision": None}
+    if code == "needs_user" and state.get("reason") == "approval":
+        return {"code": code, "detail": state.get("detail"), "decision": state.get("decision")}
+    return None
+
+
 def tabs_from_result(target: str, result: dict) -> list[dict]:
     if result.get("isError"):
         raise ValueError("Tab inventory failed.")
@@ -112,7 +126,8 @@ class NativeSession:
         self.evidence = {"setup_complete": False, "target": config.get("target"), "initial_tabs": [], "snapshots": [], "tab_calls": [],
                          "harness_calls": 0, "harness_seconds": 0.0,
                          "close_attempts": 0, "outside_navigation": 0,
-                         "elicitation_policy": self.elicitation, "elicitations": [], "harness_elicitations": []}
+                         "elicitation_policy": self.elicitation, "elicitations": [], "harness_elicitations": [],
+                         "held_refusals": []}
 
     def start(self):
         self.process = subprocess.Popen(self.config["upstream"], stdin=subprocess.PIPE,
@@ -435,6 +450,10 @@ class NativeSession:
                 entry.update(detail=entry["detail"] or state.get("detail"), decision=state.get("decision"))
             self.save()
         if method == "tools/call":
+            refusal = held_refusal(result.get("result", {}))
+            if refusal:  # what the agent was told, by its call's position in tab_calls, and whether the call prompted
+                self.evidence["held_refusals"].append({"call": len(self.evidence["tab_calls"]), "tool": name, **refusal,
+                                                       "prompted": len(self.evidence["elicitations"]) > asked})
             # Inventory isn't sent to the model. Explicit separate harness counts
             # prevent attributing these calls to the agent's tool-use efficiency.
             self.evidence["snapshots"].append(self.inventory())

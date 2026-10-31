@@ -20,6 +20,7 @@ from urllib.parse import parse_qs, urlsplit
 
 from .cost_metrics import aggregate_costs, normalized_usage
 from .adapter import claude_budget, harness_pins, with_claude_overrides, write_json
+from .holds import aggregate_holds, hold_metrics
 from .miniwob import UI_TOOLS
 from .personal_fixtures import FIXTURE_CLASSES
 from .smoke import ROOT, TARGETS, run_pair, source_revision
@@ -559,7 +560,8 @@ class PersonalServer:
         except (OSError, ValueError):
             evidence = {"error": "missing_session_evidence"}
         with self.lock:
-            return self.trials[self.by_target[target]].evaluate(result, evidence)
+            evaluation = self.trials[self.by_target[target]].evaluate(result, evidence)
+        return {**evaluation, "holds": hold_metrics(evidence) if target == "kitsune" else None}
 
     def __exit__(self, *args):
         self.http.shutdown()
@@ -628,6 +630,8 @@ def aggregate_results(pairs: list[dict]) -> dict:
             "runs_missing_allowlisted_tools": sum(bool(r.get("tool_surface", {}).get("missing")) for r in runs),
             "runs_without_allowlisted_tools": sum(r.get("tool_surface", {}).get("no_allowlisted_tools") is True for r in runs),
             "missing_allowlisted_tools": sorted({t for r in runs for t in r.get("tool_surface", {}).get("missing", [])})}
+        if target == "kitsune":  # every run, scorable or not (holds.py)
+            totals[target]["holds"] = aggregate_holds([r.get("benchmark_evaluation", {}).get("holds") for r in runs])
     return totals
 
 
