@@ -172,17 +172,18 @@ turn `--elicitation` decides:
   `browser_ask_user` prompts are still declined, because no user does what they ask.
 
 Playwright never elicits, so the policy changes only Kitsune runs. External does not
-use the relay and has no `--elicitation`; an accept suite still runs it, unchanged. Each run's session evidence records
-`elicitation_policy` and every prompt in `elicitations`. Plan output, pair manifests
-(`experiment.elicitation`), per-pair and track summaries, and `suite-manifest.json`
-record the policy. `scripts/run-full-suite.py --elicitation accept` passes it to every
+use the relay and has no `--elicitation`; an accept suite still runs it, unchanged.
+Each run's session evidence records `elicitation_policy` and every prompt in
+`elicitations`. Plan output, pair manifests (`experiment.elicitation`), per-pair and
+track summaries, and `suite-manifest.json` record the policy. `scripts/run-full-suite.py --elicitation accept` passes it to every
 personal, gallery and coexistence entry.
 
 **Results across policies are not comparable.** Do not compare token ratios between
 a decline and an accept suite. Do not compare either with a cohort from before
 kitsune#364, which held nothing, without saying so. `scripts/analyze-release.py`
-shows each suite's policy and warns when `--compare` mixes policies or compares
-with a suite that recorded none (suites before #59).
+shows each suite's policy: from `suite-manifest.json`, else (suites before #59) from
+a pair's `experiment.elicitation` or a Kitsune run's session evidence. It warns when
+`--compare` mixes policies or compares with a suite that recorded none.
 
 ```sh
 # Authorized model execution only: the accept arm of a lite suite, beside a decline suite on the same tag.

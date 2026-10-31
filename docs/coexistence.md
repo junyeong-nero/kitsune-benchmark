@@ -222,6 +222,9 @@ one process and in the attempt's order (`--targets playwright,kitsune` for AB, t
 | `coexistence-typing-v0..2` | `coexistence --task co-typing-01 --variant N` | 6 |
 | `coexistence-protect` | `coexistence --all-personal --variant 0 --protect-user-tabs --targets kitsune` | 28 |
 
+Since #59 the driver adds `--elicitation decline` (or the suite's `--elicitation accept`) to each
+command above. Decline is the default, so a command without the flag runs the same plan.
+
 The protection arm runs after the default pairs, on the same Kitsune revision.
 
 **Main verdicts.**
@@ -259,6 +262,10 @@ A failure caused by a system refusal counts as the arm's design cost, not as a K
   - sampler and typist failures fail closed.
 - A Kitsune version comparison on this track needs both versions rerun on the frozen tag, with
   the same model, harness, variants and attempt/order plan.
+- The relay's elicitation policy (`--elicitation`, default `decline`) is part of the run: it
+  decides how Kitsune's approval prompts are answered during the agent's turn (see
+  [running](running.md#elicitation-policy-kitsunes-approval-prompts)). Accept-arm entries are
+  reported separately and never pooled with decline ones.
 
 ## Running
 

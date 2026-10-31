@@ -9,7 +9,7 @@ Kitsune/Playwright totals over units both targets solved. With --compare, the sa
 the two suites share, so a lite run can be compared with the matching units of a full run.
 
 Each suite's elicitation policy (how the relay answered Kitsune's approval prompts) is read from its
-suite-manifest.json. Ratios under different policies, or against a suite that recorded none, are not comparable:
+suite-manifest.json, else from what its pairs recorded (summary, pair manifest, session evidence). Ratios under different policies, or against a suite that recorded none, are not comparable:
 --compare still computes them and the report warns.
 """
 from __future__ import annotations
@@ -54,13 +54,49 @@ def load(suite_dir: str | Path) -> dict:
     return units
 
 
-def elicitation_policy(suite_dir: str | Path) -> str | None:
-    """The suite manifest's elicitation policy; None when it recorded none (suites before #59)."""
+def pair_policy(pair: dict) -> str | None:
+    """A pair's elicitation policy: its summary's, else its manifest experiment's, else a run's session evidence."""
+    if pair.get("elicitation") or not pair.get("pair_dir"):
+        return pair.get("elicitation")
+    folder = Path(pair["pair_dir"])
+    try:
+        policy = json.loads((folder / "pair-manifest.json").read_text()).get("experiment", {}).get("elicitation")
+    except (OSError, ValueError, AttributeError):
+        policy = None
+    for evidence in [] if policy else sorted(folder.glob("*-session-evidence.json")):
+        try:
+            policy = json.loads(evidence.read_text()).get("elicitation_policy")
+        except (OSError, ValueError, AttributeError):
+            continue
+        if policy:
+            break
+    return policy
+
+
+def elicitation_policy(suite_dir: str | Path) -> tuple[str | None, str | None]:
+    """(policy, source). The suite manifest's policy; for suites before #59, the policy its pairs recorded (#55's
+    relay writes elicitation_policy into session evidence), "mixed" if they differ; else (None, None)."""
     try:
         manifest = json.loads((Path(suite_dir) / "suite-manifest.json").read_text())
     except (OSError, ValueError):
-        return None
-    return manifest.get("elicitation") if isinstance(manifest, dict) else None
+        manifest = None
+    if isinstance(manifest, dict) and manifest.get("elicitation"):
+        return manifest["elicitation"], "suite-manifest"
+    policies = set()
+    try:
+        lines = (Path(suite_dir) / "suite-log.jsonl").read_text().splitlines()
+    except OSError:
+        lines = []
+    for line in lines:
+        path = json.loads(line).get("suite_summary_path")
+        try:
+            summary = json.loads(Path(path).read_text()) if path else {}
+        except (OSError, ValueError):
+            continue
+        policies |= {pair_policy(pair) for pair in summary.get("pairs", [])} - {None}
+    if not policies:
+        return None, None
+    return (policies.pop() if len(policies) == 1 else "mixed"), "pair records"
 
 
 def policy_warning(now: str | None, then: str | None) -> str | None:
@@ -68,9 +104,13 @@ def policy_warning(now: str | None, then: str | None) -> str | None:
         return (f"elicitation policy {now or 'none recorded'} now, {then or 'none recorded'} then: a suite without a "
                 "recorded policy may predate the relay's answers (#55) or Kitsune's holds (kitsune#364), so its "
                 "ratios are not comparable")
-    if now != then:
+    if now != then or now == "mixed":
         return f"elicitation policy {now} now, {then} then: ratios under different policies are not comparable"
     return None
+
+
+def policy_label(policy: str | None, source: str | None) -> str:
+    return "none recorded" if policy is None else policy if source == "suite-manifest" else f"{policy} (from {source})"
 
 
 def tool_calls(run: dict) -> list[tuple[str, dict, str, bool]]:
@@ -234,14 +274,15 @@ def behaviour(units: dict) -> dict:
 
 def review(suite_dir, compare=None, threshold=1.10) -> dict:
     units = load(suite_dir)
-    report = {"suite": str(suite_dir), "elicitation": elicitation_policy(suite_dir), "audit": audit(units),
+    policy, source = elicitation_policy(suite_dir)
+    report = {"suite": str(suite_dir), "elicitation": policy, "elicitation_source": source, "audit": audit(units),
               "outcomes": outcomes(units), "ratios": ratios(units),
               "outliers": outliers(units, threshold), "behaviour": behaviour(units)}
     if compare:
         old = load(compare)
         shared = set(units) & set(old)
-        then = elicitation_policy(compare)
-        report["compare"] = {"suite": str(compare), "elicitation": then,
+        then, then_source = elicitation_policy(compare)
+        report["compare"] = {"suite": str(compare), "elicitation": then, "elicitation_source": then_source,
                              "warning": policy_warning(report["elicitation"], then), "shared_units": len(shared),
                              "ratios_now": ratios(units, shared), "ratios_then": ratios(old, shared)}
     return report
@@ -251,7 +292,7 @@ def markdown(report: dict, threshold: float) -> str:
     a = report["audit"]
     lines = [f"# Release review: `{report['suite']}`", "",
              "## Audit", "",
-             f"- Elicitation policy: {report['elicitation'] or 'none recorded'}",
+             f"- Elicitation policy: {policy_label(report['elicitation'], report['elicitation_source'])}",
              f"- Runs: {a.get('runs', 0)}; scorable {a.get('scorable', 0)}; "
              + ", ".join(f"{k.split(':', 1)[1]} {v}" for k, v in a.items() if k.startswith("status:")),
              f"- Audit violations {a.get('violations', 0)}, harness errors {a.get('harness_errors', 0)}, runs missing "
@@ -271,8 +312,8 @@ def markdown(report: dict, threshold: float) -> str:
     if "compare" in report:
         c = report["compare"]
         lines += ["", f"## Compared with `{c['suite']}` on {c['shared_units']} shared units", "",
-                  f"Elicitation policy: {report['elicitation'] or 'none recorded'} now, "
-                  f"{c['elicitation'] or 'none recorded'} then.", ""]
+                  f"Elicitation policy: {policy_label(report['elicitation'], report['elicitation_source'])} now, "
+                  f"{policy_label(c['elicitation'], c['elicitation_source'])} then.", ""]
         if c["warning"]:
             lines += [f"> **Warning:** {c['warning']}.", ""]
         lines += ["| Group | Input then | Input now | Calls then | Calls now |", "| --- | ---: | ---: | ---: | ---: |"]

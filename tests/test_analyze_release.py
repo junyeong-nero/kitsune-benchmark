@@ -101,6 +101,44 @@ class ReleaseReviewTests(unittest.TestCase):
                         self.assertIn(warned, report["compare"]["warning"])
                         self.assertIn("> **Warning:** elicitation policy", text)
 
+    def test_policy_without_suite_manifest_falls_back_to_pair_records(self):
+        # Suites before #59 have no policy in suite-manifest.json, or no manifest at all; #55's relay still wrote
+        # elicitation_policy into each run's session evidence.
+        with tempfile.TemporaryDirectory() as empty:
+            self.assertEqual(release.elicitation_policy(empty), (None, None), "no manifest, no suite log")
+        with tempfile.TemporaryDirectory() as folder:
+            self.suite(folder)
+            self.assertFalse((Path(folder) / "suite-manifest.json").exists())
+            report = release.review(folder)
+            self.assertEqual((report["elicitation"], report["elicitation_source"]), (None, None))
+            self.assertIn("- Elicitation policy: none recorded", release.markdown(report, 1.10))
+            summary = Path(folder) / "personal-v0.json"
+            pairs = json.loads(summary.read_text())["pairs"]
+            for i, pair in enumerate(pairs):
+                pair["pair_dir"] = str(Path(folder) / f"pair-{i}")
+                Path(pair["pair_dir"]).mkdir()
+            (Path(pairs[0]["pair_dir"]) / "kitsune-session-evidence.json").write_text(
+                json.dumps({"elicitation_policy": "decline"}))
+            (Path(pairs[1]["pair_dir"]) / "pair-manifest.json").write_text(json.dumps({"experiment": {}}))
+            (Path(pairs[1]["pair_dir"]) / "playwright-session-evidence.json").write_text("not json")
+            (Path(pairs[1]["pair_dir"]) / "kitsune-session-evidence.json").write_text(
+                json.dumps({"elicitation_policy": "decline"}))
+            summary.write_text(json.dumps({"pairs": pairs}))
+            report = release.review(folder)
+            self.assertEqual((report["elicitation"], report["elicitation_source"]), ("decline", "pair records"))
+            self.assertIn("- Elicitation policy: decline (from pair records)", release.markdown(report, 1.10))
+            # A pair manifest's experiment, then a pair summary's own field, come before session evidence.
+            (Path(pairs[1]["pair_dir"]) / "pair-manifest.json").write_text(
+                json.dumps({"experiment": {"elicitation": "accept"}}))
+            self.assertEqual(release.elicitation_policy(folder), ("mixed", "pair records"))
+            pairs[0]["elicitation"] = "accept"
+            summary.write_text(json.dumps({"pairs": pairs}))
+            self.assertEqual(release.elicitation_policy(folder), ("accept", "pair records"))
+            # The manifest's policy wins, and mixed pair records always warn.
+            (Path(folder) / "suite-manifest.json").write_text(json.dumps({"elicitation": "decline"}))
+            self.assertEqual(release.elicitation_policy(folder), ("decline", "suite-manifest"))
+            self.assertIn("different policies", release.policy_warning("mixed", "mixed"))
+
 
 if __name__ == "__main__":
     unittest.main()
