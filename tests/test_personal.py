@@ -18,7 +18,7 @@ from urllib.request import HTTPCookieProcessor, ProxyHandler, Request, build_ope
 from kitsune_benchmark.__main__ import main
 from kitsune_benchmark.personal import (PROTECTED_NOTE, PersonalServer, aggregate_results, catalog, config,
                                        run_personal, seeded_tab_custody, selected_tasks)
-from kitsune_benchmark.personal_session import NativeSession, tabs_from_result
+from kitsune_benchmark.personal_session import NativeSession, result_json, tabs_from_result
 from kitsune_benchmark.smoke import ROOT, await_bridge, copy_extension, private_ports
 from kitsune_benchmark.adapter import resolve, terminate_group
 from kitsune_benchmark.runtime import codex_environment
@@ -550,6 +550,21 @@ for line in sys.stdin:
                 self.assertRaises(ValueError):
             session.prepare()
         self.assertEqual(session.evidence["native_error"]["code"], "timeout")
+        # Kitsune main without elicitation holds navigating the user's tab (kitsune#371): setup repeats it with the token.
+        held = {"result": {"isError": True, "content": [{"type": "text", "text": json.dumps(
+            {"code": "needs_user", "state": {"reason": "approval", "detail": "user_tab", "confirmToken": "t1"}})}]}}
+        session, calls = NativeSession(config), []
+        def request(method, params):
+            calls.append(params["arguments"])
+            return held if len(calls) in (1, 3) else ok
+        with patch.object(session, "request", side_effect=request), \
+                patch.object(session, "wait_inventory", side_effect=[[{"id": 7, "url": "about:blank", "active": True}],
+                                                                     AssertionError("stop")]), \
+                self.assertRaises(AssertionError):
+            session.prepare()
+        self.assertEqual(calls[:4], [{"url": config["bootstrap_url"]}, {"url": config["bootstrap_url"], "confirm_token": "t1"},
+                                     {"url": config["urls"][0]}, {"url": config["urls"][0], "confirm_token": "t1"}])
+        self.assertEqual(session.evidence["setup_navigated_initial_tab"], {"via": ["confirm_token", "confirm_token"]})
 
     def test_agent_task_tab_setup_runs_the_task_in_a_harness_opened_tab(self):
         # task_tab "agent" (gallery, kitsune#373): Kitsune's core tools, as main f57793a serves them. new opens an
@@ -573,7 +588,10 @@ for line in sys.stdin:
             elif args["action"] == "close":
                 tab = tabs[args["index"]]
                 if not tab["owned"] and args.get("confirm_token") != "t1":
-                    return refusal({"code": "user_tab", "state": {"tabId": tab["id"], "confirmToken": "t1"}})
+                    # Kitsune #376 without elicitation names the hold needs_user, with the earlier code as its detail.
+                    code = state.get("code", "user_tab")
+                    return refusal({"code": code, "state": {"tabId": tab["id"], "confirmToken": "t1",
+                                                            **({"detail": "user_tab"} if code == "needs_user" else {})}})
                 tabs.remove(tab)
                 if tab["shown"]:
                     tabs[min(args["index"], len(tabs) - 1)]["shown"] = True
@@ -602,14 +620,15 @@ for line in sys.stdin:
             return {"result": {"content": [{"type": "text", "text": "ok"}]}}
 
         base = "http://127.0.0.1:1/t/x"
-        for target, native, initial, via, owned in (
-                ("kitsune", kitsune, {"id": 1, "url": "about:blank", "owned": False, "shown": True}, "confirm_token", True),
-                ("playwright", playwright, {"url": "about:blank"}, "close", None)):
-            with self.subTest(target=target), tempfile.TemporaryDirectory() as folder:
+        for target, native, initial, via, owned, code in (
+                ("kitsune", kitsune, {"id": 1, "url": "about:blank", "owned": False, "shown": True}, "confirm_token", True, "user_tab"),
+                ("kitsune", kitsune, {"id": 1, "url": "about:blank", "owned": False, "shown": True}, "confirm_token", True, "needs_user"),
+                ("playwright", playwright, {"url": "about:blank"}, "close", None, None)):
+            with self.subTest(target=target, code=code), tempfile.TemporaryDirectory() as folder:
                 config = {"target": target, "bootstrap_url": base + "/start", "urls": [base + "/gallery", base + "/notes"],
                           "active_index": 0, "task_tab": "agent", "evidence_path": folder + "/evidence.json"}
                 session = NativeSession(config)
-                tabs, state, calls = [initial], {"current": None if target == "kitsune" else 0}, []
+                tabs, state, calls = [initial], {"current": None if target == "kitsune" else 0, "code": code}, []
                 def request(method, params, native=native, tabs=tabs, state=state, calls=calls):
                     calls.append((params["name"], params["arguments"]))
                     return native(tabs, state, params["name"], params["arguments"])
@@ -650,6 +669,140 @@ for line in sys.stdin:
         with self.assertRaisesRegex(ValueError, "not shown"):
             session.check_agent_task_tab(tabs, base + "/gallery")
         self.assertEqual((session.evidence["setup_task_tab_owned"], session.evidence["setup_task_tab_shown"]), (True, False))
+
+    def test_relay_answers_kitsune_elicitation_as_the_user_in_setup_and_by_policy_for_the_agent(self):
+        # Kitsune #376 asks for approvals through MCP elicitation when the client declares it (server.py
+        # APPROVAL_SCHEMA, ASK_USER_SCHEMA). The relay declares it and answers every prompt itself: the harness's
+        # close of the user's blank tab is approved, the agent's holds are answered by the session's policy.
+        fake = '''import json, sys
+APPROVAL = {"type": "object", "required": ["decision"], "properties": {
+    "decision": {"type": "string", "title": "Decision", "enum": ["Approve", "Decline"]}}}
+ASK = {"type": "object", "required": ["answer"], "properties": {
+    "answer": {"type": "string", "title": "Answer", "enum": ["Done", "Can't"]}}}
+tabs = [{"url": "about:blank", "owned": False, "active": True}]
+current, elicits, asked = None, False, 0
+def reply(id, result):
+    print(json.dumps({"jsonrpc": "2.0", "id": id, "result": result}), flush=True)
+def text(value, error=False):
+    return {"content": [{"type": "text", "text": json.dumps(value)}], **({"isError": True} if error else {})}
+def elicit(message, schema):
+    global asked
+    asked += 1
+    print(json.dumps({"jsonrpc": "2.0", "id": "elicit-" + str(asked), "method": "elicitation/create",
+                      "params": {"mode": "form", "message": message, "requestedSchema": schema}}), flush=True)
+    answer = json.loads(sys.stdin.readline())
+    assert answer["id"] == "elicit-" + str(asked) and "result" in answer, answer
+    return answer["result"]
+def held(detail, decision, extra=None):
+    return text({"error": "Nothing ran", "code": "needs_user", "retryable": False, "state": {
+        "reason": extra or "approval", "detail": detail, "approval": "elicitation", "decision": decision}}, True)
+while True:
+    line = sys.stdin.readline()
+    if not line:
+        break
+    message = json.loads(line)
+    if "id" not in message:
+        continue
+    method, params = message["method"], message.get("params", {})
+    if method == "initialize":
+        elicits = "elicitation" in params["capabilities"]
+        reply(message["id"], {"protocolVersion": "2025-06-18", "capabilities": {"tools": {}},
+                              "serverInfo": {"name": "fake-kitsune", "version": "1"}})
+        continue
+    if method == "tools/list":
+        reply(message["id"], {"tools": [{"name": "browser_click", "inputSchema": {"type": "object"}}]})
+        continue
+    name, args = params["name"], params["arguments"]
+    result = text({"ok": True})
+    if name == "browser_navigate":
+        tabs[current]["url"] = args["url"]
+    elif name == "browser_click":
+        prompt = "Allow this action?\\nTool: browser_click\\nTarget: e5\\nHeld because ask-before-act: it submits a payment.\\nApprove runs this action once; Decline leaves it undone."
+        answer = elicit(prompt, APPROVAL) if elicits else {"action": "cancel"}
+        if answer != {"action": "accept", "content": {"decision": "Approve"}}:
+            result = held("confirmation_required", "declined" if answer["action"] == "decline" else "cancelled")
+    elif name == "browser_ask_user":
+        answer = elicit("The agent asks: Sign in, please.", ASK)
+        if answer.get("content") != {"answer": "Done"}:
+            result = held("sign_in", "declined", "agent_request")
+    elif args["action"] == "new":
+        tabs.append({"url": args["url"], "owned": True, "active": False})
+        current = len(tabs) - 1
+    elif args["action"] == "select":
+        current = args["index"]
+    elif args["action"] == "close":
+        tab = tabs[args["index"]]
+        if not tab["owned"]:
+            prompt = "Allow the agent to close a tab it did not open?\\nTool: browser_tabs\\nHeld because the agent did not open this tab.\\nApprove runs this action once; Decline leaves it undone."
+            if not elicits or elicit(prompt, APPROVAL) != {"action": "accept", "content": {"decision": "Approve"}}:
+                reply(message["id"], held("user_tab", "declined"))
+                continue
+        tabs.remove(tab)
+        tabs[0]["active"] = True
+        current = 0 if current is None or current >= len(tabs) else current
+    elif args["action"] == "list":
+        result = text({"tabs": [{"index": i, "title": "", "url": t["url"], "owned": t["owned"],
+                                 **({"current": True} if i == current else {}),
+                                 **({"active": True} if t["active"] else {})} for i, t in enumerate(tabs)]})
+    reply(message["id"], result)
+'''
+        for policy, click_error in ((None, True), ("decline", True), ("accept", False)):
+            with self.subTest(policy=policy), tempfile.TemporaryDirectory() as folder:
+                root = Path(folder)
+                (root / "native.py").write_text(fake)
+                settings = {"target": "kitsune", "upstream": [sys.executable, str(root / "native.py")],
+                    "bootstrap_url": "http://local/t/start", "urls": ["http://local/t/gallery", "http://local/t/notes"],
+                    "active_index": 0, "task_tab": "agent", "evidence_path": str(root / "evidence.json"),
+                    "origin": "http://local", "diagnostics_path": str(root / "rpc.jsonl"),
+                    "metadata_path": str(root / "metadata.json"), **({"elicitation": policy} if policy else {})}
+                (root / "config.json").write_text(json.dumps(settings))
+                agent = NativeSession({"upstream": [sys.executable, str(ROOT / "kitsune_benchmark/personal_session.py"),
+                                                    str(root / "config.json")]})
+                try:
+                    agent.start()
+                    # The agent's client declares no elicitation; the relay does, for the server.
+                    agent.request("initialize", {"protocolVersion": "2025-06-18", "capabilities": {}})
+                    agent.send({"jsonrpc": "2.0", "method": "notifications/initialized"})
+                    agent.request("tools/list")
+                    click = agent.request("tools/call", {"name": "browser_click", "arguments": {"target": "e5"}})
+                    ask = agent.request("tools/call", {"name": "browser_ask_user", "arguments": {"reason": "sign_in"}})
+                finally:
+                    agent.close()
+                # No prompt reached the agent's client: its own session answered none.
+                self.assertEqual(agent.evidence["harness_elicitations"], [])
+                self.assertEqual(click["result"].get("isError", False), click_error)
+                self.assertTrue(ask["result"]["isError"], "no user does what browser_ask_user asks")
+                evidence = json.loads((root / "evidence.json").read_text())
+                self.assertTrue(evidence["setup_complete"])
+                self.assertEqual(evidence["setup_closed_initial_blank"], {"via": "elicitation"})
+                self.assertEqual([(e["tool"], e["reason"], e["detail"], e["action"]) for e in evidence["harness_elicitations"]],
+                                 [("browser_tabs", "approval", "user_tab", "accept")])
+                action = policy or "decline"
+                self.assertEqual(evidence["elicitation_policy"], action)
+                self.assertEqual([(e["tool"], e["reason"], e["detail"], e["action"], e.get("decision"))
+                                  for e in evidence["elicitations"]],
+                                 [("browser_click", "approval", "confirmation_required", action,
+                                   "declined" if click_error else None),
+                                  ("browser_ask_user", "agent_request", "sign_in", "decline", "declined")])
+                self.assertIn("Held because ask-before-act", evidence["elicitations"][0]["message"])
+                metadata = json.loads((root / "metadata.json").read_text())
+                self.assertEqual(metadata["client_capabilities"], {})
+                records = [json.loads(line) for line in (root / "rpc.jsonl").read_text().splitlines()]
+                self.assertEqual([(r["role"], r["action"]) for r in records if r["kind"] == "elicitation_answered"],
+                                 [("harness", "accept"), ("agent", action), ("agent", "decline")])
+
+    def test_elicitation_policy_is_decline_or_accept(self):
+        self.assertEqual(NativeSession({}).elicitation, "decline")
+        self.assertEqual(NativeSession({"elicitation": "accept"}).elicitation, "accept")
+        with self.assertRaisesRegex(ValueError, "elicitation policy"):
+            NativeSession({"elicitation": "approve"})
+        # A prompt that is neither Kitsune's approval nor browser_ask_user's is declined, also under accept.
+        session = NativeSession({"elicitation": "accept"})
+        answer = session.answer_elicitation({"message": "Your name?", "requestedSchema": {
+            "type": "object", "properties": {"name": {"type": "string"}}}}, "agent", "browser_click")
+        self.assertEqual(answer, {"action": "decline"})
+        self.assertEqual(session.evidence["elicitations"], [{"tool": "browser_click", "reason": None, "detail": None,
+                                                             "action": "decline", "message": "Your name?"}])
 
     def test_native_tool_failure_omits_sensitive_and_malformed_fields(self):
         responses = [
@@ -811,21 +964,40 @@ def agent_tool(session, name: str, arguments: dict) -> dict:
 @unittest.skipUnless(os.environ.get("PERSONAL_KITSUNE_TEST") == "1", "opt-in isolated Kitsune/Firefox MCP test; no model calls")
 class NativeKitsuneTests(unittest.TestCase):
     def test_six_fixtures_seed_and_solve_via_real_kitsune_ui(self):
-        for task in selected_tasks():
-            with self.subTest(task=task["id"]), tempfile.TemporaryDirectory(prefix="pb-", dir="/tmp") as folder, PersonalServer(task, 0) as server:
+        # Initialized through the relay, as in a model run, the session declares elicitation and Kitsune main asks it
+        # to approve setup's holds; initialized directly, it declares none and setup repeats them with confirm tokens.
+        # Kitsune main also holds the scripted agent's writes on the user's viewed tab (user_viewing): the user
+        # approves them, by the relay's elicitation policy "accept" or by the agent repeating them with the token.
+        def approved_agent_tool(session, name, arguments):
+            result = agent_tool(session, name, arguments)
+            token = (result_json(result, "state") or {}).get("confirmToken")
+            return agent_tool(session, name, {**arguments, "confirm_token": token}) if isinstance(token, str) else result
+
+        for task, relayed in ((task, relayed) for task in selected_tasks() for relayed in (True, False)):
+            with self.subTest(task=task["id"], relayed=relayed), tempfile.TemporaryDirectory(prefix="pb-", dir="/tmp") as folder, PersonalServer(task, 0) as server:
                 server.begin("kitsune")
                 trial = server.trials[server.by_target["kitsune"]]
                 with isolated_kitsune(folder) as upstream:
                     settings = {"target": "kitsune", "upstream": upstream,
                         "bootstrap_url": trial.url("/start"), "urls": [trial.url(p) for p in trial.paths],
-                        "active_index": trial.active_index, "evidence_path": folder + "/evidence.json", "origin": server.origin}
+                        "active_index": trial.active_index, "evidence_path": folder + "/evidence.json", "origin": server.origin,
+                        **({"elicitation": "accept"} if relayed else {})}
                     session = NativeSession(settings)
                     try:
                         session.start()
-                        session.request("initialize", {"protocolVersion": "2024-11-05", "capabilities": {},
-                            "clientInfo": {"name": "personal-fixture-test", "version": "1"}})
-                        session.send({"jsonrpc": "2.0", "method": "notifications/initialized"})
+                        initialize = {"protocolVersion": "2024-11-05", "capabilities": {},
+                                      "clientInfo": {"name": "personal-fixture-test", "version": "1"}}
+                        if relayed:
+                            emitted = []
+                            session.forward({"jsonrpc": "2.0", "id": 0, "method": "initialize", "params": initialize}, emitted.append)
+                            self.assertNotIn("error", emitted[0])
+                            session.forward({"jsonrpc": "2.0", "method": "notifications/initialized"}, emitted.append)
+                        else:
+                            session.request("initialize", initialize)
+                            session.send({"jsonrpc": "2.0", "method": "notifications/initialized"})
                         session.prepare()
+                        self.assertLessEqual(set(session.evidence["setup_navigated_initial_tab"]["via"]),
+                                             {"call", "elicitation"} if relayed else {"call", "confirm_token"})
                         source = {"policy": "/policy/current", "orders": "/order/2"}.get(task["fixture"])
                         if source:
                             agent_tool(session, "browser_tabs", {"action": "new", "url": trial.url(source)})
@@ -837,8 +1009,8 @@ class NativeKitsuneTests(unittest.TestCase):
                         agent_tool(session, "browser_tabs", {"action": "select", "index": tab["id"]})
                         values = trial.expected if draft else {"메모": trial.expected["answer"]}
                         for label, value in values.items():
-                            agent_tool(session, "browser_type", {"target": f'input[name="{label}"]', "text": value})
-                        agent_tool(session, "browser_click", {"target": "form > button:first-of-type"})
+                            approved_agent_tool(session, "browser_type", {"target": f'input[name="{label}"]', "text": value})
+                        approved_agent_tool(session, "browser_click", {"target": "form > button:first-of-type"})
                         evaluation = trial.evaluate({"execution_status": "completed_unscored"}, session.evidence)
                         self.assertTrue(evaluation["task_success"], evaluation)
                     finally:
