@@ -17,10 +17,10 @@ def call(tool, error=False, **arguments):
             "tab_id": arguments.get("tab_id"), "url": arguments.get("url")}
 
 
-def prompt(tool, path, decision="declined", detail="user_viewing"):
+def prompt(tool, path, decision="declined", detail="user_viewing", title="Memo - "):
     action = "accept" if decision == "accepted" else "decline"
     return {"tool": tool, "reason": "approval", "detail": detail, "action": action,
-            "message": f"Allow the agent's fill in the tab you are viewing (Memo)?\nTool: {tool}\nTab: Memo - {BASE}{path}"
+            "message": f"Allow the agent's fill in the tab you are viewing (Memo)?\nTool: {tool}\nTab: {title}{BASE}{path}"
                        "\nHeld because you are viewing this tab.",
             **({} if decision == "accepted" else {"decision": decision})}
 
@@ -70,6 +70,15 @@ class HoldMetricTests(unittest.TestCase):
         self.assertEqual(metrics["holds_by_detail"]["other"]["not_asked"], 1)
         self.assertEqual((metrics["declined_writes"], metrics["redone_after_decline"]), (1, 1))
 
+    def test_an_approved_repeat_that_no_longer_matches_is_one_hold(self):
+        # Kitsune main: the approved repeat is held again, and the call returns needs_user without a decision
+        # (server.py UNMATCHED_APPROVAL_HINT). The relay marks that refusal prompted; it is the prompt's hold.
+        refusals = [{"call": 1, "tool": "browser_type", "code": "needs_user", "detail": "user_viewing", "decision": None,
+                     "prompted": True}]
+        metrics = hold_metrics(evidence(redo_steps(), [prompt("browser_type", "/memo", "accepted")], refusals))
+        self.assertEqual(metrics["holds"], 1)
+        self.assertEqual(metrics["holds_by_detail"]["user_viewing"], {"accepted": 1, "declined": 0, "cancelled": 0, "not_asked": 0})
+
     def test_redo_needs_the_same_write_succeeding_on_the_same_path_in_another_tab(self):
         refusals = [{"call": 1, "tool": "browser_type", "code": "needs_user", "detail": "user_viewing", "decision": "declined"}]
         other_page = tabs("/memo", "/notes", "/other", current=2)
@@ -87,6 +96,14 @@ class HoldMetricTests(unittest.TestCase):
         with self.subTest("names a tab"):
             steps = redo_steps()[:-1] + [(redo_steps()[-1][0], call("browser_type", tab_id=7))]
             self.assertEqual(hold_metrics(evidence(steps, [prompt("browser_type", "/memo")], refusals))["redone_after_decline"], 0)
+        with self.subTest("a navigation is never redone"):
+            # The path compared is the page a navigation starts from, not where it goes.
+            user, own = redo_steps()[0][0], redo_steps()[-1][0]
+            steps = [(user, call("browser_navigate", True, url=BASE + "/next")),
+                     (user, call("browser_tabs", action="new", url=BASE + "/memo")), (own, call("browser_navigate", url=BASE + "/next"))]
+            navigation = [{**refusals[0], "call": 0, "tool": "browser_navigate"}]
+            metrics = hold_metrics(evidence(steps, [prompt("browser_navigate", "/memo")], navigation))
+            self.assertEqual((metrics["declined_writes"], metrics["redone_after_decline"]), (1, 0))
         with self.subTest("cancelled is not declined"):
             cancelled = [{**refusals[0], "decision": "cancelled"}]
             metrics = hold_metrics(evidence(redo_steps(), [prompt("browser_type", "/memo", "cancelled")], cancelled))
@@ -100,6 +117,9 @@ class HoldMetricTests(unittest.TestCase):
         self.assertEqual((metrics["refusals_recorded"], metrics["refusals"], metrics["holds"]), (False, None, 1))
         self.assertEqual((metrics["declined_writes"], metrics["redone_after_decline"]), (1, 1))
         self.assertIsNone(hold_metrics({"error": "missing_session_evidence"}))
+        # An untitled tab's prompt line is "Tab: <url>".
+        untitled = hold_metrics(evidence(steps, [prompt("browser_type", "/memo", title="")]))
+        self.assertEqual((untitled["declined_writes"], untitled["redone_after_decline"]), (1, 1))
 
     def test_aggregate_counts_runs_and_totals(self):
         refusals = [{"call": 1, "tool": "browser_type", "code": "needs_user", "detail": "user_viewing", "decision": "declined"}]

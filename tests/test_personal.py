@@ -772,7 +772,8 @@ while True:
                 self.assertIn("Held because ask-before-act", evidence["elicitations"][0]["message"])
                 # The refusal the agent got for its declined click (#58); browser_ask_user's is not a hold.
                 self.assertEqual(evidence["held_refusals"], [{"call": 0, "tool": "browser_click", "code": "needs_user",
-                                  "detail": "confirmation_required", "decision": "declined"}] if click_error else [])
+                                  "detail": "confirmation_required", "decision": "declined",
+                                  "prompted": True}] if click_error else [])
                 metadata = json.loads((root / "metadata.json").read_text())
                 self.assertEqual(metadata["client_capabilities"], {})
                 records = [json.loads(line) for line in (root / "rpc.jsonl").read_text().splitlines()]

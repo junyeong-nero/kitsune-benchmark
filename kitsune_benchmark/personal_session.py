@@ -445,8 +445,9 @@ class NativeSession:
             self.save()
         if method == "tools/call":
             refusal = held_refusal(result.get("result", {}))
-            if refusal:  # what the agent was told, by its call's position in tab_calls
-                self.evidence["held_refusals"].append({"call": len(self.evidence["tab_calls"]), "tool": name, **refusal})
+            if refusal:  # what the agent was told, by its call's position in tab_calls, and whether the call prompted
+                self.evidence["held_refusals"].append({"call": len(self.evidence["tab_calls"]), "tool": name, **refusal,
+                                                       "prompted": len(self.evidence["elicitations"]) > asked})
             # Inventory isn't sent to the model. Explicit separate harness counts
             # prevent attributing these calls to the agent's tool-use efficiency.
             self.evidence["snapshots"].append(self.inventory())

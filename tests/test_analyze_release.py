@@ -88,6 +88,8 @@ class ReleaseReviewTests(unittest.TestCase):
             self.assertEqual(report["holds"]["personal-v0"]["runs"], 0, "no session evidence, no hold record")
             self.assertIn("| coexistence-protect | 1 | 1 | 1 | 1 / 0 / 0 | 0 / 1 / 0 / 0 | 1 | 1 |", text)
             self.assertNotIn("| personal-v0 | 0 |", text)
+            (Path(folder) / "cp/kitsune-session-evidence.json").write_text('{"tab_calls": [')
+            self.assertEqual(release.review(folder)["holds"]["coexistence-protect"]["runs"], 0, "truncated evidence")
             compared = release.review(folder, compare=folder)
             self.assertEqual(compared["compare"]["shared_units"], 4)
 

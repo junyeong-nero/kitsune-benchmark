@@ -219,8 +219,11 @@ def holds(units: dict) -> dict:
     for (entry, _), runs in units.items():
         if "kitsune" in runs:
             pair_dir = runs["kitsune"].get("pair_dir")
-            path = Path(pair_dir) / "kitsune-session-evidence.json" if pair_dir else None
-            metrics[entry].append(hold_metrics(json.loads(path.read_text())) if path and path.is_file() else None)
+            try:  # missing or truncated evidence: no hold record for the run
+                evidence = json.loads((Path(pair_dir) / "kitsune-session-evidence.json").read_text()) if pair_dir else None
+            except (OSError, ValueError):
+                evidence = None
+            metrics[entry].append(hold_metrics(evidence) if isinstance(evidence, dict) else None)
     return {entry: aggregate_holds(values) for entry, values in metrics.items()}
 
 

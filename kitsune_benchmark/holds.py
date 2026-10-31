@@ -1,14 +1,17 @@
 """Kitsune's holds in a run, from session evidence: calls it kept for the user's approval (kitsune#364, #371, #376).
 
 A hold is an approval prompt the relay answered (`elicitations` with reason `approval`), or a refusal the agent got
-without a prompt (`held_refusals` without a decision: needs_user with state.reason approval, or Kitsune 0.7's
-`user_tab`). A declined prompt also returns a refusal; it is counted once, as the prompt. Evidence from before
-#58 has no `held_refusals`, so only its prompts are counted (`refusals_recorded: false`).
+for a call that prompted nothing (`held_refusals` without a decision and not `prompted`: needs_user with state.reason
+approval, or Kitsune 0.7's `user_tab`). A refusal after a prompt (declined, or an approved repeat that no longer
+matched) is counted once, as the prompt. Evidence from before #58 has no `held_refusals`, so only its prompts are
+counted (`refusals_recorded: false`).
 
 A declined write is redone (`redone_after_decline`) when, later in the run, the agent makes a call of the same tool
 (and browser_tabs action) that succeeds, naming no tab, on its current tab, which is another tab than the declined
-call's and shows the same URL path. Tabs are told apart by the relay's inventory (Kitsune's index), so the search
-stops at the first close the agent attempts afterwards. No model or browser calls.
+call's and shows the same URL path. Targets are not recorded, so a click on another element of that page counts.
+Tabs are told apart by the relay's inventory (Kitsune's index), so the search stops at the first close the agent
+attempts afterwards. Navigations are never redone: the path compared is the page they start from, not their
+destination. No model or browser calls.
 """
 from __future__ import annotations
 
@@ -16,6 +19,7 @@ from urllib.parse import urlsplit
 
 DETAILS = ("user_viewing", "user_tab", "other")
 DECISIONS = ("accepted", "declined", "cancelled", "not_asked")
+NAVIGATIONS = ("browser_navigate", "browser_navigate_back", "browser_forward", "browser_reload_tab")
 
 
 def detail_of(record: dict) -> str:
@@ -40,9 +44,10 @@ def path_of(url) -> str | None:
 
 
 def prompt_tab_path(prompt: dict) -> str | None:
-    """The URL path of the prompt's "Tab: <title> - <url>" line."""
-    line = next((line for line in str(prompt.get("message", "")).splitlines() if line.startswith("Tab: ")), "")
-    return path_of(line.rsplit(" - ", 1)[-1]) if " - " in line else None
+    """The URL path of the prompt's "Tab: <title> - <url>" line; an untitled tab's reads "Tab: <url>"."""
+    line = next((line for line in str(prompt.get("message", "")).splitlines() if line.startswith("Tab: ")), None)
+    url = line[len("Tab: "):].rsplit(" - ", 1)[-1] if line else None
+    return path_of(url) if url and urlsplit(url).scheme else None
 
 
 def declined_calls(evidence: dict) -> list[int]:
@@ -75,7 +80,8 @@ def closes(call: dict) -> bool:
 
 def redone(evidence: dict, k: int) -> bool:
     calls, snapshots = evidence.get("tab_calls") or [], evidence.get("snapshots") or []
-    if len(calls) != len(snapshots) - 1 or type(k) is not int or not 0 <= k < len(calls) or names_tab(calls[k]):
+    if (len(calls) != len(snapshots) - 1 or type(k) is not int or not 0 <= k < len(calls) or names_tab(calls[k])
+            or calls[k].get("tool") in NAVIGATIONS):
         return False
     held = current_tab(snapshots[k])
     if held is None:
@@ -102,7 +108,7 @@ def hold_metrics(evidence: dict) -> dict | None:
     holds = [(detail_of(p), prompt_decision(p)) for p in evidence.get("elicitations") or []
              if p.get("reason") == "approval"]
     refusals = evidence.get("held_refusals")
-    holds += [(detail_of(r), "not_asked") for r in refusals or [] if not r.get("decision")]
+    holds += [(detail_of(r), "not_asked") for r in refusals or [] if not r.get("decision") and not r.get("prompted")]
     by_detail = empty_by_detail()
     for detail, decision in holds:
         by_detail[detail][decision] += 1
