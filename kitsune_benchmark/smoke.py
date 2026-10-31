@@ -123,6 +123,17 @@ def session_setup(evidence_path: Path) -> bool | None:
     return False if evidence.get("error") else None
 
 
+def relay_evidence_path(server: Server) -> Path:
+    """The evidence file a session relay records its setup in, from the relay config prepare_server wrote (#56)."""
+    try:
+        path = json.loads(Path(server.args[-1]).read_text()).get("evidence_path")
+    except (IndexError, OSError, ValueError, AttributeError) as error:
+        raise ValueError("Session relay config not readable; setup failures could not be detected.") from error
+    if not isinstance(path, str) or not path:
+        raise ValueError("Session relay config lacks evidence_path; setup failures could not be detected.")
+    return Path(path)
+
+
 def rewrite_json(path: Path, value: dict) -> None:
     """Replace a private JSON record written earlier with write_json."""
     temporary = path.with_name(path.name + ".tmp")
@@ -312,13 +323,13 @@ def run_pair(*, execute: bool = False, kitsune_project: str | None = None,
                 resources.set_phase("task_" + target)
                 external = (ResourceRoot(bridge.pid, "bridge", "kitsune", True),
                             ResourceRoot(browser.pid, "browser_launcher", "kitsune", True)) if target == "kitsune" else ()
-                # Session relays (prepare_server) set up lazily and record it in this evidence file.
-                evidence = pair_dir / (target + "-session-evidence.json")
+                # Session relays (prepare_server) set up lazily and record it in their evidence file.
+                evidence = relay_evidence_path(server) if prepare_server is not None else None
                 result = run(server, task, model, executable=path, timeout=timeout,
                              output_root=str(pair_dir / "runs"), confirm_isolated_browser=True,
                              resource_roots=external, resource_observer=resources, viewport=viewports[target],
                              harness=harness, effort=effort, max_budget_usd=max_budget_usd,
-                             session_setup=partial(session_setup, evidence) if prepare_server is not None else None)
+                             session_setup=partial(session_setup, evidence) if evidence is not None else None)
                 if result["execution_status"] == "setup_failed":
                     print(f"warning: {target} session setup failed; the harness was stopped before the agent started",
                           file=sys.stderr)

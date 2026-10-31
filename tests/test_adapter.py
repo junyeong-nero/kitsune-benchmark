@@ -1,3 +1,5 @@
+from contextlib import redirect_stderr
+import io
 import json
 import os
 from pathlib import Path
@@ -8,7 +10,8 @@ import tomllib
 import unittest
 from unittest.mock import Mock, patch
 
-from kitsune_benchmark.adapter import await_harness, command, plan, run, settings, preflight, terminate_group
+from kitsune_benchmark.adapter import (await_harness, command, model_request_observed, plan, run, settings,
+                                       preflight, terminate_group)
 from kitsune_benchmark.audit import audit_events
 from kitsune_benchmark.viewport import viewport_record
 from kitsune_benchmark.runtime import API_ENV, codex_environment, find_codex
@@ -26,9 +29,11 @@ EVENTS = [
     {"type": "turn.completed", "usage": {"input_tokens": 20, "cached_input_tokens": 5, "output_tokens": 4}},
 ]
 HELP = "--json --output-last-message --skip-git-repo-check --ignore-user-config --ignore-rules --ephemeral"
-# A native MCP server for the personal relay: its setup navigate is refused (as Kitsune's needs_user) with "fail".
-FAKE_NATIVE = '''import json, sys
+# A native MCP server for the personal relay that writes its pid to argv[2]: its setup navigate is refused (as
+# Kitsune's needs_user) with "fail".
+FAKE_NATIVE = '''import json, os, pathlib, sys
 fail = sys.argv[1] == "fail"
+pathlib.Path(sys.argv[2]).write_text(str(os.getpid()))
 urls = ["about:blank"]
 active = 0
 for line in sys.stdin:
@@ -220,10 +225,12 @@ sys.exit(1 if {mode!r}=='error' else 0)
         status = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True).stdout.strip()
         self.assertTrue(not status or status.startswith("Z"), status)
 
-    def fake_mcp_client(self, relay_argv: list[str]) -> str:
+    def fake_mcp_client(self, relay_argv: list[str], impatient: bool = False) -> str:
         """A Codex stand-in that starts the relay as its MCP server and, like a client that awaits its tool list,
-        makes its "model request" (model.json) only once tools/list is answered."""
+        makes its "model request" (model.json) only once tools/list is answered. An impatient client makes its
+        request (and reports usage) first, as one that timed tools/list out would."""
         path = self.root / "codex"
+        early = "print(" + repr("\n".join(json.dumps(e) for e in EVENTS)) + ", flush=True)" if impatient else ""
         path.write_text(f'''#!{sys.executable}
 import json, pathlib, subprocess, sys
 args = sys.argv[1:]
@@ -234,6 +241,7 @@ if args == ['login', 'status']:
 if args == ['exec', '--help']:
     print({HELP!r}); sys.exit(0)
 sys.stdin.read()
+{early}
 relay = subprocess.Popen({relay_argv!r}, stdin=subprocess.PIPE, stdout=subprocess.PIPE)
 pathlib.Path({str(self.root / "relay.pid")!r}).write_text(str(relay.pid))
 def send(message):
@@ -254,26 +262,29 @@ pathlib.Path(args[args.index('--output-last-message') + 1]).write_text('Test ans
     def test_failed_session_setup_stops_the_harness_before_its_model_request(self):
         for mode, expected in (("fail", "setup_failed"), ("ok", "completed_unscored")):
             with self.subTest(mode=mode):
-                for name in ("evidence.json", "model.json", "relay.pid"):
+                for name in ("evidence.json", "model.json", "relay.pid", "native.pid"):
                     (self.root / name).unlink(missing_ok=True)
                 (self.root / "native.py").write_text(FAKE_NATIVE)
                 config = self.root / "session.json"
                 config.write_text(json.dumps({
-                    "target": "playwright", "upstream": [sys.executable, str(self.root / "native.py"), mode],
+                    "target": "playwright",
+                    "upstream": [sys.executable, str(self.root / "native.py"), mode, str(self.root / "native.pid")],
                     "bootstrap_url": "http://local/t/start", "urls": ["http://local/t/article"], "active_index": 0,
                     "evidence_path": str(self.root / "evidence.json"), "origin": "http://local"}))
                 path = self.fake_mcp_client([sys.executable, str(ROOT / "kitsune_benchmark/personal_session.py"), str(config)])
                 result = self.execute(path, timeout=30, session_setup=lambda: session_setup(self.root / "evidence.json"))
                 self.assertEqual(result["execution_status"], expected)
-                relay = int((self.root / "relay.pid").read_text())
-                status = subprocess.run(["ps", "-o", "stat=", "-p", str(relay)], capture_output=True, text=True).stdout.strip()
-                self.assertTrue(not status or status.startswith("Z"), status)
+                for name in ("relay.pid", "native.pid"):  # the relay and its native server are both gone
+                    pid = int((self.root / name).read_text())
+                    status = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True).stdout.strip()
+                    self.assertTrue(not status or status.startswith("Z"), (name, status))
                 evidence = json.loads((self.root / "evidence.json").read_text())
                 if mode == "fail":
                     # Stopped while the relay held tools/list: no model request, no usage, well before the timeout.
                     self.assertFalse((self.root / "model.json").exists())
                     self.assertTrue(result["harness_error"])
                     self.assertEqual(result["usage"], {})
+                    self.assertIs(result["model_request_observed"], False)
                     self.assertLess(result["elapsed_sec"], 20)
                     self.assertEqual(evidence["error"], "native_session_setup_or_inventory_failed")
                 else:
@@ -281,24 +292,72 @@ pathlib.Path(args[args.index('--output-last-message') + 1]).write_text('Test ans
                     self.assertEqual(listed["result"]["tools"][0]["name"], "browser_snapshot")
                     self.assertTrue(evidence["setup_complete"])
                     self.assertEqual(result["usage"]["input_tokens"], 20)
+                    self.assertNotIn("model_request_observed", result)
+
+    def test_failed_session_setup_records_a_model_request_the_client_already_made(self):
+        # A client that gave up on tools/list (or never waited) may have made its request: recorded, with a warning.
+        (self.root / "native.py").write_text(FAKE_NATIVE)
+        config = self.root / "session.json"
+        config.write_text(json.dumps({
+            "target": "playwright", "upstream": [sys.executable, str(self.root / "native.py"), "fail", str(self.root / "native.pid")],
+            "bootstrap_url": "http://local/t/start", "urls": ["http://local/t/article"], "active_index": 0,
+            "evidence_path": str(self.root / "evidence.json"), "origin": "http://local"}))
+        path = self.fake_mcp_client([sys.executable, str(ROOT / "kitsune_benchmark/personal_session.py"), str(config)],
+                                    impatient=True)
+        stderr = io.StringIO()
+        with redirect_stderr(stderr):
+            result = self.execute(path, timeout=30, session_setup=lambda: session_setup(self.root / "evidence.json"))
+        self.assertEqual(result["execution_status"], "setup_failed")
+        self.assertIs(result["model_request_observed"], True)
+        self.assertEqual(result["usage"]["input_tokens"], 20)
+        self.assertIn("already made a model request", stderr.getvalue())
+
+    def test_model_request_observed_reads_both_harness_audits(self):
+        self.assertFalse(model_request_observed({"usage": {}, "mcp_calls": 0, "num_turns": None,
+                                                 "token_attribution": {"requests": 0}}))
+        self.assertFalse(model_request_observed({"usage": {}, "mcp_calls": 0}))  # Codex audit
+        for audit in ({"usage": {"input_tokens": 3}}, {"token_attribution": {"requests": 1}}, {"num_turns": 1},
+                      {"mcp_calls": 1}):
+            with self.subTest(audit=audit):
+                self.assertTrue(model_request_observed(audit))
 
     def test_await_harness_polls_the_session_setup_only_until_it_settles(self):
         process = Mock()
-        process.communicate.side_effect = [subprocess.TimeoutExpired("harness", 0.1), None]
-        outcomes = iter([None, True])
+        process.wait.side_effect = [subprocess.TimeoutExpired("harness", 0.1), subprocess.TimeoutExpired("harness", 0.1), 0]
+        outcomes = iter([None, None, True])
         self.assertFalse(await_harness(process, b"prompt", 30, lambda: next(outcomes)))
-        (data, first), (none, second) = [(c.args[0], c.kwargs["timeout"]) for c in process.communicate.call_args_list]
-        self.assertEqual((data, first, none), (b"prompt", 0.1, None))
-        self.assertGreater(second, 29)
+        first, second, third = [c.kwargs["timeout"] for c in process.wait.call_args_list]
+        self.assertEqual((first, second), (0.1, 0.1))
+        self.assertGreater(third, 29)
+        process.stdin.write.assert_called_once_with(b"prompt")  # written and closed once, whatever the polls
+        process.stdin.close.assert_called_once_with()
         process = Mock()
-        process.communicate.side_effect = subprocess.TimeoutExpired("harness", 0.1)
+        process.wait.side_effect = subprocess.TimeoutExpired("harness", 0.1)
         outcomes = iter([None, False])
         self.assertTrue(await_harness(process, b"prompt", 30, lambda: next(outcomes)))
-        self.assertEqual(process.communicate.call_count, 1)
+        self.assertEqual(process.wait.call_count, 1)
+        process = Mock()
+        process.wait.side_effect = subprocess.TimeoutExpired("harness", 1)
+        with self.assertRaises(subprocess.TimeoutExpired):
+            await_harness(process, b"prompt", 1)
         process = Mock()
         self.assertFalse(await_harness(process, b"prompt", 30))
-        self.assertEqual(process.communicate.call_args.args, (b"prompt",))
-        self.assertGreater(process.communicate.call_args.kwargs["timeout"], 29)
+        self.assertGreater(process.wait.call_args.kwargs["timeout"], 29)
+
+    def test_await_harness_delivers_the_whole_prompt_to_a_late_reader_while_polling(self):
+        # The prompt exceeds the pipe buffer and is read only after several polls; the reader must still reach EOF.
+        out = self.root / "prompt-length.txt"
+        process = subprocess.Popen([sys.executable, "-c", "import pathlib, sys, time; time.sleep(0.5); "
+                                    f"pathlib.Path({str(out)!r}).write_text(str(len(sys.stdin.buffer.read())))"],
+                                   stdin=subprocess.PIPE)
+        polls = iter([None] * 10 + [True] * 1000)
+        try:
+            self.assertFalse(await_harness(process, b"x" * 2_000_000, 20, lambda: next(polls)))
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.wait()
+        self.assertEqual(out.read_text(), "2000000")
 
     def test_audit_fails_closed_on_unknown_and_invalid_encoding(self):
         path = self.root / "events.jsonl"
