@@ -331,8 +331,8 @@ def run_pair(*, execute: bool = False, kitsune_project: str | None = None,
                              harness=harness, effort=effort, max_budget_usd=max_budget_usd,
                              session_setup=partial(session_setup, evidence) if evidence is not None else None)
                 if result["execution_status"] == "setup_failed":
-                    print(f"warning: {target} session setup failed; the harness was stopped before the agent started",
-                          file=sys.stderr)
+                    print(f"warning: {target} session setup failed; the harness was stopped "
+                          f"(model_request_observed: {result.get('model_request_observed')})", file=sys.stderr)
                 result["viewport"] = observed_viewport(viewports[target],
                                                        viewport_reports(target) if viewport_reports else None)
                 run_manifest = Path(result["run_dir"]) / "manifest.json"
