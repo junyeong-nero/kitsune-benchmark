@@ -258,6 +258,21 @@ class NativeSession:
         finally:
             self.evidence["harness_seconds"] += time.monotonic() - started
 
+    def approved_tool(self, name: str, arguments: dict) -> str:
+        """Run a setup call Kitsune may hold for the user's approval, and return how it ran: "call" (not held),
+        "elicitation" (kitsune#376: the relay approved the server's prompt as the user) or "confirm_token" (a Kitsune
+        that does not elicit refused it with user_tab, user_viewing or needs_user, and the harness repeated it with
+        the refusal's confirm token). Kitsune without holds runs the call once, unchanged."""
+        asked = len(self.evidence["harness_elicitations"])
+        result = self.tool(name, arguments, refusal_codes=("user_tab", "user_viewing", "needs_user"))
+        if result.get("isError"):
+            token = (result_json(result, "state") or {}).get("confirmToken")
+            if not isinstance(token, str):
+                raise ValueError(f"The {name} refusal in setup carries no confirm token.")
+            self.tool(name, {**arguments, "confirm_token": token})
+            return "confirm_token"
+        return "elicitation" if len(self.evidence["harness_elicitations"]) > asked else "call"
+
     def inventory(self) -> list[dict]:
         result = self.tool("browser_tabs", {"action": "list"})
         texts = [item.get("text", "") for item in result.get("content", []) if item.get("type") == "text"]
@@ -290,10 +305,8 @@ class NativeSession:
 
         The new tab loads the bootstrap page (session cookie), then the task page. The fresh profile's initial tab
         is the user's: it is closed while the task tab is its only neighbour, so the browser shows the task tab.
-        Kitsune holds that close for the user's approval, the only one setup needs (evidence
-        setup_closed_initial_blank): with elicitation (kitsune#376) the relay approves the server's prompt as the
-        user; earlier Kitsune refuses the close with user_tab, and the harness repeats it with the refusal's
-        confirm token, as it does with needs_user from a Kitsune that does not elicit."""
+        Kitsune holds that close for the user's approval, the only one setup needs (approved_tool, evidence
+        setup_closed_initial_blank)."""
         task = self.config["urls"][self.config["active_index"]]
         self.tool("browser_tabs", {"action": "new", "url": self.config["bootstrap_url"]})
         self.tool("browser_navigate", {"url": task})  # the new tab is current
@@ -302,19 +315,8 @@ class NativeSession:
         if len(initial) != 1:
             raise ValueError("The task page did not open in a tab of its own.")
         field = "index" if self.config["target"] == "playwright" or self.tab_indexed else "tab_id"
-        close = {"action": "close", field: initial[0]["id"]}
-        via = "close"
-        asked = len(self.evidence["harness_elicitations"])
-        result = self.tool("browser_tabs", close, refusal_codes=("user_tab", "needs_user"))
-        if result.get("isError"):
-            token = (result_json(result, "state") or {}).get("confirmToken")
-            if not isinstance(token, str):
-                raise ValueError("The initial tab's close refusal carries no confirm token.")
-            self.tool("browser_tabs", {**close, "confirm_token": token})
-            via = "confirm_token"
-        elif len(self.evidence["harness_elicitations"]) > asked:
-            via = "elicitation"
-        self.evidence["setup_closed_initial_blank"] = {"via": via}
+        via = self.approved_tool("browser_tabs", {"action": "close", field: initial[0]["id"]})
+        self.evidence["setup_closed_initial_blank"] = {"via": "close" if via == "call" else via}
         self.wait_inventory(lambda tabs: [t["url"] for t in tabs] == [task])
 
     def check_agent_task_tab(self, tabs: list[dict], task: str):
@@ -346,8 +348,11 @@ class NativeSession:
             self.open_agent_task_tab(tabs[0]["url"])
             others = [url for i, url in enumerate(self.config["urls"]) if i != self.config["active_index"]]
         else:
+            # Kitsune main holds navigating the fresh profile's tab, which no client opened, for the user's approval
+            # (kitsune#371, detail user_tab): evidence setup_navigated_initial_tab lists how each navigate ran.
+            navigated = []
             try:
-                self.tool("browser_navigate", {"url": self.config["bootstrap_url"]})
+                navigated.append(self.approved_tool("browser_navigate", {"url": self.config["bootstrap_url"]}))
             except ValueError:
                 # Kitsune after v0.7.0 (kitsune#303) refuses a tab-less navigate until a tab is selected. Select the
                 # fresh profile's only tab and retry; earlier versions never reach this branch, so their setup is unchanged.
@@ -357,8 +362,9 @@ class NativeSession:
                 field = "index" if self.config["target"] == "playwright" or self.tab_indexed else "tab_id"
                 self.tool("browser_tabs", {"action": "select", field: tabs[0]["id"]})
                 self.evidence["setup_selected_initial_tab"] = True
-                self.tool("browser_navigate", {"url": self.config["bootstrap_url"]})
-            self.tool("browser_navigate", {"url": self.config["urls"][0]})
+                navigated.append(self.approved_tool("browser_navigate", {"url": self.config["bootstrap_url"]}))
+            navigated.append(self.approved_tool("browser_navigate", {"url": self.config["urls"][0]}))
+            self.evidence["setup_navigated_initial_tab"] = {"via": navigated}
             others = self.config["urls"][1:]
         for url in others:
             self.tool("browser_tabs", {"action": "new", "url": url})
