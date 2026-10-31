@@ -8,6 +8,8 @@ receives is counted with its isTrusted, so a failure shows which events arrived.
 
 Plan-only by default. `--execute` starts isolated browsers; it never calls a model or uses quota. Strategies that
 need OS input (browser_trusted_click) run only with --trusted, which also needs --headed: the real pointer moves.
+Kitsune-only strategies (the catalog's `kitsune_only`: held clicks, sustained hover) use parameters Playwright MCP
+does not have; they run on Kitsune only and are reported in their own table.
 """
 from __future__ import annotations
 
@@ -30,6 +32,10 @@ from .smoke import ROOT, TARGETS, source_revision
 CATALOG = ROOT / "tasks/hostile/catalog.json"
 BUNDLE = ROOT / "artifacts/hostile/bundle"
 TRUSTED_TOOLS = {"browser_trusted_click"}
+# Kitsune-only parameters and the result key that shows the server applied them. A Kitsune without them ignores
+# them (the call succeeds without the key) or says so (extension_version_mismatch with one of these reasons).
+APPLIED = {"hold_ms": "held_ms", "duration_ms": "moves", "steps": "moves"}
+UNSUPPORTED = ("hold_unsupported", "sustained_hover_unsupported")
 READY_TIMEOUT = 8.0
 SETTLE_SEC = 2.0
 # Between steps, as an agent's own latency would leave: lets a frame render (CSS :hover after a real pointer move,
@@ -63,6 +69,8 @@ def catalog() -> dict:
     ids = [c["id"] for c in spec["components"]]
     if len(set(ids)) != len(ids):
         raise ValueError("Duplicate hostile component.")
+    if set(spec["kitsune_only"]) - set(spec["strategies"]):
+        raise ValueError("Unknown Kitsune-only strategy.")
     for c in spec["components"]:
         if c["layer"] not in ("catalog", "library"):
             raise ValueError(f"Unknown layer: {c['id']}")
@@ -100,7 +108,10 @@ def plan(component_ids: list[str] | None = None, targets: tuple[str, ...] = TARG
                 steps = spec["strategies"][name]
                 if needs_trusted(steps) and (not trusted or target != "kitsune"):
                     continue  # OS input: Kitsune only, and only when the operator opted in
-                cells.append({"target": target, "component": c["id"], "layer": c["layer"], "strategy": name})
+                if name in spec["kitsune_only"] and target != "kitsune":
+                    continue  # n/a for Playwright, not a failure
+                cells.append({"target": target, "component": c["id"], "layer": c["layer"], "strategy": name,
+                              "kitsune_only": name in spec["kitsune_only"]})
     return cells
 
 
@@ -290,7 +301,7 @@ class Runner:
     def run(self, component: dict, strategy: str) -> dict:
         token, url = self.server.begin(component["id"])
         record = {"component": component["id"], "layer": component["layer"], "mechanism": component["mechanism"],
-                  "strategy": strategy, "steps": []}
+                  "strategy": strategy, "kitsune_only": strategy in self.spec["kitsune_only"], "steps": []}
         opened = self.open(url)
         deadline = time.monotonic() + READY_TIMEOUT
         while not self.server.state(token).ready and time.monotonic() < deadline:
@@ -312,9 +323,13 @@ class Runner:
             if step["tool"] == "browser_drag":
                 args.update(startElement=component["targets"]["source"]["name"], endElement=component["targets"]["dest"]["name"])
             done = self.call(step["tool"], args)
+            applied = {APPLIED[name] for name in args if name in APPLIED}
+            if applied and (any(reason in done["text"] + str(done["error"]) for reason in UNSUPPORTED) or
+                            done["ok"] and not all(f'"{key}"' in done["text"] for key in applied)):
+                done["unsupported"] = sorted(name for name in args if name in APPLIED)
             done.pop("text")
             record["steps"].append(done)
-            if self.server.state(token).done is not None:
+            if self.server.state(token).done is not None or done.get("unsupported"):
                 break
         deadline = time.monotonic() + SETTLE_SEC
         while self.server.state(token).done is None and time.monotonic() < deadline:
@@ -322,6 +337,7 @@ class Runner:
         state = self.server.state(token)
         record.update(accepted=state.done is not None, done=state.done, progress=state.progress, events=state.events,
                       outcome="accepted" if state.done is not None else
+                      "unsupported" if any(s.get("unsupported") for s in record["steps"]) else
                       ("target_not_found" if any(str(s.get("error", "")).startswith("target_not_found") for s in record["steps"])
                        else "tool_error" if any(not s["ok"] for s in record["steps"]) else "not_accepted"))
         return record
@@ -383,7 +399,7 @@ def run_hostile(*, execute: bool = False, component_ids: list[str] | None = None
         raise ValueError("The Kitsune checkout changed during the matrix; rerun on a pinned checkout.")
     summary = {"mode": "hostile_executed", "model_invoked": False, "suite": spec["suite"], "targets": list(targets),
                "headed": headed, "trusted": trusted, "kitsune_project": str(project), "kitsune_source": source,
-               "benchmark_source": source_revision(ROOT), "results": results,
+               "benchmark_source": source_revision(ROOT), "kitsune_only": spec["kitsune_only"], "results": results,
                "matrix": matrix(results)}
     (out_dir / "results.json").write_text(json.dumps(summary, indent=1, ensure_ascii=False) + "\n")
     (out_dir / "matrix.md").write_text(summary["matrix"] + "\n")
@@ -392,20 +408,31 @@ def run_hostile(*, execute: bool = False, component_ids: list[str] | None = None
 
 
 def matrix(results: list[dict]) -> str:
-    """Markdown: one row per component and strategy, a column per target."""
+    """Markdown: one row per component and strategy, a column per target. Kitsune-only strategies follow in their
+    own table, n/a for the other targets."""
     targets = sorted({r["target"] for r in results}, key=lambda t: TARGETS.index(t) if t in TARGETS else 9)
     cell = {(r["component"], r["strategy"], r["target"]): r for r in results}
-    rows = ["| Component | Mechanism | Strategy | " + " | ".join(targets) + " |",
-            "| --- | --- | --- | " + " | ".join("---" for _ in targets) + " |"]
-    seen = []
-    for r in results:
-        key = (r["component"], r["strategy"])
-        if key in seen:
-            continue
-        seen.append(key)
-        marks = []
-        for t in targets:
-            x = cell.get((*key, t))
-            marks.append("–" if x is None else "✅" if x.get("accepted") else f"❌ {x.get('outcome')}")
-        rows.append(f"| {key[0]} | {r.get('mechanism', '')} | {key[1]} | " + " | ".join(marks) + " |")
+
+    def table(rows_of: list[dict], absent: str) -> list[str]:
+        rows = ["| Component | Mechanism | Strategy | " + " | ".join(targets) + " |",
+                "| --- | --- | --- | " + " | ".join("---" for _ in targets) + " |"]
+        seen = []
+        for r in rows_of:
+            key = (r["component"], r["strategy"])
+            if key in seen:
+                continue
+            seen.append(key)
+            marks = []
+            for t in targets:
+                x = cell.get((*key, t))
+                marks.append(absent if x is None else "✅" if x.get("accepted") else f"❌ {x.get('outcome')}")
+            rows.append(f"| {key[0]} | {r.get('mechanism', '')} | {key[1]} | " + " | ".join(marks) + " |")
+        return rows
+
+    shared = [r for r in results if not r.get("kitsune_only")]
+    only = [r for r in results if r.get("kitsune_only")]
+    rows = table(shared, "–") if shared or not only else []
+    if only:
+        rows += ([""] if rows else []) + ["Kitsune-only strategies (parameters Playwright MCP does not have):", ""]
+        rows += table(only, "n/a")
     return "\n".join(rows)

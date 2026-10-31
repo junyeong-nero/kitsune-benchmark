@@ -43,6 +43,20 @@ fixed sequence of core tool calls, the same tool names and arguments for both se
   result, not a resolver error.
 - **Fresh pages:** every strategy runs on a fresh page (new trial token).
 
+**Kitsune-only strategies.** The catalog's `kitsune_only` strategies pass parameters that Kitsune's core tools accept
+beyond Playwright MCP's schema (junyeong-nero/kitsune#351):
+
+- `long_press`: `browser_click` with `hold_ms: 700` (on `long-press`, which needs 600 ms);
+- `hover_intent`: `browser_hover` with `duration_ms: 500, steps: 5`, then a click on the revealed item (on
+  `hover-intent`, and on `css-hover-menu`, where synthetic moves still do not apply CSS `:hover`).
+
+They run on Kitsune only and form a second table in `matrix.md`, with `n/a` for Playwright: not a failure, the
+parameter does not exist there. Records in `results.json` carry `kitsune_only: true`, and the summary lists the
+strategy names. A Kitsune without these parameters ignores them (v0.7.1) or reports `extension_version_mismatch`
+with `hold_unsupported` or `sustained_hover_unsupported` (a newer server with an older extension). The runner
+checks that the result has `held_ms` or `moves`; when it does not, the step is marked `unsupported`, the strategy
+stops, and its outcome is `unsupported` unless the page accepted it anyway.
+
 ## Running
 
 ```sh
@@ -70,6 +84,10 @@ uv run --locked python -m kitsune_benchmark hostile --execute --component lib-ra
 Run it only while nobody uses the machine. On macOS the Kitsune MCP server and bridge are started with the
 project's `macos` extra (pyobjc Quartz), installed only into the Kitsune checkout's environment.
 
+**Kitsune environment.** The bridge gets an allowlisted environment. The Kitsune MCP server inherits the runner's,
+without `VIRTUAL_ENV`, `VIRTUAL_ENV_PROMPT`, `UV_PROJECT_ENVIRONMENT`, `PYTHONHOME` and `PYTHONPATH`: the
+benchmark's own virtual environment is not the Kitsune checkout's, and `uv run --project` would warn about it.
+
 **Step pause.** The runner waits 0.3 s between the steps of a strategy, on every server. An agent's own latency
 between calls is longer; without the pause a snapshot taken right after a real pointer move can precede the frame
 that applies CSS `:hover`.
@@ -78,7 +96,8 @@ that applies CSS `:hover`.
 
 - One scripted sequence per strategy. A model might find another way, for example scrolling, keyboard focus or
   waiting.
-- Timing-based defenses (hover intent, long-press) are sensitive to how fast the tools send events.
+- Timing-based defenses (hover intent, long-press) are sensitive to how fast the tools send events. The shared
+  strategies send one move or an instant press; only the Kitsune-only strategies hold or keep moving.
 - The cross-origin frame uses `localhost` vs `127.0.0.1` on one server.
 - Playwright MCP runs with `--isolated --headless`. Kitsune runs in headless Firefox through its extension, as in the
   benchmark tracks.

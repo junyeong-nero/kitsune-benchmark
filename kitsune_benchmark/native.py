@@ -17,6 +17,10 @@ from .adapter import resolve, terminate_group
 from .runtime import codex_environment
 from .smoke import ROOT, await_bridge, copy_extension, private_ports
 
+# Python environment of the benchmark's own process (its `uv run` sets VIRTUAL_ENV). Inherited by `uv run --project
+# <kitsune>`, they name the wrong environment (uv warns "VIRTUAL_ENV=.venv does not match the project environment path").
+PYTHON_ENV = ("VIRTUAL_ENV", "VIRTUAL_ENV_PROMPT", "UV_PROJECT_ENVIRONMENT", "PYTHONHOME", "PYTHONPATH")
+
 
 def firefox_binary(env: dict) -> str:
     return subprocess.run(["node", "-e", "console.log(require('playwright').firefox.executablePath())"],
@@ -71,4 +75,6 @@ def kitsune_server(folder: str, project: str | Path, *, headed: bool = False, ca
         browser = spawn(args, "firefox.log")
         await_bridge(http_port, env["KITSUNE_TOKEN"], browser, extension=True)
         with patch.dict(os.environ, env):
+            for name in PYTHON_ENV:  # the bridge's env is allowlisted already; the MCP server inherits os.environ
+                os.environ.pop(name, None)
             yield [*uv, "kitsune"]
