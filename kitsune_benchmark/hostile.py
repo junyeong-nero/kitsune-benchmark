@@ -324,8 +324,10 @@ class Runner:
                 args.update(startElement=component["targets"]["source"]["name"], endElement=component["targets"]["dest"]["name"])
             done = self.call(step["tool"], args)
             applied = {APPLIED[name] for name in args if name in APPLIED}
-            if applied and (any(reason in done["text"] + str(done["error"]) for reason in UNSUPPORTED) or
-                            done["ok"] and not all(f'"{key}"' in done["text"] for key in applied)):
+            # Only Kitsune-only strategies expect the parameters to apply; a shared one is judged by the page alone.
+            if record["kitsune_only"] and applied and (
+                    any(reason in done["text"] + str(done["error"]) for reason in UNSUPPORTED) or
+                    done["ok"] and not all(f'"{key}"' in done["text"] for key in applied)):
                 done["unsupported"] = sorted(name for name in args if name in APPLIED)
             done.pop("text")
             record["steps"].append(done)

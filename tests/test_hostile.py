@@ -151,8 +151,8 @@ def reply(text, error=False):
 
 
 class RunnerTests(unittest.TestCase):
-    def run_strategy(self, component_id, strategy, replies=None):
-        spec = catalog()
+    def run_strategy(self, component_id, strategy, replies=None, spec=None):
+        spec = spec or catalog()
         component = next(c for c in spec["components"] if c["id"] == component_id)
         with HostileServer() as server, patch("kitsune_benchmark.hostile.SETTLE_SEC", 0.2), \
                 patch("kitsune_benchmark.hostile.STEP_PAUSE", 0):
@@ -191,6 +191,16 @@ class RunnerTests(unittest.TestCase):
         record, calls = self.run_strategy("hover-intent", "hover_intent", {"browser_hover": moved})
         self.assertNotIn("unsupported", record["steps"][0])
         self.assertEqual(calls[2][1], {"target": "e21", "duration_ms": 500, "steps": 5, "element": "Preview tile"})
+
+    def test_a_shared_strategy_with_the_same_parameters_is_judged_by_the_page_only(self):
+        spec = catalog()
+        spec["strategies"]["shared_hover"] = spec["strategies"]["hover_intent"]
+        record, calls = self.run_strategy("hover-intent", "shared_hover", spec=spec)
+        self.assertFalse(record["kitsune_only"])
+        self.assertEqual(record["outcome"], "target_not_found", "no unsupported mark on a shared strategy")
+        self.assertNotIn("unsupported", record["steps"][0])
+        self.assertEqual([name for name, _ in calls], ["browser_tabs", "browser_snapshot", "browser_hover",
+                                                      "browser_snapshot"])
 
     def test_matrix_reports_kitsune_only_strategies_separately(self):
         rows = [{"component": "long-press", "mechanism": "hold", "strategy": "click", "target": t,
