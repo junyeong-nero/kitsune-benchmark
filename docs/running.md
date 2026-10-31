@@ -157,6 +157,42 @@ uv run --locked python scripts/run-full-suite.py --harness claude-api --allow-ap
   --budget-usd 60 --kitsune-project artifacts/vendor/kitsune-pinned --out artifacts/opus-full
 ```
 
+### Elicitation policy: Kitsune's approval prompts
+
+Since kitsune#364 Kitsune holds some calls for the user's approval (a tab the user
+is viewing, a tab the agent did not open, an ask-before-act action), and since
+kitsune#376 it asks through MCP elicitation. The personal, gallery and coexistence
+relay declares elicitation and answers every prompt itself, so no prompt reaches the
+agent's client. The harness's own setup calls are always approved. During the agent's
+turn `--elicitation` decides:
+
+- `decline` (default): every prompt is declined. The held call does not run, and the
+  run measures whether the agent stops, reports or works around it.
+- `accept`: approval prompts are approved and the held call runs once.
+  `browser_ask_user` prompts are still declined, because no user does what they ask.
+
+Playwright never elicits, so the policy changes only Kitsune runs. External does not
+use the relay and has no `--elicitation`; an accept suite still runs it, unchanged.
+Each run's session evidence records `elicitation_policy` and every prompt in
+`elicitations`. Plan output, pair manifests (`experiment.elicitation`), per-pair and
+track summaries, and `suite-manifest.json` record the policy. `scripts/run-full-suite.py --elicitation accept` passes it to every
+personal, gallery and coexistence entry.
+
+**Results across policies are not comparable.** Do not compare token ratios between
+a decline and an accept suite. Do not compare either with a cohort from before
+kitsune#364, which held nothing, without saying so. `scripts/analyze-release.py`
+shows each suite's policy: from `suite-manifest.json`, else (suites before #59) from
+a pair's `experiment.elicitation` or a Kitsune run's session evidence. It warns when
+`--compare` mixes policies or compares with a suite that recorded none.
+
+```sh
+# Authorized model execution only: the accept arm of a lite suite, beside a decline suite on the same tag.
+uv run --locked python scripts/run-full-suite.py --plan lite --elicitation accept \
+  --kitsune-project artifacts/vendor/kitsune-pinned --out artifacts/opus-lite-accept
+uv run --locked python scripts/analyze-release.py artifacts/opus-lite-accept \
+  --compare artifacts/opus-lite-decline > review.md   # warns: the policies differ
+```
+
 ### Repeated, predeclared order (taskset-v3)
 
 `--attempts N` (default 1) repeats every track/variant/layout unit using fresh
@@ -348,6 +384,23 @@ Read [individual-run inputs](codex-harness.md#individual-run-inputs) first.
   **There is no token-budget stop.** A timeout is not a fixed token allowance.
 - Setup/execution/unscorable failures stop further targets/tasks. Ordinary
   scorable task failures do not. No automatic retry or model substitution occurs.
+- A failed session setup (personal, gallery, coexistence and the experiment relays)
+  stops the agent's client before its first model request (#56), provided setup
+  fails while the client still waits for its tool list. The relay sets the
+  session up inside the client's first `tools/list` and, after a failure, leaves
+  that request unanswered; the harness reads the failure from the relay's
+  evidence file (`{target}-session-evidence.json`) and stops the client. The run
+  is recorded as `execution_status: setup_failed` with `harness_error: true`, and
+  the track stops as `unscorable_pair`. The guarantee does not hold if the client
+  gave up on `tools/list` first (MCP clients time requests out, typically after
+  about 60 s, while each native setup request may take up to 60 s) or if the
+  relay crashed without recording the failure. `model_request_observed` in the
+  run summary says whether the events show a model request (usage, an assistant
+  message, a turn or a tool call); when it is true the runner warns, and the
+  usage that was spent is reported as usual.
+  Successful runs are unchanged: setup still runs inside the agent run, so
+  `elapsed_sec`, `timing.relay_setup_sec` and `elapsed_minus_relay_setup_sec`
+  keep their meaning.
 - A single track command runs Playwright, then Kitsune, unless `--targets` gives
   another order. Data variants are not repeated identical trials or order
   counterbalancing; use the full-suite `--attempts`/`--order` for that.
@@ -420,8 +473,10 @@ Review/redact raw artifacts before sharing them; do not publish profiles or toke
 
 With an allowlist (UI tracks), each run records `tool_surface`: the allowlisted
 tools the native server actually published (`exposed`) and those it did not
-(`missing`), and the runner prints a warning. Kitsune's default `lean` preset
-publishes 14 of the 22 allowlisted Kitsune tools (`browser_keypress`,
+(`missing`), and the runner prints a warning. `no_allowlisted_tools` flags a run
+whose server published none of them (for example after a failed setup); suite
+summaries count those as `runs_without_allowlisted_tools`. Kitsune's default
+`lean` preset publishes 14 of the 22 allowlisted Kitsune tools (`browser_keypress`,
 `browser_drag` and others are missing), so a Kitsune failure that needs them is a
 tool-surface result, not a capability verdict. Suite summaries count
 `runs_missing_allowlisted_tools` per target. Use `--kitsune-preset full` (and

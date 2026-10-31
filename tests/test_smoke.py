@@ -1,3 +1,4 @@
+from dataclasses import replace
 import io
 import json
 from pathlib import Path
@@ -10,7 +11,9 @@ from kitsune_benchmark.__main__ import main
 from kitsune_benchmark.adapter import write_json
 from kitsune_benchmark.specs import Task
 from kitsune_benchmark.viewport import REFERENCE, observed_viewport, parse_report, report_script, viewport_record
-from kitsune_benchmark.smoke import ROOT, WS_SETTING, benchmark_source, copy_extension, tool_surface, experiment, private_ports, run_pair
+from kitsune_benchmark.smoke import (ROOT, WS_SETTING, benchmark_source, copy_extension, tool_surface, experiment,
+                                    private_ports, relay_evidence_path, run_pair, session_setup)
+from kitsune_benchmark.specs import Server
 
 
 class SmokeTests(unittest.TestCase):
@@ -23,7 +26,40 @@ class SmokeTests(unittest.TestCase):
             self.assertEqual(surface["missing"], ["browser_keypress"])
             self.assertEqual(surface["exposed"], ["browser_click", "browser_snapshot"])
             self.assertEqual(surface["published_count"], 3)
+            self.assertFalse(surface["no_allowlisted_tools"])
             self.assertIsNone(tool_surface(Path(tmp) / "absent.json", ("browser_click",)))
+            # A failed relay setup lists no tools (#56): flagged, not just counted as missing.
+            path.write_text(json.dumps({"enabled_tools": [], "tools_pages": []}))
+            surface = tool_surface(path, ("browser_snapshot", "browser_click"))
+            self.assertEqual((surface["published_count"], surface["no_allowlisted_tools"]), (0, True))
+
+    def test_relay_evidence_path_comes_from_the_relay_config(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config = Path(tmp) / "kitsune-session.json"
+            config.write_text(json.dumps({"evidence_path": tmp + "/kitsune-session-evidence.json"}))
+            server = Server("kitsune", "python", ("personal_session.py", str(config)))
+            self.assertEqual(relay_evidence_path(server), Path(tmp) / "kitsune-session-evidence.json")
+            # Without a readable evidence path the run must not start with failure detection silently disabled.
+            for content in ("{}", '{"evidence_path": ""}', "not json"):
+                with self.subTest(content=content):
+                    config.write_text(content)
+                    with self.assertRaises(ValueError):
+                        relay_evidence_path(server)
+            with self.assertRaises(ValueError):
+                relay_evidence_path(Server("kitsune", "python", (tmp + "/absent.json",)))
+
+    def test_session_setup_reads_the_relay_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "kitsune-session-evidence.json"
+            self.assertIsNone(session_setup(path))
+            for evidence, expected in (({"setup_complete": False}, None), ({"setup_complete": True}, True),
+                                       ({"setup_complete": False, "error": "native_session_setup_or_inventory_failed"}, False),
+                                       ({"setup_complete": True, "error": "native_session_setup_or_inventory_failed"}, True)):
+                with self.subTest(evidence=evidence):
+                    path.write_text(json.dumps(evidence))
+                    self.assertIs(session_setup(path), expected)
+            path.write_text('{"setup_complete":')
+            self.assertIsNone(session_setup(path))
 
     def test_benchmark_source_names_the_taskset_tag(self):
         source = benchmark_source()
@@ -60,7 +96,14 @@ class SmokeTests(unittest.TestCase):
                 setup, ready = {"duration_sec": 4}, {"duration_sec": 1}
                 collector.summary = {"metrics": {"phase/setup/owner/kitsune": setup,
                                                   "phase/ready/owner/kitsune": ready}}
+                setups = []
+                def relay(target, server, task, pair_dir):
+                    # A relay config that names its own evidence file, as every prepare_server writes.
+                    config = pair_dir / (target + "-session.json")
+                    config.write_text(json.dumps({"evidence_path": str(pair_dir / (target + "-relay-evidence.json"))}))
+                    return replace(server, args=("relay.py", str(config)))
                 def fake_run(server, task, model, **kwargs):
+                    setups.append(kwargs["session_setup"])
                     run_dir = Path(kwargs["output_root"]) / server.id
                     run_dir.mkdir(parents=True)
                     write_json(run_dir / "manifest.json", {"server": server.id, "viewport": kwargs["viewport"]})
@@ -92,7 +135,8 @@ class SmokeTests(unittest.TestCase):
                     summary = run_pair(execute=True, kitsune_project=str(root / "project"),
                                        experiment_spec=spec, task_for_target=lambda target: Task("test", "test"),
                                        evaluate=lambda target, result: evaluation, targets=targets,
-                                       viewport_reports=reports and reports.get, equalize_kitsune_viewport=bool(reports))
+                                       viewport_reports=reports and reports.get, equalize_kitsune_viewport=bool(reports),
+                                       prepare_server=relay if reports else None)
                 saved = json.loads((Path(summary["pair_dir"]) / "pair-summary.json").read_text())
                 manifest = json.loads((Path(summary["pair_dir"]) / "pair-manifest.json").read_text())
                 runs = {target: json.loads((Path(result["run_dir"]) / "manifest.json").read_text())
@@ -138,6 +182,14 @@ class SmokeTests(unittest.TestCase):
                 self.assertEqual(saved["resource_phases"]["kitsune"], {"setup": setup, "ready": ready})
                 self.assertEqual(popen.call_count, 2)
                 self.assertEqual(run.call_count, 1 if stop_early else 2)
+                # Only session relays (prepare_server) report a setup, read from the target's evidence file (#56).
+                for target, setup in zip(targets, setups):
+                    if not reports:
+                        self.assertIsNone(setup)
+                        continue
+                    self.assertIsNone(setup())
+                    (Path(summary["pair_dir"]) / (target + "-relay-evidence.json")).write_text('{"setup_complete": true}')
+                    self.assertIs(setup(), True)
                 self.assertEqual(set(saved["results"]), set(targets[:1] if stop_early else targets))
                 for result in saved["results"].values():
                     self.assertEqual(result["timing"], {"relay_setup_sec": 2, "elapsed_minus_relay_setup_sec": 8,

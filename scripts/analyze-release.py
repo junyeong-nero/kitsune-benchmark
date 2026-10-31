@@ -6,7 +6,13 @@ usage: uv run --locked python scripts/analyze-release.py artifacts/opus-subscrip
 
 Units are (track entry without its target, task); for example ("gallery-crowded-v0", "ui-shadow"). Ratios are
 Kitsune/Playwright totals over units both targets solved. With --compare, the same ratios are computed on the units
-the two suites share, so a lite run can be compared with the matching units of a full run.
+the two suites share, so a lite run can be compared with the matching units of a full run. Kitsune's holds (calls kept
+for the user's approval, and declined writes redone in another tab) are recomputed per entry from session evidence.
+
+Each suite's elicitation policy (how the relay answered Kitsune's approval prompts) is read from its
+suite-manifest.json, else from what its pairs recorded (summary, pair manifest, session evidence). Ratios under
+different policies, or against a suite that recorded none, are not comparable: --compare still computes them and the
+report warns.
 """
 from __future__ import annotations
 
@@ -15,6 +21,10 @@ import collections
 import json
 from pathlib import Path
 import statistics
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from kitsune_benchmark.holds import DECISIONS, DETAILS, aggregate_holds, hold_metrics  # noqa: E402
 
 TARGETS = ("playwright", "kitsune")
 ACTIONS = ("click", "type", "fill_form", "select_option", "press_key", "hover", "drag")
@@ -45,8 +55,67 @@ def load(suite_dir: str | Path) -> dict:
             task = (pair.get("personal_task") or pair.get("gallery_task") or pair.get("coexistence_task")
                     or pair.get("external_task") or "?")
             for target, run in pair["results"].items():
-                units[(entry["name"], task)][target] = run
+                units[(entry["name"], task)][target] = {**run, "pair_dir": pair.get("pair_dir")}
     return units
+
+
+def pair_policy(pair: dict) -> str | None:
+    """A pair's elicitation policy: its summary's, else its manifest experiment's, else a run's session evidence."""
+    if pair.get("elicitation") or not pair.get("pair_dir"):
+        return pair.get("elicitation")
+    folder = Path(pair["pair_dir"])
+    try:
+        policy = json.loads((folder / "pair-manifest.json").read_text()).get("experiment", {}).get("elicitation")
+    except (OSError, ValueError, AttributeError):
+        policy = None
+    for evidence in [] if policy else sorted(folder.glob("*-session-evidence.json")):
+        try:
+            policy = json.loads(evidence.read_text()).get("elicitation_policy")
+        except (OSError, ValueError, AttributeError):
+            continue
+        if policy:
+            break
+    return policy
+
+
+def elicitation_policy(suite_dir: str | Path) -> tuple[str | None, str | None]:
+    """(policy, source). The suite manifest's policy; for suites before #59, the policy its pairs recorded (#55's
+    relay writes elicitation_policy into session evidence), "mixed" if they differ; else (None, None)."""
+    try:
+        manifest = json.loads((Path(suite_dir) / "suite-manifest.json").read_text())
+    except (OSError, ValueError):
+        manifest = None
+    if isinstance(manifest, dict) and manifest.get("elicitation"):
+        return manifest["elicitation"], "suite-manifest"
+    policies = set()
+    try:
+        lines = (Path(suite_dir) / "suite-log.jsonl").read_text().splitlines()
+    except OSError:
+        lines = []
+    for line in lines:
+        path = json.loads(line).get("suite_summary_path")
+        try:
+            summary = json.loads(Path(path).read_text()) if path else {}
+        except (OSError, ValueError):
+            continue
+        policies |= {pair_policy(pair) for pair in summary.get("pairs", [])} - {None}
+    if not policies:
+        return None, None
+    return (policies.pop() if len(policies) == 1 else "mixed"), "pair records"
+
+
+def policy_warning(now: str | None, then: str | None) -> str | None:
+    if now is None or then is None:
+        return (f"elicitation policy {now or 'none recorded'} now, {then or 'none recorded'} then: a suite without a "
+                "recorded policy may predate the relay's answers (#55) or Kitsune's holds (kitsune#364), so its "
+                "ratios are not comparable")
+    if now != then or now == "mixed":
+        return f"elicitation policy {now} now, {then} then: ratios under different policies are not comparable"
+    return None
+
+
+def policy_label(policy: str | None, source: str | None) -> str:
+    return "none recorded" if policy is None else policy if source == "suite-manifest" else f"{policy} (from {source})"
 
 
 def tool_calls(run: dict) -> list[tuple[str, dict, str, bool]]:
@@ -101,6 +170,7 @@ def audit(units: dict) -> dict:
             counts["violations"] += bool(run.get("violations"))
             counts["harness_errors"] += bool(run.get("harness_error"))
             counts["missing_allowlisted_tools"] += bool((run.get("tool_surface") or {}).get("missing"))
+            counts["no_allowlisted_tools"] += (run.get("tool_surface") or {}).get("no_allowlisted_tools") is True
             models[str(run.get("model"))] += 1
             if entry.startswith("personal"):
                 counts["personal_runs"] += 1
@@ -208,14 +278,32 @@ def behaviour(units: dict) -> dict:
     return summary
 
 
+def holds(units: dict) -> dict:
+    """Kitsune holds per entry, from each run's session evidence (holds.py); entries without Kitsune runs are left out."""
+    metrics = collections.defaultdict(list)
+    for (entry, _), runs in units.items():
+        if "kitsune" in runs:
+            pair_dir = runs["kitsune"].get("pair_dir")
+            try:  # missing or truncated evidence: no hold record for the run
+                evidence = json.loads((Path(pair_dir) / "kitsune-session-evidence.json").read_text()) if pair_dir else None
+            except (OSError, ValueError):
+                evidence = None
+            metrics[entry].append(hold_metrics(evidence) if isinstance(evidence, dict) else None)
+    return {entry: aggregate_holds(values) for entry, values in metrics.items()}
+
+
 def review(suite_dir, compare=None, threshold=1.10) -> dict:
     units = load(suite_dir)
-    report = {"suite": str(suite_dir), "audit": audit(units), "outcomes": outcomes(units), "ratios": ratios(units),
-              "outliers": outliers(units, threshold), "behaviour": behaviour(units)}
+    policy, source = elicitation_policy(suite_dir)
+    report = {"suite": str(suite_dir), "elicitation": policy, "elicitation_source": source, "audit": audit(units),
+              "outcomes": outcomes(units), "ratios": ratios(units),
+              "outliers": outliers(units, threshold), "behaviour": behaviour(units), "holds": holds(units)}
     if compare:
         old = load(compare)
         shared = set(units) & set(old)
-        report["compare"] = {"suite": str(compare), "shared_units": len(shared),
+        then, then_source = elicitation_policy(compare)
+        report["compare"] = {"suite": str(compare), "elicitation": then, "elicitation_source": then_source,
+                             "warning": policy_warning(report["elicitation"], then), "shared_units": len(shared),
                              "ratios_now": ratios(units, shared), "ratios_then": ratios(old, shared)}
     return report
 
@@ -224,10 +312,12 @@ def markdown(report: dict, threshold: float) -> str:
     a = report["audit"]
     lines = [f"# Release review: `{report['suite']}`", "",
              "## Audit", "",
+             f"- Elicitation policy: {policy_label(report['elicitation'], report['elicitation_source'])}",
              f"- Runs: {a.get('runs', 0)}; scorable {a.get('scorable', 0)}; "
              + ", ".join(f"{k.split(':', 1)[1]} {v}" for k, v in a.items() if k.startswith("status:")),
              f"- Audit violations {a.get('violations', 0)}, harness errors {a.get('harness_errors', 0)}, runs missing "
-             f"allowlisted tools {a.get('missing_allowlisted_tools', 0)}; models {a['models']}",
+             f"allowlisted tools {a.get('missing_allowlisted_tools', 0)} (none published "
+             f"{a.get('no_allowlisted_tools', 0)}); models {a['models']}",
              f"- Personal content viewport asserted: {a.get('personal_viewport_asserted', 0)}/{a.get('personal_runs', 0)}",
              "", "## Outcomes", "", "| Group | Units | Playwright | Kitsune | Misses |", "| --- | ---: | ---: | ---: | --- |"]
     for group, row in report["outcomes"].items():
@@ -243,7 +333,11 @@ def markdown(report: dict, threshold: float) -> str:
     if "compare" in report:
         c = report["compare"]
         lines += ["", f"## Compared with `{c['suite']}` on {c['shared_units']} shared units", "",
-                  "| Group | Input then | Input now | Calls then | Calls now |", "| --- | ---: | ---: | ---: | ---: |"]
+                  f"Elicitation policy: {policy_label(report['elicitation'], report['elicitation_source'])} now, "
+                  f"{policy_label(c['elicitation'], c['elicitation_source'])} then.", ""]
+        if c["warning"]:
+            lines += [f"> **Warning:** {c['warning']}.", ""]
+        lines += ["| Group | Input then | Input now | Calls then | Calls now |", "| --- | ---: | ---: | ---: | ---: |"]
         for group, now in c["ratios_now"].items():
             then = c["ratios_then"].get(group, {})
             lines.append(f"| {group} | {then.get('input')} | {now['input']} | {then.get('mcp_calls')} | {now['mcp_calls']} |")
@@ -261,6 +355,22 @@ def markdown(report: dict, threshold: float) -> str:
                        ("truncated_full_snapshots", "Truncated full snapshots")):
         lines.append(f"| {label} | {b['playwright'].get(key)} | {b['kitsune'].get(key)} |")
     lines += ["", "Tool errors (Kitsune): " + (", ".join(f"{v}× {k}" for k, v in b["kitsune"]["tool_errors"].items()) or "none")]
+    lines += ["", "## Kitsune holds", "",
+              "| Entry | Runs | Runs with a hold | Holds | " + " / ".join(DETAILS) + " | " + " / ".join(DECISIONS)
+              + " | Runs with a declined hold | Runs that redid a declined write |",
+              "| --- | ---: | ---: | ---: | --- | --- | ---: | ---: |"]
+    for entry, h in report["holds"].items():
+        if not h["runs"]:
+            continue
+        by = h["holds_by_detail"]
+        lines.append(f"| {entry} | {h['runs']} | {h['runs_with_hold']} | {h['holds']} | "
+                     + " / ".join(str(sum(by[d].values())) for d in DETAILS) + " | "
+                     + " / ".join(str(sum(by[d][c] for d in DETAILS)) for c in DECISIONS)
+                     + f" | {h['runs_with_declined_hold']} | {h['runs_redo_after_decline']} |")
+    unrecorded = sum(h["runs"] - h["runs_refusals_recorded"] for h in report["holds"].values())
+    if unrecorded:
+        lines += ["", f"{unrecorded} Kitsune runs have evidence from before refusals were recorded: their holds are "
+                  "counted from approval prompts only; refusals without a prompt (such as Kitsune 0.7's user_tab) are not seen."]
     return "\n".join(lines) + "\n"
 
 
@@ -274,6 +384,8 @@ def main() -> int:
     report = review(args.suite, args.compare, args.outlier)
     if args.json:
         Path(args.json).write_text(json.dumps(report, indent=1, ensure_ascii=False) + "\n")
+    if report.get("compare", {}).get("warning"):
+        print("warning: " + report["compare"]["warning"], file=sys.stderr)
     print(markdown(report, args.outlier), end="")
     return 0
 

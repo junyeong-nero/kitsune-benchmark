@@ -29,6 +29,7 @@ from .coexistence_fixtures import COEXISTENCE_FIXTURES
 from .miniwob import UI_TOOLS
 from .personal import (PersonalServer, PersonalTrial, aggregate_results, catalog as personal_catalog,
                        config as personal_config, pair_complete, runnable_ids as personal_runnable_ids)
+from .personal_session import ELICITATION_POLICIES
 from .smoke import ROOT, TARGETS, run_pair, source_revision
 from .specs import Server, Task
 
@@ -42,6 +43,9 @@ INTEGRITY = ("Synthetic local apps; personal-track graders unchanged. The simula
              "privileged local WebDriver BiDi channel the agent cannot see. View samples are taken after "
              "each agent call and every sampler interval, so sub-interval flicker can be missed. "
              "Remote agent activity can be visible to pages (navigator.webdriver) in both browsers.")
+# Not part of coexistence-local-v1: a Kitsune arm with both user-tab protections off. On Kitsune after 0.7.1 they are on by
+# default (kitsune#371), so the frozen protect arm's KITSUNE_PROTECT_USER_TABS=1 configures what the default arm runs.
+UNPROTECTED_KITSUNE_ENV = {"KITSUNE_PROTECT_USER_TABS": "0", "KITSUNE_HOLD_VIEWED_TAB": "0"}
 
 
 def config() -> dict:
@@ -157,10 +161,12 @@ def input_metrics(evidence: dict) -> dict | None:
 
 
 class CoexistenceServer(PersonalServer):
-    def __init__(self, task: dict, variant: int, *, protect_user_tabs: bool = False):
+    def __init__(self, task: dict, variant: int, *, protect_user_tabs: bool = False, unprotected_user_tabs: bool = False,
+                 elicitation: str = "decline"):
         # Pages report the content viewport like the personal track's (personal-browsing-local-v3).
-        super().__init__(task, variant, report_viewport=True)
+        super().__init__(task, variant, report_viewport=True, elicitation=elicitation)
         self.protect_user_tabs = protect_user_tabs
+        self.unprotected_user_tabs = unprotected_user_tabs
         self.bidi_ports = {target: free_port() for target in TARGETS}
 
     def begin(self, target: str) -> Task:
@@ -189,7 +195,7 @@ class CoexistenceServer(PersonalServer):
         write_json(path, {"target": target, "upstream": [server.command, *server.args],
             "bootstrap_url": trial.url("/start"), "urls": [trial.url(p) for p in trial.paths],
             "active_index": trial.active_index, "evidence_path": str(evidence), "origin": self.origin,
-            "enabled_tools": list(server.enabled_tools),
+            "enabled_tools": list(server.enabled_tools), "elicitation": self.elicitation,
             "diagnostics_path": str(pair_dir / (target + "-native-rpc.jsonl")),
             "metadata_path": str(pair_dir / (target + "-native-metadata.json")),
             "user_driver": {"bidi_url": f"ws://127.0.0.1:{port}"},
@@ -227,6 +233,7 @@ class CoexistenceServer(PersonalServer):
                 "user_channel_complete": channel,
                 "user_tab_refusals": evidence.get("user_tab_refusals") if target == "kitsune" else None,
                 "protect_user_tabs": self.protect_user_tabs if target == "kitsune" else None,
+                "unprotected_user_tabs": self.unprotected_user_tabs if target == "kitsune" else None,
                 "scorable": scorable, "task_success": success,
                 "functional_success": base["functional_success"] if scorable else None,
                 "safety_pass": base["safety_pass"] if scorable else None,
@@ -258,10 +265,13 @@ def aggregate_coexistence(pairs: list[dict]) -> dict:
 def run_coexistence(*, execute: bool = False, task_ids: list[str] | None = None, variant: int = 0,
                     kitsune_project: str | None = None, executable: str = "codex", harness: str = "codex",
                     budget_usd: float | None = None, protect_user_tabs: bool = False,
-                    targets: tuple[str, ...] = TARGETS, claude_model: str | None = None,
-                    max_budget_usd_per_run: float | None = None, codex_model: str | None = None) -> dict:
+                    unprotected_user_tabs: bool = False, targets: tuple[str, ...] = TARGETS, claude_model: str | None = None,
+                    max_budget_usd_per_run: float | None = None, codex_model: str | None = None,
+                    elicitation: str = "decline") -> dict:
     if type(variant) is not int or variant not in range(3):
         raise ValueError("Variant must be 0, 1 or 2.")
+    if elicitation not in ELICITATION_POLICIES:
+        raise ValueError("Unknown elicitation policy.")
     tasks = selected_tasks(task_ids)
     spec = with_claude_overrides(config(), claude_model, max_budget_usd_per_run, codex_model)
     model, _ = harness_pins(spec, harness)
@@ -271,6 +281,8 @@ def run_coexistence(*, execute: bool = False, task_ids: list[str] | None = None,
         raise ValueError("targets must be a non-empty subset of playwright, kitsune.")
     if protect_user_tabs and "kitsune" not in targets:
         raise ValueError("--protect-user-tabs is a Kitsune arm; include the kitsune target.")
+    if unprotected_user_tabs and (protect_user_tabs or "kitsune" not in targets):
+        raise ValueError("--unprotected-user-tabs is a Kitsune arm apart from --protect-user-tabs; include the kitsune target.")
     if budget_usd is not None and (per_run is None or isinstance(budget_usd, bool)
                                    or not isinstance(budget_usd, (int, float)) or budget_usd <= 0):
         raise ValueError("--budget-usd needs a positive amount and an API-key harness (claude-api or claude-api-full).")
@@ -278,6 +290,8 @@ def run_coexistence(*, execute: bool = False, task_ids: list[str] | None = None,
         coexist = catalog()
         return {"mode": "coexistence_plan_only", "model_invoked": False, "harness": harness, "model": model,
                 "targets": list(targets), "variant": variant, "protect_user_tabs": protect_user_tabs,
+                "elicitation": elicitation,
+                "unprotected_user_tabs": unprotected_user_tabs,
                 "selected_tasks": [t["id"] for t in tasks], "planned_model_runs": len(targets) * len(tasks),
                 "worst_case_usd": len(targets) * len(tasks) * per_run if per_run else None,
                 "catalog_tasks": len(coexist["tasks"]), "runnable_coexistence_tasks": runnable_ids(),
@@ -295,19 +309,23 @@ def run_coexistence(*, execute: bool = False, task_ids: list[str] | None = None,
             stopped = "kitsune_revision_changed"
             break
         experiment = {**spec, "selected_task": task, "variant": variant, "condition": "user-seeded",
+                      "elicitation": elicitation,
                       "catalog_sha256": hashlib.sha256(CATALOG.read_bytes()).hexdigest(),
                       "personal_catalog_sha256": hashlib.sha256((ROOT / personal_config()["catalog"]).read_bytes()).hexdigest()}
-        with CoexistenceServer(task, variant, protect_user_tabs=protect_user_tabs) as fixture:
+        with CoexistenceServer(task, variant, protect_user_tabs=protect_user_tabs,
+                               unprotected_user_tabs=unprotected_user_tabs, elicitation=elicitation) as fixture:
             port = fixture.bidi_ports["kitsune"]
             pair = run_pair(execute=True, kitsune_project=kitsune_project, executable=executable,
                 experiment_spec=experiment, artifact_scope="coexistence", task_for_target=fixture.begin,
                 prepare_server=fixture.prepare_server, evaluate=fixture.evaluate, enabled_tools=UI_TOOLS,
                 harness=harness, targets=targets,
-                kitsune_env={"KITSUNE_PROTECT_USER_TABS": "1"} if protect_user_tabs else None,
+                kitsune_env=({"KITSUNE_PROTECT_USER_TABS": "1"} if protect_user_tabs
+                             else UNPROTECTED_KITSUNE_ENV if unprotected_user_tabs else None),
                 kitsune_firefox_args=(f"--remote-debugging-port={port}", "--remote-allow-system-access"),
                 kitsune_firefox_prefs=USER_CHANNEL_PREFS, viewport_reports=fixture.viewport_reports,
                 equalize_kitsune_viewport=True)
         pair.update(coexistence_task=task["id"], variant=variant, protect_user_tabs=protect_user_tabs,
+                    unprotected_user_tabs=unprotected_user_tabs, elicitation=elicitation,
                     kitsune_source_after=source_revision(project))
         write_json(Path(pair["pair_dir"]) / "coexistence-summary.json", pair)
         pairs.append(pair)
@@ -325,7 +343,8 @@ def run_coexistence(*, execute: bool = False, task_ids: list[str] | None = None,
     summary_path = Path(pairs[0]["pair_dir"]) / "suite-summary.json"
     summary = {"mode": "coexistence_executed", "model_invoked": True, "benchmark": spec["id"],
                "harness": harness, "model": model,
-               "targets": list(targets), "protect_user_tabs": protect_user_tabs, "kitsune_source": source,
+               "targets": list(targets), "protect_user_tabs": protect_user_tabs,
+               "unprotected_user_tabs": unprotected_user_tabs, "elicitation": elicitation, "kitsune_source": source,
                "requested_pairs": len(tasks), "attempted_pairs": len(pairs), "stopped_reason": stopped,
                "estimated_cost_usd": round(spent, 6) if per_run is not None else None,
                "suite_budget_usd": budget_usd, "max_budget_usd_per_run": per_run,

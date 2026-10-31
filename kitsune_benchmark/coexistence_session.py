@@ -108,19 +108,23 @@ class CoexistenceSession(NativeSession):
             self.evidence["seeded_owned_by_agent"] = sum(url in urls for url in owned)
             if self.evidence["seeded_owned_by_agent"]:
                 raise ValueError("A user-seeded tab is listed as agent-owned.")
-        view = self.driver.view()
-        if view["url"] != desired:
-            raise ValueError("The user's view is not on the active starting tab.")
-        self.evidence["view"] = {"initial_url": desired, "after_call": [], "sampler": None}
+        try:
+            view = self.driver.view()
+            if view["url"] != desired:
+                raise ValueError("The user's view is not on the active starting tab.")
+            self.evidence["view"] = {"initial_url": desired, "after_call": [], "sampler": None}
+            self.sampler = ViewSampler(self.driver, float(self.config.get("sampler_interval", 0.25)))
+            self.sampler.start()
+            activity = self.config.get("user_activity")
+            if activity:
+                self.typist = TypingUser(self.driver, url=urls[activity["tab_index"]], selector=activity["selector"],
+                                         text=activity["text"], chunk=activity.get("chunk", 3),
+                                         interval=activity.get("interval", 0.6))
+                self.typist.start()
+        except RuntimeError as error:  # BidiError, or a thread that could not start
+            raise ValueError("User channel setup failed.") from error
+        # Complete only once the simulated user runs, so a failure up to here is a setup failure (#56).
         self.evidence.update(seeding="user_bidi", setup_complete=True, initial_tabs=tabs, snapshots=[tabs])
-        self.sampler = ViewSampler(self.driver, float(self.config.get("sampler_interval", 0.25)))
-        self.sampler.start()
-        activity = self.config.get("user_activity")
-        if activity:
-            self.typist = TypingUser(self.driver, url=urls[activity["tab_index"]], selector=activity["selector"],
-                                     text=activity["text"], chunk=activity.get("chunk", 3),
-                                     interval=activity.get("interval", 0.6))
-            self.typist.start()
         self.save()
         self.diagnostic("setup_completed", duration_sec=time.monotonic() - setup_started)
 
@@ -196,6 +200,7 @@ def main() -> int:
         session.evidence["error"] = "coexistence_session_setup_or_inventory_failed"
         session.save()
         print("Coexistence fixture MCP setup/inventory failed; inspect private artifacts.", file=sys.stderr)
+        session.hold_failed_setup()
         return 2
     finally:
         session.close()

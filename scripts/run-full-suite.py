@@ -14,6 +14,10 @@ Coexistence (coexistence-local-v1) follows its frozen plan: the 28 personal task
 co-typing-01 on variants 0-2, then the Kitsune protect-user-tabs arm on variant 0. Its entries always run
 paired in one process (the user channel was validated that way), in the attempt's order.
 
+--elicitation (decline by default, or accept) sets how the relay answers Kitsune's approval prompts on every
+personal, gallery and coexistence entry, and is recorded in suite-manifest.json. External does not use the relay.
+Suites run under different policies are not comparable.
+
 The default harness is `claude`: Claude Code on the claude.ai subscription login, which spends no API
 credit and has no dollar cap. API-key harnesses (`claude-api`, `claude-api-full`) bill ANTHROPIC_API_KEY
 credit and need --allow-api-billing plus --budget-usd and --max-budget-usd-per-run.
@@ -38,6 +42,8 @@ from pathlib import Path
 # variants: personal 28 x v0-v1 + gallery 21 x 2 layouts x v0 = 98 units (196 paired runs) instead of 210.
 PLANS = {"full": {"personal": (0, 1, 2), "gallery": (0, 1, 2)},
          "lite": {"personal": (0, 1), "gallery": (0,)}}
+ELICITATION_POLICIES = ("decline", "accept")  # kitsune_benchmark/personal_session.py
+RELAY_TRACKS = ("personal", "gallery", "coexistence")  # track commands that take --elicitation
 
 
 def commands(plan: str = "full") -> list[tuple[str, list[str]]]:
@@ -107,6 +113,9 @@ def main() -> int:
     parser.add_argument("--attempts", type=int, default=1, help="Fresh attempts per track/variant/layout unit")
     parser.add_argument("--order", choices=("ab", "ba", "abba"),
                         help="A=Playwright, B=Kitsune; abba alternates AB and BA across even attempts; needs --sequential")
+    parser.add_argument("--elicitation", choices=ELICITATION_POLICIES, default="decline",
+                        help="How the relay answers Kitsune's approval prompts on personal, gallery and coexistence "
+                             "entries; recorded in suite-manifest.json")
     args = parser.parse_args()
     try:
         plan = attempt_plan(args.attempts, args.order, args.sequential)
@@ -147,7 +156,7 @@ def main() -> int:
                 "taskset": git_identity(Path(__file__).resolve().parent.parent, "taskset-*"),
                 "started": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
                 "targets_in_parallel": not args.sequential, "attempts": args.attempts,
-                "order_policy": args.order, "attempt_plan": plan,
+                "order_policy": args.order, "attempt_plan": plan, "elicitation": args.elicitation,
                 "order_key": {"a": "playwright", "b": "kitsune"}, "plan": args.plan, "commands": [name for name, _ in commands(args.plan)]}
     (out / "suite-manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
     log = out / "suite-log.jsonl"
@@ -164,6 +173,7 @@ def main() -> int:
                 base = [sys.executable, "-m", "kitsune_benchmark", *argv, "--harness", args.harness,
                         *(["--claude-model", args.model] if args.harness != "codex" else ["--codex-model", args.model]),
                         *(["--max-budget-usd-per-run", str(args.max_budget_usd_per_run), "--allow-api-billing"] if api else []),
+                        *(["--elicitation", args.elicitation] if argv[0] in RELAY_TRACKS else []),
                         "--kitsune-project", args.kitsune_project, "--execute"]
                 parallel = not args.sequential and not always_sequential(name)
                 fixed_targets = "--targets" in argv

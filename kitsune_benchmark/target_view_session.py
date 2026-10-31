@@ -56,6 +56,7 @@ def main():
         session.evidence["error"] = "target_view_session_failed"
         session.save()
         print("Target-view session failed; inspect private artifacts.", file=sys.stderr)
+        session.hold_failed_setup()
         return 2
     finally:
         session.close()
