@@ -938,6 +938,40 @@ for line in sys.stdin:
                 with self.assertRaises(ValueError):
                     tabs_from_result(target, response)
 
+    def test_held_view_current_reads_the_tab_kitsune_390_hides(self):
+        def listing(*tabs):
+            return {"content": [{"type": "text", "text": json.dumps({"tabs": [
+                {"index": i, "url": f"http://localhost/{i}", **tab} for i, tab in enumerate(tabs)]})}]}
+        hidden = listing({"active": True}, {"owned": True})
+        self.assertEqual([t["active"] for t in tabs_from_result("kitsune", hidden)], [False, False])
+        self.assertEqual([t["active"] for t in tabs_from_result("kitsune", hidden, True)], [True, False])
+        # A listed current tab wins, and an owned or ambiguous active tab is never read as current.
+        for response, expected in ((listing({"active": True}, {"owned": True, "current": True}), [False, True]),
+                                   (listing({"active": True, "owned": True}, {}), [False, False]),
+                                   (listing({"active": True}, {"active": True}), [False, False])):
+            with self.subTest(response=response):
+                self.assertEqual([t["active"] for t in tabs_from_result("kitsune", response, True)], expected)
+
+    def test_select_starting_tab_detects_kitsune_390(self):
+        def selected(**tab):
+            return {"result": {"content": [{"type": "text", "text": json.dumps(
+                {"ok": True, "index": 1, "tabs": [{"index": 0, "url": "http://localhost/a"},
+                                                   {"index": 1, "url": "http://localhost/b", **tab}]})}]}}
+        cases = (({"active": True}, True),  # kitsune#390: selected, shown, not current
+                 ({"active": True, "current": True}, False),  # earlier Kitsune
+                 ({"active": True, "owned": True}, False))
+        for tab, expected in cases:
+            with self.subTest(tab=tab):
+                session = NativeSession({"target": "kitsune"})
+                with patch.object(session, "request", return_value=selected(**tab)):
+                    session.select_starting_tab("index", 1)
+                self.assertIs(session.held_view_current, expected)
+                self.assertEqual(session.evidence.get("setup_current_hidden_by_view_hold", False), expected)
+        session = NativeSession({"target": "playwright"})
+        with patch.object(session, "request", return_value={"result": {"content": []}}):
+            session.select_starting_tab("index", 1)
+        self.assertFalse(session.held_view_current)
+
     def test_relay_preserves_native_schema_result_and_tracks_hidden_calls(self):
         with tempfile.TemporaryDirectory() as folder:
             settings = {"target": "playwright", "upstream": [], "bootstrap_url": "http://local/t/start",

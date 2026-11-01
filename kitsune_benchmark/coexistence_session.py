@@ -101,7 +101,7 @@ class CoexistenceSession(NativeSession):
         if len(chosen) != 1:
             raise ValueError("Session seed URLs differ from specification.")
         field = "index" if self.config["target"] == "playwright" or self.tab_indexed else "tab_id"
-        self.tool("browser_tabs", {"action": "select", field: chosen[0]["id"]})
+        self.select_starting_tab(field, chosen[0]["id"])
         tabs = self.wait_inventory(lambda tabs: any(tab["url"] == desired and tab["active"] for tab in tabs))
         owned = owned_urls(self.config["target"], self.raw_tabs())
         if owned is not None:

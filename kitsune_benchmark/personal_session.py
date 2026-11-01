@@ -72,7 +72,10 @@ def held_refusal(result: dict) -> dict | None:
     return None
 
 
-def tabs_from_result(target: str, result: dict) -> list[dict]:
+def tabs_from_result(target: str, result: dict, held_view_current: bool = False) -> list[dict]:
+    """held_view_current: Kitsune after kitsune#390 does not mark the current tab `current` while it is an active tab
+    the agent did not open (its writes are held for the user's view). With the flag, a list with no `current` tab
+    reads its single active, not owned tab as current, which is exactly the tab #390 hides."""
     if result.get("isError"):
         raise ValueError("Tab inventory failed.")
     texts = [item.get("text", "") for item in result.get("content", []) if item.get("type") == "text"]
@@ -97,10 +100,15 @@ def tabs_from_result(target: str, result: dict) -> list[dict]:
                     continue
         # Kitsune >= 0.3.1 mirrors Playwright's browser_tabs: index-addressed, and `current` (the tab its tools
         # act on) plays the role of Playwright's "(current)" marker. Older Kitsune lists tab ids and `active`.
-        tabs = [{"id": tab["index"], "active": bool(tab.get("current")), "title": tab.get("title") or "",
+        listed = data["tabs"] if data else []
+        hidden = None
+        if held_view_current and not any(tab.get("current") for tab in listed):
+            held = [i for i, tab in enumerate(listed) if tab.get("active") and not tab.get("owned")]
+            hidden = held[0] if len(held) == 1 else None
+        tabs = [{"id": tab["index"], "active": bool(tab.get("current")) or i == hidden, "title": tab.get("title") or "",
                  "url": tab["url"]} if "index" in tab else
                 {"id": tab["id"], "active": tab["active"], "title": tab.get("title", ""), "url": tab["url"]}
-                for tab in data["tabs"]] if data else []
+                for i, tab in enumerate(listed)]
     else:
         raise ValueError("Unknown MCP target.")
     if (not tabs or any(type(tab["id"]) is not int or type(tab["active"]) is not bool
@@ -117,6 +125,7 @@ class NativeSession:
         self.pending = queue.Queue()
         self.serial = 0
         self.tab_indexed = False
+        self.held_view_current = False  # kitsune#390: see tabs_from_result and select_starting_tab
         self.tab_list_result = None  # the latest inventory, as the native server listed it
         self.started_mono = time.monotonic()
         self.elicitation = config.get("elicitation", "decline")
@@ -292,7 +301,7 @@ class NativeSession:
         result = self.tool("browser_tabs", {"action": "list"})
         texts = [item.get("text", "") for item in result.get("content", []) if item.get("type") == "text"]
         self.tab_indexed = '"index"' in json.dumps(result.get("structuredContent")) + "".join(texts)
-        tabs = tabs_from_result(self.config["target"], result)
+        tabs = tabs_from_result(self.config["target"], result, self.held_view_current)
         self.tab_list_result = result
         return tabs
 
@@ -313,6 +322,23 @@ class NativeSession:
             elapsed = time.monotonic() - started
             self.evidence["harness_seconds"] += elapsed
             self.diagnostic("readiness_wait", duration_sec=elapsed)
+
+    def select_starting_tab(self, field: str, value: int):
+        """Select the active starting tab. Kitsune after kitsune#390 selects a tab the agent did not open but does not
+        list it `current` while the user may be viewing it: an ok select whose selected tab is active, not owned and
+        not current turns on held_view_current for the session (evidence setup_current_hidden_by_view_hold).
+        Earlier Kitsune lists the selected tab current, so its inventories read as before."""
+        result = self.tool("browser_tabs", {"action": "select", field: value})
+        if self.config["target"] != "kitsune" or field != "index":
+            return
+        listed = result_json(result, "tabs")
+        listed = listed if isinstance(listed, list) else []
+        index = result_json(result, "index")
+        if (not result.get("isError") and result_json(result, "ok") and type(index) is int and 0 <= index < len(listed)
+                and not any(tab.get("current") for tab in listed)
+                and listed[index].get("active") and not listed[index].get("owned")):
+            self.held_view_current = True
+            self.evidence["setup_current_hidden_by_view_hold"] = True
 
     def open_agent_task_tab(self, initial_url: str):
         """Config task_tab "agent": run the task in a tab the harness opens, so Kitsune lists it as owned and its
@@ -389,7 +415,7 @@ class NativeSession:
         if len(chosen) != 1 or sorted(t["url"] for t in tabs) != sorted(self.config["urls"]):
             raise ValueError("Session seed URLs differ from specification.")
         field = "index" if self.config["target"] == "playwright" or self.tab_indexed else "tab_id"
-        self.tool("browser_tabs", {"action": "select", field: chosen[0]["id"]})
+        self.select_starting_tab(field, chosen[0]["id"])
         tabs = self.wait_inventory(lambda tabs: any(tab["url"] == desired and tab["active"] for tab in tabs))
         if not any(tab["url"] == desired and tab["active"] for tab in tabs):
             raise ValueError("Active starting tab was not established.")
