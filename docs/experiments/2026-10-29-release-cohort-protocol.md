@@ -88,7 +88,17 @@ external are the same in both plans.
 
    - **No retries:** an unscorable or incomplete track stops the suite with exit 3, and that is reported as it is.
    - **Session limit:** if the subscription session limit stops the suite, the incomplete track is rerun from its
-     start once, in a fresh output directory, after the limit resets, and the report lists the retry.
+     start once, in a fresh output directory, after the limit resets, and the report lists the retry. The retry
+     starts at the stopped entry and records it (`resumed_from`, `previous_suite`) in its `suite-manifest.json`;
+     `scripts/merge-suites.py` then writes one directory for the analysis, without the entries the retry replaced:
+
+     ```sh
+     uv run --locked python scripts/run-full-suite.py --plan lite --kitsune-project artifacts/vendor/kitsune-<TAG> \
+       --from <stopped entry> --previous-suite artifacts/opus-subscription-<TAG> \
+       --out artifacts/opus-subscription-<TAG>-retry
+     uv run --locked python scripts/merge-suites.py artifacts/opus-subscription-<TAG> \
+       artifacts/opus-subscription-<TAG>-retry --out artifacts/opus-subscription-<TAG>-merged
+     ```
 4. **Audit** (offline):
    - every run has subscription authentication, `claude-opus-5-5` and no harness error;
    - there are no audit violations and no missing allowlisted tools;
