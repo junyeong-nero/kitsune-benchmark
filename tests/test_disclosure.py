@@ -185,7 +185,10 @@ class NativeDisclosureTests(unittest.TestCase):
                         "clientInfo": {"name": "disclosure-test", "version": "1"}})
                     session.send({"jsonrpc": "2.0", "method": "notifications/initialized"})
                     session.prepare()
-                    inventory_before = session.inventory()
+                    # prepare() waits for tab URLs, not page loads: a background tab's title can still be its URL
+                    # without the scheme. Every fixture page has a <title>, so wait for them before the baseline.
+                    inventory_before = session.wait_inventory(
+                        lambda tabs: all(tab["title"] and not tab["url"].endswith(tab["title"]) for tab in tabs))
                     for name, arguments in (("browser_tabs", {"action": "list"}), ("browser_snapshot", {}),
                                             ("browser_page_text", {})):
                         responses = []
