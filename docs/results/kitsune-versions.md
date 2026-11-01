@@ -105,6 +105,21 @@ These are observations; a release-improvement claim still goes through a
 [coexistence track](../coexistence.md) is part of the full suite. The taskset-v2
 user-seeded tab custody contract is retained unchanged.
 
+## main `dea1ad4` → main `514b5b7` (pre-release main)
+
+`514b5b7652a2e0a7ac4a3fb07e602a793f732e36` (`v0.7.1-27-g514b5b7`). 6 commits after `dea1ad4`:
+
+- a declined viewed-tab hold means "not in this tab", and the viewed tab is no longer listed current (#390, for #383);
+- a repeated snapshot after a full action result answers `unchanged` (#391, for #384);
+- contenteditable text in snapshots, no false `no_visible_change` (#392, for #385);
+- shorter `needs_user` instructions (#389), typed text on a stale-ref Enter (#388), agent-tab popup (#382).
+
+Needs benchmark #68's setup fix (`869551c`), which reads the current tab #390 no longer lists.
+
+| Date | Report | Model / harness | Kitsune revision | Notes |
+| --- | --- | --- | --- | --- |
+| 2026-11-01 | [Lite suite under decline](2026-11-01-main-514b5b7.md) | `claude-opus-5-5`, Claude Code subscription | `514b5b7` | 306 scorable runs; coexistence and external rerun after a session-limit stop and merged. Kitsune solves every lite unit; PW crowded 20/21 (`mm-audio`). K/PW input (`dea1ad4` decline → `514b5b7`): personal 0.943 → 0.934, crowded 0.704 → 0.627, isolated 0.859 → 0.910, coexistence 0.946 → 0.992, external 1.165 → 0.960. One prompt per held run (27 runs), all redone in another tab; personal held units 1.385 vs 0.841 without. Coexistence unchanged |
+
 ## v0.7.1 → main `dea1ad4` (pre-release main)
 
 `dea1ad4b71a8669c9a9f2f103e2c7ea831f29e34`. 21 commits after v0.7.1. The changes this benchmark measured:
