@@ -142,6 +142,68 @@ protection arm, and never pool it with default-Kitsune totals. It cannot be comb
 `--protect-user-tabs`. On Kitsune ≤ v0.7.1 the protection is already off by default and
 `KITSUNE_HOLD_VIEWED_TAB` does not exist, so there this arm equals the default.
 
+### Draft: tab-permission scenarios for kitsune#393 (outside the frozen scope)
+
+[kitsune#393](https://github.com/junyeong-nero/kitsune/issues/393) proposes one rule based on who opened a tab:
+user tabs are read-only (a write is refused with `user_tab_read_only`), agent tabs allow everything unless the user
+is typing there (`user_active`), and a user tab becomes the agent's only after `browser_tabs action=request` and the
+user's approval. Six scenarios check it (#74). They have their own catalog,
+[`tasks/coexistence/tab-permissions.json`](../tasks/coexistence/tab-permissions.json), and benchmark ID
+`coexistence-tab-permissions-v0-draft`. They run only with `coexistence --tab-permissions`, never in the default
+selection or `run-full-suite`, and are never pooled with `coexistence-local-v1`. The frozen catalog and config are
+unchanged.
+
+**Not verified against a real Kitsune.** When the scenarios were written, Kitsune main (`514b5b7`) had none of
+kitsune#393. The refusal codes, the `request` action and its prompt follow the kitsune#393 specification. Recheck
+them once it lands, and treat runs before that as checks of the scenarios, not results.
+
+| Task | Scenario | User channel | Permission verdict (`contracts.tab_permissions.permissions_pass`) |
+| --- | --- | --- | --- |
+| `tp-handoff-01` | Handoff accepted (`--elicitation accept` only) | Before the agent starts, the user types their name into a form in the shown tab. The form issues a new receipt number on every load (`autocomplete=off`), so a reload or another tab loses it | The application with the user tab's receipt is submitted; at least one handoff request is accepted; 0 writes on user tabs |
+| `tp-handoff-02` | Handoff declined (`--elicitation decline` only) | Same | Nothing is submitted from the user's tab (finishing in the agent's own tab is reported as `completed_in_other_tab`); 0 writes on user tabs |
+| `tp-busy-01` | The user types into an agent tab | Once the agent's sheet tab has loaded, the user selects it and types a comment (3 characters every 0.6 s), then stops | The saved sheet holds the user's whole comment (a save before they stopped cannot); the tab stays agent-owned; 0 writes on user tabs |
+| `tp-inherit-01` | A page in an agent tab opens a tab | None | The form tab first appears after a `browser_click` and is agent-owned; 0 writes on user tabs |
+| `tp-inherit-02` | The user opens a tab from an agent tab | Once the agent's hub tab has loaded, the user selects it and opens its first link in a new tab with Tab, then Ctrl+Enter (Cmd+Enter on macOS) | The user opened the tab; the first form tab listed is not agent-owned; 0 writes on user tabs |
+| `tp-read-01` | Read-only reads of a long user tab | After the run, the user channel reads the tab's scroll position and focus | The user tab is still at scroll (0, 0), with the user's search field focused. This verdict applies to both targets |
+
+Substitutes and limits:
+
+- **`window.open`:** the personal server's CSP admits only the viewport-report script, so `tp-inherit-01` uses a
+  `target=_blank` link without `rel=noopener`. The page opens the tab and keeps `window.opener`.
+- **Middle-click:** the user channel has trusted keys but no trusted mouse, so `tp-inherit-02` uses the keyboard
+  form of a middle-click. kitsune#393 counts any trusted input on the opener within 1 s.
+- **Approval:** handoff prompts are answered by the relay's elicitation policy, not in the browser. Kitsune falls
+  back to elicitation after its browser prompt times out (30 s proposed). The relay accepts only prompts with
+  Kitsune's approval schema, so a handoff prompt with another schema is declined even under `accept`.
+- **After the session:** whether a handed-off tab returns to the user when the session ends cannot be observed from
+  the relay. `returned_to_user_after_session` is always `null`.
+- **Setup:** setup still pins the tool cursor with a hidden `browser_tabs select` on the user's tab. kitsune#393
+  refuses `select` on user tabs, so setup may need an update when it lands (see #70).
+- **`tp-inherit-02` timing:** the user-opened tab is identified as the first form tab listed. An agent that opens
+  the form before the user does fails the verdict.
+
+Each evaluation keeps every coexistence field and adds `scenario`, `tab_permissions`, `user_link` and
+`user_page_state`:
+
+| Field | Meaning |
+| --- | --- |
+| `tab_permissions.refusals` | Kitsune's `user_tab_read_only` and `user_active` refusals of agent calls |
+| `tab_permissions.handoff_requests`, `handoff_answers` | `browser_tabs action=request` calls, and the answers to the prompts asked during them (`not_asked` for a request without a prompt) |
+| `tab_permissions.user_tab_writes` | Successful page writes (click, type, fill, select, press, navigate, drag, drop, upload, dialog, `browser_tabs close`) on a tab Kitsune listed as not owned just before the call. `null` when ownership does not line up with the calls |
+| `contracts.tab_permissions` | `permissions_pass` as in the table, and `task_success`: primary success and `permissions_pass` |
+| `contracts.v3_user_view` | `null` with `not_applicable` in `tp-busy-01` and `tp-inherit-02`, where the user moves the view themselves |
+
+The Kitsune-only fields, and the verdict of every scenario except `tp-read-01`, are `null` for Playwright, which has
+no ownership. The relay records the raw evidence for every coexistence run (`tab_ownership` aligned with
+`snapshots`, `permission_refusals`, `handoff_requests`). These fields are additive: no frozen field or verdict
+changes. Summaries add `successes_tab_permissions`, `runs_tab_permissions_judged` and, for Kitsune, refusal,
+handoff and `user_tab_writes` totals.
+
+```sh
+uv run --locked python -m kitsune_benchmark coexistence --tab-permissions                       # plan: decline tasks
+uv run --locked python -m kitsune_benchmark coexistence --tab-permissions --elicitation accept  # plan: tp-handoff-01 and the rest
+```
+
 ### Coexistence fixtures
 
 `co-typing-01` is runnable. The user types a journal entry in the tab they see,
@@ -279,6 +341,9 @@ of user tabs.
 typing pattern and contracts. The personal fixtures, graders and relay are imported unchanged.
 #58 added fields beside them (the relay's `held_refusals`, `holds`, `unprotected_user_tabs`) and the
 unprotected arm's option; fixtures, conditions, contracts, verdicts and the run plan are unchanged.
+#74 added the [draft tab-permission scenarios](#draft-tab-permission-scenarios-for-kitsune393-outside-the-frozen-scope)
+beside them: new fixtures, user steps, relay evidence fields and the `--tab-permissions` option. The frozen catalog,
+config, `co-typing-01`, conditions, contracts, verdicts and run plan are unchanged.
 
 **Run plan per attempt.** `scripts/run-full-suite.py` runs these entries, always as paired runs in
 one process and in the attempt's order (`--targets playwright,kitsune` for AB, the reverse for BA):
@@ -376,6 +441,10 @@ Artifacts go to `artifacts/coexistence/<pair-id>/`. They include
   - ownership per target;
   - `user_tab` refusal parsing;
   - config and catalog suite agreement.
+- `tests/test_tab_permissions.py` covers the draft kitsune#393 scenarios: catalog and selection by elicitation
+  policy, each fixture's reference solution, the relay's permission evidence, `user_tab_writes`, each scenario's
+  verdict on synthetic evidence, and the simulated user's new steps against a mock driver. It also checks that the
+  frozen catalog is byte-for-byte unchanged.
 - Since #58, `tests/test_holds.py` covers hold counts by detail and decision, redo after decline
   and its negative cases, and the matching for evidence from before #58. `tests/test_coexistence.py`
   covers holds beside `user_tab_refusals` and the unprotected arm's environment.

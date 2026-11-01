@@ -16,6 +16,13 @@ Differences from `personal_session.py`:
 Driver calls are counted separately from harness MCP calls (`driver_calls`, `driver_seconds`).
 Agent calls that Kitsune refuses with code `user_tab` (the protect-user-tabs arm) are counted
 in `user_tab_refusals`.
+
+For the draft tab-permission scenarios (kitsune#393, `tab_permissions.py`) the relay also records, for every run:
+`tab_ownership` (Kitsune's `owned` flags per inventory, aligned with `snapshots`; None for Playwright),
+`permission_refusals` (agent calls refused with `user_tab_read_only` or `user_active`) and `handoff_requests`
+(`browser_tabs action=request` calls with the prompts asked during them). Optional user steps: a `prefill` typed
+before the agent starts, a typing user who waits for the agent's tab, a user who opens a link in the agent's tab
+(`user_link`) and the user tab's scroll and focus read at the end (`user_page_state`).
 """
 from __future__ import annotations
 
@@ -27,8 +34,11 @@ import time
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from kitsune_benchmark.bidi import BidiError  # noqa: E402
-from kitsune_benchmark.personal_session import NativeSession  # noqa: E402
-from kitsune_benchmark.user_driver import TypingUser, UserDriver, ViewSampler  # noqa: E402
+from kitsune_benchmark.personal_session import NativeSession, result_json  # noqa: E402
+from kitsune_benchmark.user_driver import LinkOpeningUser, TypingUser, UserDriver, ViewSampler  # noqa: E402
+
+# kitsune#393: a write on a user tab, and a write on an agent tab the user is typing in.
+PERMISSION_REFUSAL_CODES = ("user_tab_read_only", "user_active")
 
 
 def owned_urls(target: str, result: dict) -> list[str] | None:
@@ -44,6 +54,15 @@ def owned_urls(target: str, result: dict) -> list[str] | None:
             if isinstance(tabs, list):
                 return [tab.get("url") for tab in tabs if tab.get("owned")]
     raise ValueError("Unrecognized Kitsune tab list.")
+
+
+def owned_flags(target: str, result: dict | None) -> list[bool] | None:
+    """Kitsune's `owned` flag of each listed tab, in list order (the relay's inventory order); None for servers
+    without an ownership notion or an unrecognized list."""
+    if target != "kitsune" or not isinstance(result, dict):
+        return None
+    tabs = result_json(result, "tabs")
+    return [bool(tab.get("owned")) for tab in tabs] if isinstance(tabs, list) else None
 
 
 def user_tab_refusal(response: dict) -> bool:
@@ -67,8 +86,11 @@ class CoexistenceSession(NativeSession):
         self.driver: UserDriver | None = None
         self.sampler: ViewSampler | None = None
         self.typist: TypingUser | None = None
+        self.prefill: dict | None = None
+        self.link_user: LinkOpeningUser | None = None
         self.evidence.update(seeding=None, seeded_owned_by_agent=None, view=None,
-                             user_activity=None, driver_calls=0, driver_seconds=0.0, user_tab_refusals=0)
+                             user_activity=None, driver_calls=0, driver_seconds=0.0, user_tab_refusals=0,
+                             tab_ownership=[], permission_refusals=[], handoff_requests=[])
 
     def raw_tabs(self) -> dict:
         return self.tool("browser_tabs", {"action": "list"})
@@ -116,15 +138,30 @@ class CoexistenceSession(NativeSession):
             self.sampler = ViewSampler(self.driver, float(self.config.get("sampler_interval", 0.25)))
             self.sampler.start()
             activity = self.config.get("user_activity")
-            if activity:
-                self.typist = TypingUser(self.driver, url=urls[activity["tab_index"]], selector=activity["selector"],
-                                         text=activity["text"], chunk=activity.get("chunk", 3),
-                                         interval=activity.get("interval", 0.6))
+            if activity and activity.get("prefill"):
+                # The user typed into their shown tab's focused field before the agent started (no typist runs).
+                url = urls[activity["tab_index"]]
+                shown = self.driver.type_text(activity["text"])
+                self.prefill = {"url": url, "selector": activity["selector"],
+                                "typed_into_user_field": activity["text"] if shown == url else "",
+                                "misdirected": [] if shown == url else [{"url": shown, "text": activity["text"]}],
+                                "ticks": 1, "errors": 0, "finished": True, "alive_at_stop": False, "prefill": True}
+            elif activity:
+                self.typist = TypingUser(self.driver, url=activity.get("url") or urls[activity["tab_index"]],
+                                         selector=activity["selector"], text=activity["text"],
+                                         chunk=activity.get("chunk", 3), interval=activity.get("interval", 0.6),
+                                         wait_for_tab=bool(activity.get("wait_for_tab")))
                 self.typist.start()
+            link = self.config.get("user_link")
+            if link:
+                self.link_user = LinkOpeningUser(self.driver, agent_tab_url=link["agent_tab_url"],
+                                                 opens_url=link["opens_url"])
+                self.link_user.start()
         except RuntimeError as error:  # BidiError, or a thread that could not start
             raise ValueError("User channel setup failed.") from error
         # Complete only once the simulated user runs, so a failure up to here is a setup failure (#56).
-        self.evidence.update(seeding="user_bidi", setup_complete=True, initial_tabs=tabs, snapshots=[tabs])
+        self.evidence.update(seeding="user_bidi", setup_complete=True, initial_tabs=tabs, snapshots=[tabs],
+                             tab_ownership=[owned_flags(self.config["target"], self.tab_list_result)])
         self.save()
         self.diagnostic("setup_completed", duration_sec=time.monotonic() - setup_started)
 
@@ -136,15 +173,34 @@ class CoexistenceSession(NativeSession):
         except (BidiError, OSError, StopIteration, ValueError):
             self.evidence["view"]["after_call"].append({"url": None, "error": True})
 
+    def record_permissions(self, message: dict, response: dict, calls: int, asked: int) -> None:
+        """Tab-permission evidence of one agent call (kitsune#393), beside the fields above."""
+        if len(self.evidence["tab_ownership"]) < len(self.evidence["snapshots"]):  # the call's inventory was taken
+            self.evidence["tab_ownership"].append(owned_flags(self.config["target"], self.tab_list_result))
+        if len(self.evidence["tab_calls"]) == calls:  # refused by the relay before reaching the server
+            return
+        params = message.get("params") or {}
+        result = response.get("result") or {}
+        code = result_json(result, "code") if result.get("isError") else None
+        if code in PERMISSION_REFUSAL_CODES:
+            self.evidence["permission_refusals"].append({"call": calls, "tool": params.get("name"), "code": code})
+        if params.get("name") == "browser_tabs" and (params.get("arguments") or {}).get("action") == "request":
+            prompts = [{key: prompt.get(key) for key in ("reason", "detail", "action", "decision")}
+                       for prompt in self.evidence["elicitations"][asked:]]
+            self.evidence["handoff_requests"].append({"call": calls, "error": "error" in response or
+                                                      result.get("isError") is True, "prompts": prompts})
+
     def forward(self, message: dict, emit) -> None:
         if message.get("method") != "tools/call" or "id" not in message:
             super().forward(message, emit)
             return
+        calls, asked = len(self.evidence["tab_calls"]), len(self.evidence["elicitations"])
 
         def answered(response: dict) -> None:
             if response.get("id") == message["id"]:
                 if self.config["target"] == "kitsune" and user_tab_refusal(response):
                     self.evidence["user_tab_refusals"] += 1
+                self.record_permissions(message, response, calls, asked)
                 self.sample_after_call()
                 self.save()
             emit(response)
@@ -157,15 +213,24 @@ class CoexistenceSession(NativeSession):
 
     def finish_user(self) -> None:
         """Stop the simulated user and read their field before the MCP server (and its browser) exits."""
-        if self.typist is not None:
-            record = self.typist.stop()
+        record = self.typist.stop() if self.typist is not None else self.prefill
+        if record is not None:
             try:
                 field = self.driver.field_value(record["url"], record["selector"])
             except (BidiError, OSError):
                 field = {"status": "error", "value": None}
             record.update(final_field_status=field["status"], final_field_value=field["value"])
             self.evidence["user_activity"] = record
-            self.typist = None
+            self.typist = self.prefill = None
+        if self.link_user is not None:
+            self.evidence["user_link"] = self.link_user.stop()
+            self.link_user = None
+        state = self.config.get("user_page_state")
+        if state and self.driver is not None:
+            try:
+                self.evidence["user_page_state"] = self.driver.page_state(state["url"], state["selector"])
+            except (BidiError, OSError):
+                self.evidence["user_page_state"] = {"status": "error"}
         if self.sampler is not None:
             self.evidence["view"]["sampler"] = self.sampler.stop()
             self.sampler = None

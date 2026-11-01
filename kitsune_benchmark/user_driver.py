@@ -130,6 +130,42 @@ class UserDriver:
             raise BidiError("The keyboard is busy.")
         return result
 
+    def press_keys(self, keys: list[str], *, accel: bool = False) -> str:
+        """Trusted presses of named keys (Tab, Enter) into the shown tab, like type_text, optionally while holding the
+        platform's accel key (Cmd on macOS, else Ctrl). Returns the URL of the tab that received them."""
+        result = self.chrome(f"""(() => {{ const tip = Cc['@mozilla.org/text-input-processor;1']
+            .createInstance(Ci.nsITextInputProcessor);
+          if (document.activeElement !== gBrowser.selectedBrowser) gBrowser.selectedBrowser.focus();
+          if (!tip.beginInputTransactionForTests(window)) return null;
+          const shown = gBrowser.selectedBrowser.currentURI.spec;
+          const mac = Services.appinfo.OS === 'Darwin';
+          const codes = {{Tab: 'TAB', Enter: 'RETURN', Control: 'CONTROL', Meta: 'META'}};
+          const key = name => new window.KeyboardEvent('', {{key: name, code: name === 'Enter' || name === 'Tab' ? name
+            : name + 'Left', keyCode: window.KeyboardEvent['DOM_VK_' + codes[name]]}});
+          const modifier = {json.dumps(accel)} ? key(mac ? 'Meta' : 'Control') : null;
+          if (modifier) tip.keydown(modifier);
+          for (const name of {json.dumps(keys)}) {{ const event = key(name); tip.keydown(event); tip.keyup(event); }}
+          if (modifier) tip.keyup(modifier);
+          return shown; }})()""")
+        if not isinstance(result, str):
+            raise BidiError("The keyboard is busy.")
+        return result
+
+    def loaded_tab(self, url: str) -> bool:
+        """Whether exactly one tab shows `url` and has finished loading."""
+        return len([t for t in self.all_tabs(self.windows()) if t["url"] == url and not t["loading"]]) == 1
+
+    def page_state(self, url: str, selector: str) -> dict:
+        """Scroll position of the tab at `url` and whether `selector` has its focus, read through a content sandbox
+        like field_value: only after the agent has finished. `lost`/`ambiguous` as in field_value."""
+        contexts = [c for c in self._timed(self.bidi.top_contexts) if c["url"] == url]
+        if len(contexts) != 1:
+            return {"status": "lost" if not contexts else "ambiguous"}
+        state = self._timed(self.bidi.evaluate, contexts[0]["context"],
+                            "({scroll_x: window.scrollX, scroll_y: window.scrollY, focused: document.activeElement === "
+                            f"document.querySelector({json.dumps(selector)})}})")
+        return {"status": "ok", **state}
+
     def field_value(self, url: str, selector: str) -> dict:
         """Reads a field through a content sandbox. Only after the agent has finished (see type_text).
 
@@ -157,16 +193,34 @@ class TypingUser(threading.Thread):
     """
 
     def __init__(self, driver: UserDriver, *, url: str, selector: str, text: str,
-                 chunk: int = 3, interval: float = 0.6):
+                 chunk: int = 3, interval: float = 0.6, wait_for_tab: bool = False):
+        """wait_for_tab (tab-permission scenarios): `url` is a tab the agent opens. The user waits until it has
+        loaded, selects it, and only then starts typing (`record["tab_selected"]`)."""
         super().__init__(daemon=True)
         self.driver, self.url, self.selector, self.text = driver, url, selector, text
-        self.chunk, self.interval = chunk, interval
+        self.chunk, self.interval, self.wait_for_tab = chunk, interval, wait_for_tab
         self.stop_event = threading.Event()
         self.record = {"url": url, "selector": selector, "typed_into_user_field": "", "misdirected": [],
                        "ticks": 0, "errors": 0, "finished": False}
+        if wait_for_tab:
+            self.record["tab_selected"] = False
+
+    def select_agent_tab(self) -> bool:
+        while not self.stop_event.is_set():
+            try:
+                if self.driver.loaded_tab(self.url):
+                    self.driver.select(self.url)
+                    self.record["tab_selected"] = True
+                    return True
+            except Exception:  # noqa: BLE001 - counted; the typing record is then incomplete
+                self.record["errors"] += 1
+            self.stop_event.wait(self.interval)
+        return False
 
     def run(self) -> None:
         position = 0
+        if self.wait_for_tab and not self.select_agent_tab():
+            return
         while not self.stop_event.is_set() and position < len(self.text):
             piece = self.text[position:position + self.chunk]
             try:
@@ -185,6 +239,44 @@ class TypingUser(threading.Thread):
     def stop(self) -> dict:
         self.stop_event.set()
         self.join(timeout=10)
+        return {**self.record, "alive_at_stop": self.is_alive()}
+
+
+class LinkOpeningUser(threading.Thread):
+    """Tab-permission scenario tp-inherit-02: once the agent's tab at `agent_tab_url` has loaded, the user selects it
+    and opens its first link in a new background tab with trusted keys (Tab, then accel+Enter), the keyboard form of a
+    middle-click. Records whether a tab at `opens_url` then appeared."""
+
+    def __init__(self, driver: UserDriver, *, agent_tab_url: str, opens_url: str, interval: float = 0.5):
+        super().__init__(daemon=True)
+        self.driver, self.agent_tab_url, self.opens_url, self.interval = driver, agent_tab_url, opens_url, interval
+        self.stop_event = threading.Event()
+        self.record = {"agent_tab_url": agent_tab_url, "opens_url": opens_url, "tab_selected": False,
+                       "pressed_in": None, "opened": False, "errors": 0}
+
+    def tabs_at_target(self) -> int:
+        return sum(t["url"] == self.opens_url for t in self.driver.all_tabs(self.driver.windows()))
+
+    def run(self) -> None:
+        before = None
+        while not self.stop_event.is_set() and not self.record["opened"]:
+            try:
+                if not self.record["tab_selected"] and self.driver.loaded_tab(self.agent_tab_url):
+                    self.driver.select(self.agent_tab_url)
+                    self.record["tab_selected"] = True
+                if self.record["tab_selected"] and self.record["pressed_in"] is None:
+                    before = self.tabs_at_target()
+                    self.driver.press_keys(["Tab"])  # the hub's first focusable element is the link
+                    self.record["pressed_in"] = self.driver.press_keys(["Enter"], accel=True)
+                if self.record["pressed_in"] is not None and self.tabs_at_target() > before:
+                    self.record["opened"] = True
+            except Exception:  # noqa: BLE001 - counted; the record is then incomplete
+                self.record["errors"] += 1
+            self.stop_event.wait(self.interval)
+
+    def stop(self) -> dict:
+        self.stop_event.set()
+        self.join(timeout=20)
         return {**self.record, "alive_at_stop": self.is_alive()}
 
 
