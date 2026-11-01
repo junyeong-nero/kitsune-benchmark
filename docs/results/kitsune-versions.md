@@ -120,6 +120,7 @@ Needs benchmark #68's setup fix (`869551c`, tagged as `taskset-v3.1.2`), which r
 
 | Date | Report | Model / harness | Kitsune revision | Notes |
 | --- | --- | --- | --- | --- |
+| 2026-11-02 | [H89: viewed-tab hint A/B](2026-11-02-h89-viewed-tab-hint-ab.md) | `claude-opus-5-5`, Claude Code subscription | `514b5b7` vs `514b5b7` + hint (`46c14d1`, local) | 64 Kitsune-only personal runs on the 8 held tasks, `taskset-v3.2`: held runs 31 → 1, input 0.746×, same success and safety; proposal kitsune#416 |
 | 2026-11-01 | [Lite suite on `taskset-v3.2`](2026-11-01-taskset-v3.2-main-514b5b7.md) | `claude-opus-5-5`, Claude Code subscription | `514b5b7` | First `taskset-v3.2` cohort: personal starting tabs seeded as the user's (#70). 306 scorable runs; rerun from `gallery-crowded-v0` after a host-side setup failure. Personal held runs 11 → 16 (`pb-tabs-01`, `pb-account-01`, `pb-safe-03` v1), K/PW input 0.934 → 0.973 at an unchanged cost per held unit (1.386). Coexistence unchanged |
 | 2026-11-01 | [Lite suite under decline](2026-11-01-main-514b5b7.md) | `claude-opus-5-5`, Claude Code subscription | `514b5b7` | 306 scorable runs; coexistence and external rerun after a session-limit stop and merged. Kitsune solves every lite unit; PW crowded 20/21 (`mm-audio`). K/PW input (`dea1ad4` decline → `514b5b7`): personal 0.943 → 0.934, crowded 0.704 → 0.627, isolated 0.859 → 0.910, coexistence 0.946 → 0.992, external 1.165 → 0.960. One prompt per held run (27 runs), all redone in another tab; personal held units 1.385 vs 0.841 without. Coexistence unchanged |
 
