@@ -93,6 +93,90 @@ class ReleaseReviewTests(unittest.TestCase):
             compared = release.review(folder, compare=folder)
             self.assertEqual(compared["compare"]["shared_units"], 4)
 
+    def test_signals_and_hold_split(self):
+        # #71: tab, snapshot, wait_for and first-request signals per group, and K/PW input split by Kitsune holds.
+        with tempfile.TemporaryDirectory() as folder:
+            def tabs(action):
+                return ("tabs", {"action": action}, '{"ok":true}', False)
+            listing, select, new = tabs("list"), tabs("select"), tabs("new")
+            click = ("click", {"target": "e1"}, '{"ok":true}', False)
+            held = ("click", {"target": "e1"}, '{"error":"The user is viewing tab 0","code":"needs_user"}', True)
+            navigated = ("click", {"target": "e2"}, '{"ok":true,"navigated":{"url":"http://l/memo"},"snapshot":"x"}', False)
+            navigate = ("navigate", {"url": "http://l/a"}, '{"ok":true}', False)
+            failed_navigate = ("navigate", {"url": "http://l/b"}, '{"error":"timeout"}', True)
+            snap = ("snapshot", {}, '{"snapshot":"- text \\"a\\""}', False)
+            unchanged = ("snapshot", {}, '{"snapshot":"unchanged","unchanged_since":"browser_click"}', False)
+            targeted = ("snapshot", {"target": "e3"}, '{"snapshot":"y"}', False)
+            fast = ("wait_for", {"text": "code"}, '{"ok":true,"text":"code","elapsed":6}', False)
+            slow = ("wait_for", {"text": "done"}, '{"ok":true,"text":"done","elapsed":800}', False)
+            gone = ("wait_for", {"textGone": "busy"}, '{"ok":true,"text_gone":"busy","elapsed":25}', False)
+            delta = ("wait_for", {"time": 2}, '{"ok":true,"slept":2.0,"snapshot":"z","snapshot_delta":true}', False)
+            pw_wait = ("wait_for", {"text": "code"}, "### Result\nWaited for code", False)
+
+            def first(tokens):
+                return {"token_attribution": {"first_request_input_tokens": tokens}}
+
+            def pair_dir(name, evidence):
+                path = Path(folder) / name
+                path.mkdir()
+                (path / "kitsune-session-evidence.json").write_text(json.dumps(evidence))
+                return str(path)
+
+            no_hold = {"snapshots": [], "elicitations": [], "held_refusals": []}
+            one_hold = {"snapshots": [], "elicitations": [{"reason": "approval", "detail": "user_viewing",
+                                                           "action": "decline", "decision": "declined"}],
+                        "held_refusals": []}
+            summaries = {
+                "personal-v0": [
+                    {"personal_task": "pb-held", "pair_dir": pair_dir("h", one_hold), "results": {
+                        "playwright": run(folder, "h-p", True, 1000, [listing, select, click], **first(900)),
+                        "kitsune": run(folder, "h-k", True, 3000, [listing, select, held, new, click], **first(1000))}},
+                    {"personal_task": "pb-own", "pair_dir": pair_dir("o", no_hold), "results": {
+                        "playwright": run(folder, "o-p", True, 1000, [listing, navigate, snap], **first(910)),
+                        "kitsune": run(folder, "o-k", True, 500, [listing, new, navigate, unchanged, navigated, snap,
+                                                                   navigated, targeted, failed_navigate, snap], **first(1020))}},
+                    {"personal_task": "pb-unrecorded", "results": {
+                        "playwright": run(folder, "u-p", True, 1000, [listing, new], **first(920)),
+                        "kitsune": run(folder, "u-k", True, 1000, [new, listing, click], **first(1040))}}],
+                "gallery-isolated-v0": [{"gallery_task": "ui-toast", "results": {
+                    "playwright": run(folder, "g-p", True, 1000, [click, pw_wait], **first(800)),
+                    "kitsune": run(folder, "g-k", True, 2000, [click, fast, slow, gone, delta], **first(1100))}}],
+            }
+            log = []
+            for name, pairs in summaries.items():
+                path = Path(folder) / f"{name}.json"
+                path.write_text(json.dumps({"pairs": pairs}))
+                log.append({"name": name, "suite_summary_path": str(path)})
+            (Path(folder) / "suite-log.jsonl").write_text("".join(json.dumps(e) + "\n" for e in log))
+
+            report = release.review(folder)
+            personal = report["signals"]["personal"]
+            k, pw = personal["kitsune"], personal["playwright"]
+            self.assertEqual((k["runs"], k["runs_second_call_tabs_select"], pw["runs_second_call_tabs_select"]), (3, 1, 1))
+            # pb-own and pb-unrecorded open a tab before their first write; Playwright's pb-unrecorded writes nothing.
+            self.assertEqual((k["runs_own_tab_before_first_write"], pw["runs_own_tab_before_first_write"]), (2, 0))
+            # After navigate and after a navigated click; not a targeted snapshot, nor one after a failed navigate.
+            self.assertEqual((k["snapshots_after_navigation"], k["unchanged_since"]), (2, 1))
+            self.assertEqual(k["snapshot_after_navigation_chars"], len(unchanged[2]) + len(snap[2]))
+            self.assertEqual((pw["snapshots_after_navigation"], pw["unchanged_since"]), (1, 0))
+            self.assertEqual((k["median_first_request_input_tokens"], pw["median_first_request_input_tokens"]), (1020, 910))
+            gallery = report["signals"]["gallery-isolated"]
+            k, pw = gallery["kitsune"], gallery["playwright"]
+            self.assertEqual((k["wait_for_text"], k["wait_for_text_under_50ms"]), (2, 1), "textGone is not a text wait")
+            self.assertEqual((k["wait_for_with_delta"], k["wait_for_without_delta"]), (1, 3))
+            self.assertEqual((pw["wait_for_text"], pw["wait_for_text_under_50ms"], pw["wait_for_without_delta"]), (1, 0, 1))
+
+            split = report["hold_split"]
+            self.assertEqual(split["personal"], {"with_hold": {"units": 1, "input": 3.0},
+                                                 "without_hold": {"units": 1, "input": 0.5}, "no_record": 1})
+            self.assertNotIn("gallery-isolated", split, "no hold record in the group")
+            text = release.markdown(report, 1.10)
+            self.assertIn("| personal | 3 / 3 | 1 / 1 | 0 / 2 | 910 / 1020 | 2 | "
+                          f"{len(unchanged[2]) + len(snap[2])} | 1 | 0 / 0 | 0 / 0 |", text)
+            self.assertIn("| gallery-isolated | 1 / 1 | 0 / 0 | 0 / 0 | 800 / 1100 | 0 | 0 | 0 | 1 / 2 | 1 / 3 |", text)
+            self.assertIn("| personal | 1 | 3.0 | 1 | 0.5 |", text)
+            self.assertIn("1 joint successes have no readable Kitsune session evidence", text)
+
     def test_compare_warns_when_elicitation_policies_differ_or_are_not_recorded(self):
         # #59: a suite's policy comes from its suite-manifest.json; suites before #59 recorded none.
         with tempfile.TemporaryDirectory() as now, tempfile.TemporaryDirectory() as then:

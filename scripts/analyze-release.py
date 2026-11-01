@@ -7,7 +7,8 @@ usage: uv run --locked python scripts/analyze-release.py artifacts/opus-subscrip
 Units are (track entry without its target, task); for example ("gallery-crowded-v0", "ui-shadow"). Ratios are
 Kitsune/Playwright totals over units both targets solved. With --compare, the same ratios are computed on the units
 the two suites share, so a lite run can be compared with the matching units of a full run. Kitsune's holds (calls kept
-for the user's approval, and declined writes redone in another tab) are recomputed per entry from session evidence.
+for the user's approval, and declined writes redone in another tab) are recomputed per entry from session evidence, and
+each group's ratio is split by units whose Kitsune run held a call and units whose run did not.
 
 Each suite's elicitation policy (how the relay answered Kitsune's approval prompts) is read from its
 suite-manifest.json, else from what its pairs recorded (summary, pair manifest, session evidence). Ratios under
@@ -27,12 +28,18 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from kitsune_benchmark.holds import DECISIONS, DETAILS, aggregate_holds, hold_metrics  # noqa: E402
+from kitsune_benchmark.holds import NAVIGATIONS as BROWSER_NAVIGATIONS  # noqa: E402
 
 TARGETS = ("playwright", "kitsune")
 ACTIONS = ("click", "type", "fill_form", "select_option", "press_key", "hover", "drag")
 OBSERVATIONS = ("snapshot", "find", "wait_for", "take_screenshot")
 # kitsune#364, Kitsune's first hold, is 561719a: `git describe --tags` v0.7.1-10-g561719a on Kitsune main.
 HOLDS_SINCE = ((0, 7, 1), 10)
+NAVIGATIONS = tuple(name.replace("browser_", "") for name in BROWSER_NAVIGATIONS)
+WRITES = ("click", "type", "fill_form", "select_option", "press_key", "drag") + NAVIGATIONS
+SIGNAL_COUNTS = ("runs", "runs_second_call_tabs_select", "runs_own_tab_before_first_write", "snapshots_after_navigation",
+                 "snapshot_after_navigation_chars", "unchanged_since", "wait_for_text", "wait_for_text_under_50ms",
+                 "wait_for_with_delta", "wait_for_without_delta")
 
 
 def group_of(entry: str) -> str | None:
@@ -161,6 +168,19 @@ def tool_calls(run: dict) -> list[tuple[str, dict, str, bool]]:
                 name, args = pending.pop(block.get("tool_use_id"), ("?", {}))
                 out.append((name, args, text, bool(block.get("is_error"))))
     return out
+
+
+def result_fields(text: str) -> dict:
+    """A tool result's JSON fields; {} for text that is not a JSON object, such as Playwright MCP's markdown."""
+    try:
+        value = json.loads(text)
+    except ValueError:
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def tabs_action(call: tuple[str, dict, str, bool]) -> str | None:
+    return call[1].get("action") if call[0] == "tabs" else None
 
 
 def evaluation(run: dict) -> dict:
@@ -300,18 +320,92 @@ def behaviour(units: dict) -> dict:
     return summary
 
 
+def signals(units: dict) -> dict:
+    """Per group and target: runs whose 2nd call is `tabs select` (kitsune#399); runs that open a tab before their first
+    write (kitsune#393); bare snapshots right after a navigating call, their characters and `unchanged_since` answers
+    (kitsune#400, kitsune#401); `wait_for {text}` answered in under 50 ms and `wait_for` results with and without a
+    `snapshot_delta` (kitsune#402, kitsune#403); the median first request, the fixed prefix (kitsune#405). Navigations
+    seen in results, `unchanged_since`, `elapsed` and `snapshot_delta` are Kitsune result fields."""
+    counts = collections.defaultdict(lambda: {t: collections.Counter() for t in TARGETS})
+    first_requests = collections.defaultdict(lambda: {t: [] for t in TARGETS})
+    for (entry, _), runs in units.items():
+        group = group_of(entry)
+        if not group:
+            continue
+        for target in TARGETS:
+            if target not in runs:
+                continue
+            calls = tool_calls(runs[target])
+            m = counts[group][target]
+            m["runs"] += 1
+            m["runs_second_call_tabs_select"] += len(calls) > 1 and tabs_action(calls[1]) == "select"
+            first_write = next((i for i, call in enumerate(calls) if call[0] in WRITES), None)
+            m["runs_own_tab_before_first_write"] += first_write is not None and any(
+                tabs_action(call) == "new" for call in calls[:first_write])
+            for (before, _, before_text, before_error), (name, args, text, _) in zip(calls, calls[1:]):
+                navigated = before in NAVIGATIONS or "navigated" in result_fields(before_text)
+                if name == "snapshot" and not args and navigated and not before_error:
+                    m["snapshots_after_navigation"] += 1
+                    m["snapshot_after_navigation_chars"] += len(text)
+                    m["unchanged_since"] += "unchanged_since" in result_fields(text)
+            for name, args, text, _ in calls:
+                if name != "wait_for":
+                    continue
+                fields = result_fields(text)
+                m["wait_for_with_delta" if fields.get("snapshot_delta") else "wait_for_without_delta"] += 1
+                if "text" in args:
+                    m["wait_for_text"] += 1
+                    elapsed = fields.get("elapsed")
+                    m["wait_for_text_under_50ms"] += isinstance(elapsed, (int, float)) and elapsed < 50
+            first = (runs[target].get("token_attribution") or {}).get("first_request_input_tokens")
+            if first:
+                first_requests[group][target].append(first)
+    return {group: {target: {**{key: m[key] for key in SIGNAL_COUNTS}, "median_first_request_input_tokens":
+                             statistics.median(first_requests[group][target]) if first_requests[group][target] else None}
+                    for target, m in by_target.items()}
+            for group, by_target in counts.items()}
+
+
+def run_holds(run: dict) -> dict | None:
+    """A Kitsune run's holds from its pair's session evidence (holds.py); None when the evidence is missing or truncated."""
+    pair_dir = run.get("pair_dir")
+    try:
+        evidence = json.loads((Path(pair_dir) / "kitsune-session-evidence.json").read_text()) if pair_dir else None
+    except (OSError, ValueError):
+        evidence = None
+    return hold_metrics(evidence) if isinstance(evidence, dict) else None
+
+
 def holds(units: dict) -> dict:
     """Kitsune holds per entry, from each run's session evidence (holds.py); entries without Kitsune runs are left out."""
     metrics = collections.defaultdict(list)
     for (entry, _), runs in units.items():
         if "kitsune" in runs:
-            pair_dir = runs["kitsune"].get("pair_dir")
-            try:  # missing or truncated evidence: no hold record for the run
-                evidence = json.loads((Path(pair_dir) / "kitsune-session-evidence.json").read_text()) if pair_dir else None
-            except (OSError, ValueError):
-                evidence = None
-            metrics[entry].append(hold_metrics(evidence) if isinstance(evidence, dict) else None)
+            metrics[entry].append(run_holds(runs["kitsune"]))
     return {entry: aggregate_holds(values) for entry, values in metrics.items()}
+
+
+def hold_split(units: dict) -> dict:
+    """Per group, Kitsune/Playwright input on joint successes whose Kitsune run held a call and on those whose run did
+    not; joint successes without a hold record are counted apart, and groups with no record are left out."""
+    split = collections.defaultdict(lambda: {"with_hold": [], "without_hold": [], "no_record": 0})
+    for (entry, _), runs in units.items():
+        group = group_of(entry)
+        if not group or not all(solved(runs.get(t)) for t in TARGETS):
+            continue
+        record = run_holds(runs["kitsune"])
+        if record is None:
+            split[group]["no_record"] += 1
+        else:
+            split[group]["with_hold" if record["holds"] else "without_hold"].append(runs)
+
+    def side(joint):
+        pw = sum(input_tokens(runs["playwright"]) for runs in joint)
+        return {"units": len(joint),
+                "input": round(sum(input_tokens(runs["kitsune"]) for runs in joint) / pw, 3) if pw else None}
+    return {group: {"with_hold": side(row["with_hold"]), "without_hold": side(row["without_hold"]),
+                    "no_record": row["no_record"]}
+            for group, row in split.items() if row["with_hold"] or row["without_hold"]}
 
 
 def review(suite_dir, compare=None, threshold=1.10) -> dict:
@@ -319,7 +413,8 @@ def review(suite_dir, compare=None, threshold=1.10) -> dict:
     policy, source = elicitation_policy(suite_dir)
     report = {"suite": str(suite_dir), "elicitation": policy, "elicitation_source": source, "audit": audit(units),
               "outcomes": outcomes(units), "ratios": ratios(units),
-              "outliers": outliers(units, threshold), "behaviour": behaviour(units), "holds": holds(units)}
+              "outliers": outliers(units, threshold), "behaviour": behaviour(units), "signals": signals(units),
+              "holds": holds(units), "hold_split": hold_split(units)}
     if compare:
         old = load(compare)
         shared = set(units) & set(old)
@@ -381,6 +476,19 @@ def markdown(report: dict, threshold: float) -> str:
                        ("truncated_full_snapshots", "Truncated full snapshots")):
         lines.append(f"| {label} | {b['playwright'].get(key)} | {b['kitsune'].get(key)} |")
     lines += ["", "Tool errors (Kitsune): " + (", ".join(f"{v}× {k}" for k, v in b["kitsune"]["tool_errors"].items()) or "none")]
+    lines += ["", "## Tabs, snapshots after navigation, waits and first request by group", "",
+              "| Group | Runs PW / K | 2nd call `tabs select` PW / K | Own tab before first write PW / K | "
+              "Median first request input PW / K | K bare snapshots right after navigating | K chars of those snapshots | "
+              "K `unchanged_since` | K `wait_for {text}` under 50 ms / all | K `wait_for` with / without delta |",
+              "| --- | --- | --- | --- | --- | ---: | ---: | ---: | --- | --- |"]
+    for group, s in report["signals"].items():
+        pw, k = s["playwright"], s["kitsune"]
+        both = lambda key: f"{pw[key]} / {k[key]}"
+        lines.append(f"| {group} | {both('runs')} | {both('runs_second_call_tabs_select')} | "
+                     f"{both('runs_own_tab_before_first_write')} | {both('median_first_request_input_tokens')} | "
+                     f"{k['snapshots_after_navigation']} | {k['snapshot_after_navigation_chars']} | {k['unchanged_since']} | "
+                     f"{k['wait_for_text_under_50ms']} / {k['wait_for_text']} | "
+                     f"{k['wait_for_with_delta']} / {k['wait_for_without_delta']} |")
     lines += ["", "## Kitsune holds", "",
               "| Entry | Runs | Runs with a hold | Holds | " + " / ".join(DETAILS) + " | " + " / ".join(DECISIONS)
               + " | Runs with a declined hold | Runs that redid a declined write |",
@@ -397,6 +505,14 @@ def markdown(report: dict, threshold: float) -> str:
     if unrecorded:
         lines += ["", f"{unrecorded} Kitsune runs have evidence from before refusals were recorded: their holds are "
                   "counted from approval prompts only; refusals without a prompt (such as Kitsune 0.7's user_tab) are not seen."]
+    lines += ["", "## Kitsune / Playwright input on joint successes, by Kitsune hold", "",
+              "| Group | Units with a hold | Input | Units without a hold | Input |", "| --- | ---: | ---: | ---: | ---: |"]
+    for group, h in report["hold_split"].items():
+        lines.append(f"| {group} | {h['with_hold']['units']} | {h['with_hold']['input']} | "
+                     f"{h['without_hold']['units']} | {h['without_hold']['input']} |")
+    no_record = sum(h["no_record"] for h in report["hold_split"].values())
+    if no_record:
+        lines += ["", f"{no_record} joint successes have no readable Kitsune session evidence and are left out of the split."]
     return "\n".join(lines) + "\n"
 
 
