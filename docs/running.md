@@ -193,6 +193,11 @@ uv run --locked python scripts/analyze-release.py artifacts/opus-lite-accept \
   --compare artifacts/opus-lite-decline > review.md   # warns: the policies differ
 ```
 
+`--plan unprotected-lite` is not a release plan. It runs only Kitsune, with both user-tab protections off
+(`--unprotected-user-tabs`, `KITSUNE_PROTECT_USER_TABS=0 KITSUNE_HOLD_VIEWED_TAB=0`), on the lite plan's personal
+v0–v1, coexistence user-seeded v0 and `co-typing-01` v0–2 units: 87 runs, one process per entry. It is the
+viewed-tab hold baseline of #72; see [its plan](experiments/2026-11-01-issue-72-unprotected-arm-plan.md).
+
 ### Repeated, predeclared order (taskset-v3)
 
 `--attempts N` (default 1) repeats every track/variant/layout unit using fresh

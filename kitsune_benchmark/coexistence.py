@@ -27,8 +27,9 @@ import sys
 from .adapter import claude_budget, harness_pins, with_claude_overrides, write_json
 from .coexistence_fixtures import COEXISTENCE_FIXTURES
 from .miniwob import UI_TOOLS
-from .personal import (PersonalServer, PersonalTrial, aggregate_results, catalog as personal_catalog,
-                       config as personal_config, pair_complete, runnable_ids as personal_runnable_ids)
+from .personal import (UNPROTECTED_KITSUNE_ENV, PersonalServer, PersonalTrial, aggregate_results,
+                       catalog as personal_catalog, config as personal_config, pair_complete,
+                       runnable_ids as personal_runnable_ids)
 from .personal_session import ELICITATION_POLICIES
 from .smoke import ROOT, TARGETS, run_pair, source_revision
 from .specs import Server, Task
@@ -43,9 +44,6 @@ INTEGRITY = ("Synthetic local apps; personal-track graders unchanged. The simula
              "privileged local WebDriver BiDi channel the agent cannot see. View samples are taken after "
              "each agent call and every sampler interval, so sub-interval flicker can be missed. "
              "Remote agent activity can be visible to pages (navigator.webdriver) in both browsers.")
-# Not part of coexistence-local-v1: a Kitsune arm with both user-tab protections off. On Kitsune after 0.7.1 they are on by
-# default (kitsune#371), so the frozen protect arm's KITSUNE_PROTECT_USER_TABS=1 configures what the default arm runs.
-UNPROTECTED_KITSUNE_ENV = {"KITSUNE_PROTECT_USER_TABS": "0", "KITSUNE_HOLD_VIEWED_TAB": "0"}
 
 
 def config() -> dict:

@@ -14,6 +14,11 @@ Coexistence (coexistence-local-v1) follows its frozen plan: the 28 personal task
 co-typing-01 on variants 0-2, then the Kitsune protect-user-tabs arm on variant 0. Its entries always run
 paired in one process (the user channel was validated that way), in the attempt's order.
 
+--plan unprotected-lite is not a release plan: it runs only the Kitsune arm with both user-tab protections off
+(KITSUNE_PROTECT_USER_TABS=0 KITSUNE_HOLD_VIEWED_TAB=0, #58) on the lite plan's personal and coexistence units
+(personal 28 x v0-v1, coexistence user-seeded 28 x v0, co-typing-01 v0-2): 87 Kitsune runs, the viewed-tab hold
+baseline of #72. Entries that fix their targets (Kitsune-only arms) run as one process.
+
 --elicitation (decline by default, or accept) sets how the relay answers Kitsune's approval prompts on every
 personal, gallery and coexistence entry, and is recorded in suite-manifest.json. External does not use the relay.
 Suites run under different policies are not comparable.
@@ -42,11 +47,16 @@ from pathlib import Path
 # variants: personal 28 x v0-v1 + gallery 21 x 2 layouts x v0 = 98 units (196 paired runs) instead of 210.
 PLANS = {"full": {"personal": (0, 1, 2), "gallery": (0, 1, 2)},
          "lite": {"personal": (0, 1), "gallery": (0,)}}
+# Kitsune-only arm plans outside the frozen tasksets, over a release plan's personal variants.
+ARM_PLANS = {"unprotected-lite": "lite"}
+UNPROTECTED_ARM = ("--unprotected-user-tabs", "--targets", "kitsune")
 ELICITATION_POLICIES = ("decline", "accept")  # kitsune_benchmark/personal_session.py
 RELAY_TRACKS = ("personal", "gallery", "coexistence")  # track commands that take --elicitation
 
 
 def commands(plan: str = "full") -> list[tuple[str, list[str]]]:
+    if plan in ARM_PLANS:
+        return unprotected_commands(ARM_PLANS[plan])
     variants = PLANS[plan]
     items = [(f"personal-v{v}", ["personal", "--all", "--variant", str(v)]) for v in variants["personal"]]
     items += [(f"gallery-{layout}-v{v}", ["gallery", "--layout", layout, "--variant", str(v)])
@@ -56,6 +66,17 @@ def commands(plan: str = "full") -> list[tuple[str, list[str]]]:
     items.append(("coexistence-protect", ["coexistence", "--all-personal", "--variant", "0", "--protect-user-tabs",
                                           "--targets", "kitsune"]))
     items.append(("external", ["external"]))
+    return items
+
+
+def unprotected_commands(plan: str) -> list[tuple[str, list[str]]]:
+    """The release plan's personal and coexistence user-seeded/typing units, Kitsune only, both protections off."""
+    items = [(f"personal-v{v}-unprotected", ["personal", "--all", "--variant", str(v), *UNPROTECTED_ARM])
+             for v in PLANS[plan]["personal"]]
+    items.append(("coexistence-user-seeded-unprotected",
+                  ["coexistence", "--all-personal", "--variant", "0", *UNPROTECTED_ARM]))
+    items += [(f"coexistence-typing-v{v}-unprotected",
+               ["coexistence", "--task", "co-typing-01", "--variant", str(v), *UNPROTECTED_ARM]) for v in range(3)]
     return items
 
 
@@ -104,9 +125,11 @@ def main() -> int:
     parser.add_argument("--allow-api-billing", action="store_true",
                         help="Confirm that an API-key harness may spend ANTHROPIC_API_KEY credit")
     parser.add_argument("--out", required=True)
-    parser.add_argument("--plan", choices=tuple(PLANS), default="full",
+    parser.add_argument("--plan", choices=(*PLANS, *ARM_PLANS), default="full",
                         help="full: every data variant; lite: personal v0-v1 and gallery v0 (both layouts), "
-                             "coexistence and external unchanged")
+                             "coexistence and external unchanged; unprotected-lite: Kitsune only with "
+                             "--unprotected-user-tabs on lite's personal units, coexistence user-seeded v0 and "
+                             "co-typing-01 v0-2 (#72)")
     parser.add_argument("--spent-usd", type=float, default=0.0, help="Already spent toward the budget")
     parser.add_argument("--sequential", action="store_true",
                         help="One process per track running paired targets in turn, instead of the two in parallel")
@@ -175,8 +198,8 @@ def main() -> int:
                         *(["--max-budget-usd-per-run", str(args.max_budget_usd_per_run), "--allow-api-billing"] if api else []),
                         *(["--elicitation", args.elicitation] if argv[0] in RELAY_TRACKS else []),
                         "--kitsune-project", args.kitsune_project, "--execute"]
-                parallel = not args.sequential and not always_sequential(name)
                 fixed_targets = "--targets" in argv
+                parallel = not args.sequential and not always_sequential(name) and not fixed_targets
                 def budget(amount):
                     return ["--budget-usd", str(round(amount, 6))] if api else []
                 if parallel:

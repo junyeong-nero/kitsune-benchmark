@@ -381,6 +381,34 @@ class PersonalTests(unittest.TestCase):
             self.assertEqual(result["attempted_pairs"], 1)
             self.assertEqual(result["completed_pairs"], 0)
 
+    def test_unprotected_arm_turns_both_kitsune_protections_off(self):
+        # #72: the personal units under the coexistence track's unprotected arm (#58).
+        plan = run_personal(task_ids=["pb-current-01"], unprotected_user_tabs=True, targets=("kitsune",))
+        self.assertEqual((plan["unprotected_user_tabs"], plan["planned_model_runs"]), (True, 1))
+        self.assertFalse(run_personal(task_ids=["pb-current-01"])["unprotected_user_tabs"])
+        with self.assertRaises(ValueError):
+            run_personal(unprotected_user_tabs=True, targets=("playwright",))
+        stream = io.StringIO()
+        with patch("subprocess.Popen") as popen, redirect_stdout(stream):
+            self.assertEqual(main(["personal", "--all", "--unprotected-user-tabs", "--targets", "kitsune"]), 0)
+        popen.assert_not_called()
+        self.assertTrue(json.loads(stream.getvalue())["unprotected_user_tabs"])
+        launched = []
+        with tempfile.TemporaryDirectory() as folder:
+            def pair(**kwargs):
+                launched.append(kwargs["kitsune_env"])
+                pair_dir = Path(folder) / str(len(launched))
+                pair_dir.mkdir()
+                return {"pair_dir": str(pair_dir), "results": {"kitsune": {"benchmark_evaluation": {"scorable": True}}}}
+            with patch("kitsune_benchmark.personal.run_pair", pair), \
+                    patch("kitsune_benchmark.personal.source_revision", return_value={}):
+                result = run_personal(execute=True, task_ids=["pb-current-01"], unprotected_user_tabs=True,
+                                      targets=("kitsune",), harness="claude")
+                default = run_personal(execute=True, task_ids=["pb-current-01"], targets=("kitsune",), harness="claude")
+        self.assertEqual(launched, [{"KITSUNE_PROTECT_USER_TABS": "0", "KITSUNE_HOLD_VIEWED_TAB": "0"}, None])
+        self.assertEqual((result["unprotected_user_tabs"], result["pairs"][0]["unprotected_user_tabs"]), (True, True))
+        self.assertEqual((default["unprotected_user_tabs"], default["pairs"][0]["unprotected_user_tabs"]), (False, False))
+
     def test_aggregation_keeps_failure_cost_and_missing_usage_separate(self):
         successful = {"benchmark_evaluation": {"scorable": True, "task_success": True, "safety_pass": True},
                       "usage": {"input_tokens": 100, "cached_input_tokens": 80, "output_tokens": 5},

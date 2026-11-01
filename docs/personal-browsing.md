@@ -332,7 +332,9 @@ them over every attempted run. They count the calls Kitsune held for the user's 
 (`user_viewing`, `user_tab`, other) and decision, and the declined writes the agent redid in another
 tab (`redone_after_decline`). The definitions are in
 [the coexistence track](coexistence.md#kitsune-holds-and-redo-after-decline); they are reported beside
-the contracts and change no verdict.
+the contracts and change no verdict. `personal --unprotected-user-tabs --targets kitsune` runs Kitsune with both
+user-tab protections off (`KITSUNE_PROTECT_USER_TABS=0 KITSUNE_HOLD_VIEWED_TAB=0`), outside the frozen taskset;
+summaries carry `unprotected_user_tabs: true` (#72).
 
 **Instrumentation overhead:** the relay queries tab inventories after each
 agent tool call and provisions tabs before forwarding the first request.
