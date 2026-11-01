@@ -584,8 +584,13 @@ class NativeMixin:
                     source = {"orders": "/order/2", "typing_journal": "/notice"}[task["fixture"]]
                     agent("browser_tabs", {"action": "new", "url": trial.url(source)})
                     memo = {"orders": "/orders", "typing_journal": "/memo"}[task["fixture"]]
-                    tab = next(t for t in session.inventory() if t["url"] == trial.url(memo))
-                    agent("browser_tabs", {"action": "select", "index": tab["id"]})
+                    if self.target == "kitsune":
+                        # Kitsune holds writes to the tab the user views (kitsune#364), and under kitsune#393 user
+                        # tabs are read-only, so the agent writes the memo in a tab of its own (#65).
+                        agent("browser_tabs", {"action": "new", "url": trial.url(memo)})
+                    else:
+                        tab = next(t for t in session.inventory() if t["url"] == trial.url(memo))
+                        agent("browser_tabs", {"action": "select", "index": tab["id"]})
                     snapshot = snapshot_text(session)
                     label = "메모" if task["fixture"] == "orders" else "점검일"
                     value = trial.expected["answer"] if task["fixture"] == "orders" else trial.expected["점검일"]
