@@ -253,7 +253,7 @@ user sees. Nobody uses the browser during a run. The
 [coexistence track](coexistence.md) (`coexistence-local-v1`) adds view telemetry
 and a typing user.
 
-Before #70 (up to `taskset-v3.1.1`), starting tabs after the first were opened
+Before #70 (`taskset-v3.1.2` and earlier; the change is in `taskset-v3.2`), starting tabs after the first were opened
 with the MCP server's own `browser_tabs new`, so Kitsune listed them as
 agent-owned and its user-tab rules never applied to them. Kitsune personal
 results from before and after this change are not comparable. Other experiments
