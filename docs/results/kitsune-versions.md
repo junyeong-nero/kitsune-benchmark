@@ -105,6 +105,22 @@ These are observations; a release-improvement claim still goes through a
 [coexistence track](../coexistence.md) is part of the full suite. The taskset-v2
 user-seeded tab custody contract is retained unchanged.
 
+## v0.7.1 → main `dea1ad4` (pre-release main)
+
+`dea1ad4b71a8669c9a9f2f103e2c7ea831f29e34`. 21 commits after v0.7.1. The changes this benchmark measured:
+
+- the viewed-tab hold and user-tab navigation protection by default (#364, #371);
+- `needs_user`, approval through MCP elicitation and `browser_resume` (#376–#381);
+- post-action deltas that wait for the page, `navigated`, hover deltas (#348–#350);
+- cross-origin frames (#343, #354); `hold_ms` and sustained hover (#351, #365).
+
+Needs the relay of benchmark #55 (merged), which answers Kitsune's approval prompts; its elicitation policy is part
+of the run (#59).
+
+| Date | Report | Model / harness | Kitsune revision | Notes |
+| --- | --- | --- | --- | --- |
+| 2026-11-01 | [Lite suite under decline and accept](2026-11-01-main-dea1ad4-elicitation.md) | `claude-opus-5-5`, Claude Code subscription | `dea1ad4` | 2 × 306 scorable runs, no retries; Kitsune solves every lite unit under both policies (crowded 21/21). K/PW input, units with a hold: v0.7.1 0.945, **decline 1.389, accept 0.909**; without a hold ≈0.83–0.86. Decline: 28/28 held runs redid the write in a new tab. Accept: 2.1 prompts per held run. Coexistence unchanged. Hostile (no model): K 21/26 shared, 23/26 with Kitsune-only strategies |
+
 ## v0.7.1
 
 `9f84b255dcd9fe77d3cca9930e1dd397b2b72176`. 29 commits after v0.7.0. The changes this benchmark measured:
