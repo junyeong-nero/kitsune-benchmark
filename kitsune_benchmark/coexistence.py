@@ -27,8 +27,8 @@ from .adapter import claude_budget, harness_pins, with_claude_overrides, write_j
 from .coexistence_fixtures import COEXISTENCE_FIXTURES
 from .miniwob import UI_TOOLS
 from .personal import (USER_CHANNEL_PREFS, PersonalServer, PersonalTrial, aggregate_results, catalog as personal_catalog,
-                       config as personal_config, free_port, pair_complete, runnable_ids as personal_runnable_ids,
-                       user_channel_args, with_playwright_user_channel)
+                       config as personal_config, free_port, incomplete_stop, pair_complete,
+                       runnable_ids as personal_runnable_ids, user_channel_args, with_playwright_user_channel)
 from .personal_session import ELICITATION_POLICIES
 from .smoke import ROOT, TARGETS, run_pair, source_revision
 from .specs import Server, Task
@@ -324,7 +324,7 @@ def run_coexistence(*, execute: bool = False, task_ids: list[str] | None = None,
             stopped = "kitsune_revision_changed"
             break
         if not pair_complete(pair, targets):
-            stopped = "unscorable_pair"
+            stopped = incomplete_stop(pair)
             break
     if not pairs:
         raise ValueError("Suite budget is smaller than one pair's worst case; nothing was run.")

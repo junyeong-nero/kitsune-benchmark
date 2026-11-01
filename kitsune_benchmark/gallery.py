@@ -811,7 +811,7 @@ def run_gallery(*, execute: bool = False, task_ids: list[str] | None = None, cat
                 codex_model: str | None = None, elicitation: str = "decline") -> dict:
     from .adapter import claude_budget, harness_pins, with_claude_overrides
     from .miniwob import UI_TOOLS
-    from .personal import aggregate_results, pair_complete
+    from .personal import aggregate_results, incomplete_stop, pair_complete
     from .smoke import TARGETS, run_pair, source_revision
     if layout not in LAYOUTS or type(variant) is not int or variant not in range(3):
         raise ValueError("layout must be crowded|isolated and variant 0, 1 or 2.")
@@ -862,7 +862,7 @@ def run_gallery(*, execute: bool = False, task_ids: list[str] | None = None, cat
             stopped = "kitsune_revision_changed"
             break
         if not pair_complete(pair, targets):
-            stopped = "unscorable_pair"
+            stopped = incomplete_stop(pair)
             break
     if not pairs:
         raise ValueError("Suite budget is smaller than one task's worst case; nothing was run.")

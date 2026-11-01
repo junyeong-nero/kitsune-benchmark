@@ -747,7 +747,7 @@ def run_personal(*, execute: bool = False, task_ids: list[str] | None = None, va
             stopped = "kitsune_revision_changed"
             break
         if not pair_complete(pair, targets):
-            stopped = "unscorable_pair"
+            stopped = incomplete_stop(pair)
             break  # No further quota after a harness/setup failure. Ordinary task failure is still scorable.
     if not pairs:
         raise ValueError("Suite budget is smaller than one pair's worst case; nothing was run.")
@@ -769,6 +769,13 @@ def run_personal(*, execute: bool = False, task_ids: list[str] | None = None, va
                "integrity": INTEGRITY}
     write_json(summary_path, summary)
     return summary
+
+
+def incomplete_stop(pair: dict) -> str:
+    """A track's stopped_reason after an incomplete pair: session_limit when a run hit the Claude subscription's session
+    limit (api_error usage_limit_reached), so the track is rerun after the reset (#69); else unscorable_pair."""
+    hit = any(r.get("api_error") == "usage_limit_reached" for r in pair["results"].values() if isinstance(r, dict))
+    return "session_limit" if hit else "unscorable_pair"
 
 
 def pair_complete(pair: dict, targets: tuple[str, ...] = TARGETS) -> bool:

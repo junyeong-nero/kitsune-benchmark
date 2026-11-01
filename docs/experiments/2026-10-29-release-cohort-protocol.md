@@ -87,7 +87,8 @@ external are the same in both plans.
    ```
 
    - **No retries:** an unscorable or incomplete track stops the suite with exit 3, and that is reported as it is.
-   - **Session limit:** if the subscription session limit stops the suite, the incomplete track is rerun from its
+   - **Session limit:** if the subscription session limit stops the suite (the track's `stopped_reason` is
+     `session_limit`: a run's `api_error` is `usage_limit_reached`), the incomplete track is rerun from its
      start once, in a fresh output directory, after the limit resets, and the report lists the retry. The retry
      starts at the stopped entry and records it (`resumed_from`, `previous_suite`) in its `suite-manifest.json`;
      `scripts/merge-suites.py` then writes one directory for the analysis, without the entries the retry replaced:

@@ -389,6 +389,7 @@ def audit_events(path: Path, *, allowed_tools: tuple[str, ...] | None = None,
     final = None
     cost = None
     turns = None
+    api_error = None
     # Token attribution: per-request input (deduplicated by message id), and per tool the
     # result size and how many later requests re-send it ("carry").
     init_tools: set[str] | None = None
@@ -441,6 +442,8 @@ def audit_events(path: Path, *, allowed_tools: tuple[str, ...] | None = None,
                     completed = True
                 if isinstance(event.get("result"), str):
                     final = event["result"]
+                if isinstance(event.get("api_error"), str):  # e.g. usage_limit_reached: the session limit (#69)
+                    api_error = event["api_error"]
                 if isinstance(event.get("total_cost_usd"), (int, float)):
                     cost = event["total_cost_usd"]
                 if type(event.get("num_turns")) is int:
@@ -537,6 +540,7 @@ def audit_events(path: Path, *, allowed_tools: tuple[str, ...] | None = None,
         "events": events,
         "turn_completed": completed,
         "harness_error": harness_error or init_tools is None,
+        "api_error": api_error,
         "mcp_calls": len(calls),
         "completed_mcp_calls": len(completed_calls),
         "failed_mcp_calls": len(failed_calls),

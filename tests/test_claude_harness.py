@@ -135,6 +135,12 @@ class ClaudeHarnessTests(unittest.TestCase):
         self.assertTrue(audit(INIT, limited, RESULT)["harness_error"])
         pending = {**INIT, "mcp_servers": [{"name": "browser", "status": "failed"}]}
         self.assertTrue(audit(pending, RESULT)["harness_error"])
+        # #69: Claude Code 2.1.303's result after the subscription's session limit (429).
+        session_limit = {**RESULT, "is_error": True, "api_error_status": 429, "api_error": "usage_limit_reached",
+                         "terminal_reason": "api_error", "result": "You've hit your session limit"}
+        limited = audit(INIT, session_limit)
+        self.assertEqual((limited["harness_error"], limited["api_error"]), (True, "usage_limit_reached"))
+        self.assertIsNone(audit(INIT, RESULT)["api_error"])
         self.assertFalse(audit(INIT)["turn_completed"])
 
     def test_doctor_requires_claude_ai_login(self):
