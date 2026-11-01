@@ -72,6 +72,9 @@ def main(argv: list[str] | None = None) -> int:
     personal.add_argument("--kitsune-preset", help="Set KITSUNE_TOOL_PRESET for Kitsune (e.g. lean) for A/B arms")
     personal.add_argument("--targets", default="playwright,kitsune",
                           help="Comma-separated MCPs to run: playwright,kitsune (default both)")
+    personal.add_argument("--unprotected-user-tabs", action="store_true",
+                          help="Kitsune arm with KITSUNE_PROTECT_USER_TABS=0 KITSUNE_HOLD_VIEWED_TAB=0, outside "
+                               "personal-browsing-local-v3 (reported separately)")
     personal.add_argument("--budget-usd", type=float,
                           help="claude-api only: stop before a pair whose worst case would exceed this total")
     gallery = subparsers.add_parser("gallery", help="Component gallery + multimodal puzzles (21 tasks); plan by default")
@@ -171,7 +174,8 @@ def main(argv: list[str] | None = None) -> int:
                                   executable=executable, kitsune_project=args.kitsune_project,
                                   harness=args.harness, budget_usd=args.budget_usd,
                                   kitsune_preset=args.kitsune_preset, targets=tuple(args.targets.split(",")),
-                                  elicitation=args.elicitation, **overrides)
+                                  elicitation=args.elicitation, unprotected_user_tabs=args.unprotected_user_tabs,
+                                  **overrides)
             print(json.dumps(result, indent=2, ensure_ascii=False))
             if not args.execute:
                 return 0

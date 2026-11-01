@@ -159,6 +159,34 @@ class FullSuiteTests(unittest.TestCase):
         self.assertEqual(len(launched), 15)
         self.assertEqual(self.manifest["plan"], "lite")
 
+    def test_unprotected_lite_plan_runs_lite_personal_and_coexistence_units_on_kitsune_only(self):
+        # #72: the viewed-tab hold baseline, one Kitsune process per entry with both protections off.
+        arm = ["--unprotected-user-tabs", "--targets", "kitsune"]
+        tracks = [(f"personal-v{v}-unprotected", ["personal", "--all", "--variant", str(v), *arm]) for v in (0, 1)]
+        tracks.append(("coexistence-user-seeded-unprotected", ["coexistence", "--all-personal", "--variant", "0", *arm]))
+        tracks += [(f"coexistence-typing-v{v}-unprotected",
+                    ["coexistence", "--task", "co-typing-01", "--variant", str(v), *arm]) for v in range(3)]
+        self.assertEqual(suite.commands("unprotected-lite"), tracks)
+        lite = dict(suite.commands("lite"))
+        for name, argv in tracks:  # the same units as the lite release plan's entries
+            self.assertEqual(argv[:-len(arm)], lite[name.removesuffix("-unprotected")])
+        result = {"requested_pairs": 1, "completed_pairs": 1}
+        for sequential in (False, True):
+            with self.subTest(sequential=sequential):
+                code, launched, _, entries = self.invoke([(0, result)] * 6, sequential=sequential, tracks=tracks,
+                                                         extra=("--plan", "unprotected-lite"))
+                self.assertEqual(code, 0)
+                project = launched[0][launched[0].index("--kitsune-project") + 1]
+                self.assertEqual(launched, [[suite.sys.executable, "-m", "kitsune_benchmark", *argv, "--harness", "claude",
+                                             "--claude-model", "claude-opus-5-5", "--elicitation", "decline",
+                                             "--kitsune-project", project, "--execute"] for _, argv in tracks])
+                self.assertCountEqual(self.outputs, [f"{name}.json" for name, _ in tracks]
+                                      + ["suite-manifest.json", "suite-summary.json"])
+                self.assertEqual([e["name"] for e in entries], [name for name, _ in tracks])
+                self.assertTrue(all("target" not in e for e in entries))
+                self.assertEqual(self.manifest["plan"], "unprotected-lite")
+                self.assertEqual(self.manifest["commands"], [name for name, _ in tracks])
+
     def test_codex_harness_passes_and_records_its_model(self):
         result = {"requested_pairs": 1, "completed_pairs": 1, "results": {"kitsune": {}}}
         for extra, model in ((("--harness", "codex", "--model", "gpt-6.1-sol"), "gpt-6.1-sol"),

@@ -36,6 +36,9 @@ INTEGRITY = ("Synthetic local apps, test-cookie authentication and server-state 
              "UI-only tools; no upstream benchmark scores. Not hardened against malicious agents. "
              "Tab inventories are sampled after each agent tool call, not continuous browser telemetry.")
 PRIMARY_CONTRACT = "v2_agent_tab_cleanup"
+# A Kitsune arm with both user-tab protections off (#58, #72); not part of any frozen plan. On Kitsune after 0.7.1 they
+# are on by default (kitsune#371), so the coexistence protect arm's KITSUNE_PROTECT_USER_TABS=1 is what the default runs.
+UNPROTECTED_KITSUNE_ENV = {"KITSUNE_PROTECT_USER_TABS": "0", "KITSUNE_HOLD_VIEWED_TAB": "0"}
 CUSTODY_BUDGET = 4096  # readings x candidate alignments per checkpoint; beyond this custody is unknown
 CSP = "default-src 'none'; form-action 'self'; base-uri 'none'"
 
@@ -645,7 +648,8 @@ def run_personal(*, execute: bool = False, task_ids: list[str] | None = None, va
                  harness: str = "codex", budget_usd: float | None = None,
                  kitsune_preset: str | None = None, targets: tuple[str, ...] = TARGETS,
                  claude_model: str | None = None, max_budget_usd_per_run: float | None = None,
-                 codex_model: str | None = None, elicitation: str = "decline") -> dict:
+                 codex_model: str | None = None, elicitation: str = "decline",
+                 unprotected_user_tabs: bool = False) -> dict:
     if type(variant) is not int or variant not in range(3):
         raise ValueError("Variant must be 0, 1 or 2.")
     if elicitation not in ELICITATION_POLICIES:
@@ -657,6 +661,8 @@ def run_personal(*, execute: bool = False, task_ids: list[str] | None = None, va
     targets = tuple(targets)
     if not targets or len(set(targets)) != len(targets) or set(targets) - set(TARGETS):
         raise ValueError("targets must be a non-empty subset of playwright, kitsune.")
+    if unprotected_user_tabs and "kitsune" not in targets:
+        raise ValueError("--unprotected-user-tabs is a Kitsune arm; include the kitsune target.")
     if budget_usd is not None and (per_run is None or isinstance(budget_usd, bool)
                                    or not isinstance(budget_usd, (int, float)) or budget_usd <= 0):
         raise ValueError("--budget-usd needs a positive amount and an API-key harness (claude-api or claude-api-full).")
@@ -664,7 +670,8 @@ def run_personal(*, execute: bool = False, task_ids: list[str] | None = None, va
     if not execute:
         return {"mode": "personal_plan_only", "model_invoked": False, "config": spec,
                 "harness": harness, "model": model, "targets": list(targets), "kitsune_tool_preset": kitsune_preset,
-                "elicitation": elicitation, "max_budget_usd_per_run": per_run, "suite_budget_usd": budget_usd,
+                "elicitation": elicitation, "unprotected_user_tabs": unprotected_user_tabs,
+                "max_budget_usd_per_run": per_run, "suite_budget_usd": budget_usd,
                 "worst_case_usd": runs_per_pair * len(tasks) * per_run if per_run else None,
                 "variant": variant, "selected_tasks": tasks, "planned_model_runs": runs_per_pair * len(tasks),
                 "catalog_tasks": len(catalog()["tasks"]), "runnable_tasks": len(runnable_ids()),
@@ -692,10 +699,12 @@ def run_personal(*, execute: bool = False, task_ids: list[str] | None = None, va
                 experiment_spec=experiment, artifact_scope="personal", task_for_target=fixture.begin,
                 prepare_server=fixture.prepare_server, evaluate=fixture.evaluate, enabled_tools=UI_TOOLS,
                 harness=harness, kitsune_preset=kitsune_preset, targets=targets,
+                kitsune_env=UNPROTECTED_KITSUNE_ENV if unprotected_user_tabs else None,
                 viewport_reports=fixture.viewport_reports, equalize_kitsune_viewport=True)
         pair["personal_task"] = task["id"]
         pair["variant"] = variant
         pair["elicitation"] = elicitation
+        pair["unprotected_user_tabs"] = unprotected_user_tabs
         pair["kitsune_source_after"] = source_revision(project)
         write_json(Path(pair["pair_dir"]) / "personal-summary.json", pair)
         pairs.append(pair)
@@ -715,7 +724,7 @@ def run_personal(*, execute: bool = False, task_ids: list[str] | None = None, va
     summary_path = Path(pairs[0]["pair_dir"]) / "suite-summary.json"
     summary = {"mode": "personal_executed", "model_invoked": True, "harness": harness, "model": model,
                "targets": list(targets), "kitsune_tool_preset": kitsune_preset, "elicitation": elicitation,
-               "kitsune_source": source,
+               "unprotected_user_tabs": unprotected_user_tabs, "kitsune_source": source,
                "requested_pairs": len(tasks), "attempted_pairs": len(pairs), "stopped_reason": stopped,
                "estimated_cost_usd": round(spent, 6) if per_run is not None else None,
                "suite_budget_usd": budget_usd, "max_budget_usd_per_run": per_run,

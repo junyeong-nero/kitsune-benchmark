@@ -140,7 +140,9 @@ protections off (#58). It is not a catalog condition and not part of the frozen 
 evaluations and summaries carry `unprotected_user_tabs: true`; report it as its own column, like the
 protection arm, and never pool it with default-Kitsune totals. It cannot be combined with
 `--protect-user-tabs`. On Kitsune ≤ v0.7.1 the protection is already off by default and
-`KITSUNE_HOLD_VIEWED_TAB` does not exist, so there this arm equals the default.
+`KITSUNE_HOLD_VIEWED_TAB` does not exist, so there this arm equals the default. The personal track takes the same
+option (#72), and `scripts/run-full-suite.py --plan unprotected-lite` runs the arm on the lite plan's personal,
+user-seeded and `co-typing-01` units ([plan](experiments/2026-11-01-issue-72-unprotected-arm-plan.md)).
 
 ### Coexistence fixtures
 
