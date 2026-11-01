@@ -386,6 +386,9 @@ Read [individual-run inputs](codex-harness.md#individual-run-inputs) first.
   **There is no token-budget stop.** A timeout is not a fixed token allowance.
 - Setup/execution/unscorable failures stop further targets/tasks. Ordinary
   scorable task failures do not. No automatic retry or model substitution occurs.
+  The track's `stopped_reason` is `unscorable_pair`, or `session_limit` when a
+  Claude Code run hit the subscription's session limit (its run summary records
+  `api_error: usage_limit_reached`); that track is rerun after the reset (#69).
 - A failed session setup (personal, gallery, coexistence and the experiment relays)
   stops the agent's client before its first model request (#56), provided setup
   fails while the client still waits for its tool list. The relay sets the

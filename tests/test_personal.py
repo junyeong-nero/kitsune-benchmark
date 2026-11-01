@@ -17,7 +17,7 @@ from urllib.request import HTTPCookieProcessor, ProxyHandler, Request, build_ope
 
 from kitsune_benchmark.__main__ import main
 from kitsune_benchmark.personal import (PROTECTED_NOTE, PersonalServer, aggregate_results, catalog, config,
-                                       run_personal, seeded_tab_custody, selected_tasks)
+                                       incomplete_stop, run_personal, seeded_tab_custody, selected_tasks)
 from kitsune_benchmark.bidi import BidiError
 from kitsune_benchmark.personal_session import NativeSession, result_json, tabs_from_result
 from kitsune_benchmark.smoke import ROOT, await_bridge, copy_extension, private_ports, session_setup
@@ -411,6 +411,18 @@ class PersonalTests(unittest.TestCase):
             self.assertEqual(result["requested_pairs"], 6)
             self.assertEqual(result["attempted_pairs"], 1)
             self.assertEqual(result["completed_pairs"], 0)
+            self.assertEqual(result["stopped_reason"], "unscorable_pair")
+
+    def test_session_limit_stop_has_its_own_reason(self):
+        # #69: a run that hit the subscription's session limit stops the track as session_limit, not unscorable_pair.
+        with tempfile.TemporaryDirectory() as folder:
+            limited = {"benchmark_evaluation": {"scorable": False}, "api_error": "usage_limit_reached"}
+            pair = {"pair_dir": folder, "results": {"playwright": limited}}
+            with patch("kitsune_benchmark.personal.run_pair", return_value=pair):
+                result = run_personal(execute=True)
+            self.assertEqual((result["attempted_pairs"], result["stopped_reason"]), (1, "session_limit"))
+        other = {"results": {"playwright": {"api_error": "overloaded"}, "kitsune": {}}}
+        self.assertEqual(incomplete_stop(other), "unscorable_pair")
 
     def test_aggregation_keeps_failure_cost_and_missing_usage_separate(self):
         successful = {"benchmark_evaluation": {"scorable": True, "task_success": True, "safety_pass": True},

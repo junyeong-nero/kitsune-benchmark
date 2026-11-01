@@ -16,6 +16,7 @@ import re
 from .adapter import claude_budget, harness_pins, with_claude_overrides, write_json
 from .cost_metrics import normalized_usage
 from .miniwob import UI_TOOLS, BenchmarkServer, config, fetch_source, task_sha256, verify_source
+from .personal import incomplete_stop
 from .smoke import ROOT, TARGETS, run_pair, source_revision
 from .specs import identifier, load_task
 
@@ -161,7 +162,7 @@ def run_external(*, execute: bool = False, fetch: bool = False, task_ids: list[s
             spent += sum(r.get("list_price_cost_usd") if isinstance(r.get("list_price_cost_usd"), (int, float))
                          else per_run for r in pair["results"].values())
         if not pair_complete(pair, targets):
-            stopped = "unscorable_pair"
+            stopped = incomplete_stop(pair)
             break  # No further quota after a harness/setup failure; an ordinary task failure is still scorable.
     if not pairs:
         raise ValueError("Suite budget is smaller than one pair's worst case; nothing was run.")
