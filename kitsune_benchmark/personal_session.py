@@ -19,6 +19,11 @@ import threading
 import time
 from urllib.parse import urlsplit
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from kitsune_benchmark.bidi import BidiError  # noqa: E402
+from kitsune_benchmark.user_driver import UserDriver  # noqa: E402
+
 # How the relay answers the prompts Kitsune sends through MCP elicitation during the agent's turn (kitsune#376):
 # session config "elicitation", default "decline", so a run measures whether the agent stops and reports. The relay
 # declares form elicitation at initialize and answers every prompt itself; none reaches the agent's client, so
@@ -131,6 +136,8 @@ class NativeSession:
         self.elicitation = config.get("elicitation", "decline")
         if self.elicitation not in ELICITATION_POLICIES:
             raise ValueError("Unknown elicitation policy.")
+        if config.get("seeding") not in (None, "user_channel") or (config.get("seeding") and config.get("task_tab")):
+            raise ValueError("Unknown seeding, or user channel seeding with a harness task tab.")
         self.metadata = {"enabled_tools": config.get("enabled_tools", []), "tools_pages": []}
         self.evidence = {"setup_complete": False, "target": config.get("target"), "initial_tabs": [], "snapshots": [], "tab_calls": [],
                          "harness_calls": 0, "harness_seconds": 0.0,
@@ -375,19 +382,56 @@ class NativeSession:
         if not all(owned) or not shown:
             raise ValueError("The harness does not own every starting tab, or the task tab is not shown.")
 
+    def seed_through_user_channel(self):
+        """Config seeding "user_channel" (#70): the user opens the starting tabs over WebDriver BiDi (user_driver.py),
+        as in the coexistence track, so Kitsune lists them as the user's, not owned by the agent. The user loads the
+        bootstrap page and the first starting tab in the profile's tab, opens the others in the specification's
+        order, then clicks the active one. The channel closes before the agent starts."""
+        urls = self.config["urls"]
+        try:
+            driver = UserDriver(self.config["user_driver"]["bidi_url"])
+            try:
+                driver.navigate_shown(self.config["bootstrap_url"])
+                driver.navigate_shown(urls[0])
+                for url in urls[1:]:
+                    driver.open_tab(url, background=True)
+                driver.select(urls[self.config["active_index"]])
+            finally:
+                self.evidence.update(driver_calls=driver.calls, driver_seconds=round(driver.seconds, 3))
+                driver.close()
+        except (BidiError, OSError) as error:
+            raise ValueError("User channel setup failed.") from error
+
+    def check_user_seeded_tabs(self):
+        """Record, and on Kitsune require, that no user-seeded starting tab is listed as owned by the agent
+        (evidence seeded_owned_by_agent; None for Playwright, which has no tab ownership)."""
+        if self.config["target"] != "kitsune":
+            self.evidence["seeded_owned_by_agent"] = None
+            return
+        listed = result_json(self.tab_list_result, "tabs")
+        if not isinstance(listed, list):
+            raise ValueError("Unrecognized Kitsune tab list.")
+        self.evidence["seeded_owned_by_agent"] = sum(bool(tab.get("owned")) and tab.get("url") in self.config["urls"]
+                                                      for tab in listed)
+        if self.evidence["seeded_owned_by_agent"]:
+            raise ValueError("A user-seeded tab is listed as agent-owned.")
+
     def prepare(self):
         if self.evidence["setup_complete"]:
             return
         setup_started = time.monotonic()
         self.diagnostic("setup_started")
-        # Provisioning uses only the same native UI tools. No JS evaluation,
-        # browser debugging connection or extra capability is given to the model.
+        # Provisioning uses only the same native UI tools, or the user channel the model never sees. No JS
+        # evaluation, browser debugging connection or extra capability is given to the model.
         tabs = self.wait_inventory(lambda tabs: len(tabs) >= 1)
         if len(tabs) != 1:
             raise ValueError("Expected exactly one initial tab in a fresh profile.")
         if self.config.get("task_tab") == "agent":
             self.open_agent_task_tab(tabs[0]["url"])
             others = [url for i, url in enumerate(self.config["urls"]) if i != self.config["active_index"]]
+        elif self.config.get("seeding") == "user_channel":
+            self.seed_through_user_channel()
+            others = []
         else:
             # Kitsune main holds navigating the fresh profile's tab, which no client opened, for the user's approval
             # (kitsune#371, detail user_tab): evidence setup_navigated_initial_tab lists how each navigate ran.
@@ -421,6 +465,9 @@ class NativeSession:
             raise ValueError("Active starting tab was not established.")
         if self.config.get("task_tab") == "agent":
             self.check_agent_task_tab(tabs, desired)
+        if self.config.get("seeding") == "user_channel":
+            self.check_user_seeded_tabs()
+            self.evidence["seeding"] = "user_channel"
         self.evidence.update(setup_complete=True, initial_tabs=tabs, snapshots=[tabs])
         self.save()
         self.diagnostic("setup_completed", duration_sec=time.monotonic() - setup_started)

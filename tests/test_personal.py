@@ -10,7 +10,7 @@ import tempfile
 import time
 import unittest
 from contextlib import ExitStack, contextmanager, redirect_stdout
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 from urllib.error import HTTPError
 from urllib.parse import urlencode
 from urllib.request import HTTPCookieProcessor, ProxyHandler, Request, build_opener
@@ -18,6 +18,7 @@ from urllib.request import HTTPCookieProcessor, ProxyHandler, Request, build_ope
 from kitsune_benchmark.__main__ import main
 from kitsune_benchmark.personal import (PROTECTED_NOTE, PersonalServer, aggregate_results, catalog, config,
                                        run_personal, seeded_tab_custody, selected_tasks)
+from kitsune_benchmark.bidi import BidiError
 from kitsune_benchmark.personal_session import NativeSession, result_json, tabs_from_result
 from kitsune_benchmark.smoke import ROOT, await_bridge, copy_extension, private_ports, session_setup
 from kitsune_benchmark.adapter import resolve, terminate_group
@@ -368,8 +369,31 @@ class PersonalTests(unittest.TestCase):
             stored = json.loads(Path(wrapped.args[-1]).read_text())
             self.assertEqual(stored["upstream"], ["node", "cli.js"])
             self.assertNotIn("task_tab", stored, "the personal track keeps its task in the initial tab")
+            self.assertNotIn("seeding", stored, "other experiments reusing the fixtures seed through the MCP server")
             self.assertEqual(Path(wrapped.args[-1]).stat().st_mode & 0o777, 0o600)
             self.assertFalse(server.evaluate("playwright", {"execution_status": "completed_unscored"})["scorable"])
+
+    def test_prepare_server_seeds_through_the_user_channel_when_asked(self):
+        # #70: the personal track's relay seeds through WebDriver BiDi; Playwright opens it from a --config file.
+        task = selected_tasks()[0]
+        with tempfile.TemporaryDirectory() as folder, PersonalServer(task, 0, user_channel=True) as server:
+            for target in ("playwright", "kitsune"):
+                prompt = server.begin(target)
+                upstream = Server(target, "node", ("cli.js",), (), 60, 45, ("browser_tabs",))
+                wrapped = server.prepare_server(target, upstream, prompt, Path(folder))
+                self.assertEqual(wrapped.enabled_tools, upstream.enabled_tools)
+                stored = json.loads(Path(wrapped.args[-1]).read_text())
+                port = server.bidi_ports[target]
+                self.assertEqual(stored["seeding"], "user_channel")
+                self.assertEqual(stored["user_driver"], {"bidi_url": f"ws://127.0.0.1:{port}"})
+                options = Path(folder) / "playwright-user-channel.json"
+                if target == "playwright":
+                    self.assertEqual(stored["upstream"], ["node", "cli.js", "--config", str(options)])
+                    launch = json.loads(options.read_text())["browser"]["launchOptions"]
+                    self.assertEqual(launch, {"args": [f"--remote-debugging-port={port}", "--remote-allow-system-access"],
+                                              "firefoxUserPrefs": {"remote.prefs.recommended": False}})
+                else:
+                    self.assertEqual(stored["upstream"], ["node", "cli.js"])
 
     def test_suite_stops_after_unscorable_pair_without_fallback(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -377,6 +401,13 @@ class PersonalTests(unittest.TestCase):
             with patch("kitsune_benchmark.personal.run_pair", return_value=pair) as run:
                 result = run_personal(execute=True)
             self.assertEqual(run.call_count, 1)
+            # #70: the personal track's browsers open the user channel its relay seeds the starting tabs through.
+            launch = run.call_args.kwargs
+            self.assertEqual(launch["experiment_spec"]["seeding"], "user_channel")
+            self.assertEqual(launch["kitsune_firefox_prefs"], {"remote.prefs.recommended": "false"})
+            self.assertRegex(launch["kitsune_firefox_args"][0], r"^--remote-debugging-port=\d+$")
+            self.assertEqual(launch["kitsune_firefox_args"][1:], ("--remote-allow-system-access",))
+            self.assertEqual(run_personal()["seeding"], "user_channel")
             self.assertEqual(result["requested_pairs"], 6)
             self.assertEqual(result["attempted_pairs"], 1)
             self.assertEqual(result["completed_pairs"], 0)
@@ -568,6 +599,78 @@ for line in sys.stdin:
         self.assertEqual(calls[:4], [{"url": config["bootstrap_url"]}, {"url": config["bootstrap_url"], "confirm_token": "t1"},
                                      {"url": config["urls"][0]}, {"url": config["urls"][0], "confirm_token": "t1"}])
         self.assertEqual(session.evidence["setup_navigated_initial_tab"], {"via": ["confirm_token", "confirm_token"]})
+
+    def test_user_channel_setup_opens_the_starting_tabs_as_the_users(self):
+        # #70: the user opens the starting tabs over WebDriver BiDi, so Kitsune does not list them as owned. The relay
+        # makes no MCP navigate or new; one hidden select pins the tool cursor to the active tab, as before.
+        base = "http://127.0.0.1:1/t/x"
+        urls = [base + "/product/0", base + "/product/1", base + "/protected"]
+        text = lambda value: {"result": {"content": [{"type": "text", "text": value}]}}
+        for target, owned in (("kitsune", False), ("kitsune", True), ("playwright", None)):
+            with self.subTest(target=target, owned=owned), tempfile.TemporaryDirectory() as folder:
+                tabs, state, calls = [{"url": "about:blank", "shown": True}], {"current": 0}, []
+                driver = Mock(calls=5, seconds=0.25)
+                driver.navigate_shown.side_effect = lambda url: next(t for t in tabs if t["shown"]).update(url=url)
+                driver.open_tab.side_effect = lambda url, background: tabs.append({"url": url, "shown": not background})
+                driver.select.side_effect = lambda url: [tab.update(shown=tab["url"] == url) for tab in tabs]
+
+                def request(method, params, tabs=tabs, state=state, calls=calls, target=target, owned=owned):
+                    calls.append((params["name"], params["arguments"]))
+                    action = params["arguments"].get("action")
+                    if action == "select":
+                        state["current"] = params["arguments"]["index"]
+                        return text(json.dumps({"ok": True}) if target == "kitsune" else "ok")
+                    if action != "list":
+                        raise AssertionError("setup used the MCP server to seed")
+                    if target == "playwright":
+                        return text("\n".join(f"- {i}: " + ("(current) " if i == state["current"] else "") + f"[]({t['url']})"
+                                              for i, t in enumerate(tabs)))
+                    return text(json.dumps({"tabs": [{"index": i, "title": "", "url": t["url"],
+                                                      **({"current": True} if i == state["current"] else {}),
+                                                      **({"active": True} if t["shown"] else {}),
+                                                      **({"owned": True} if owned and i else {})}
+                                                     for i, t in enumerate(tabs)]}))
+                session = NativeSession({"target": target, "bootstrap_url": base + "/start", "urls": urls, "active_index": 1,
+                                         "evidence_path": folder + "/evidence.json", "seeding": "user_channel",
+                                         "user_driver": {"bidi_url": "ws://127.0.0.1:9"}})
+                with patch("kitsune_benchmark.personal_session.UserDriver", return_value=driver) as connect, \
+                        patch.object(session, "request", side_effect=request):
+                    if owned:
+                        with self.assertRaisesRegex(ValueError, "agent-owned"):
+                            session.prepare()
+                    else:
+                        session.prepare()
+                connect.assert_called_once_with("ws://127.0.0.1:9")
+                self.assertEqual([c.args for c in driver.navigate_shown.call_args_list], [(base + "/start",), (urls[0],)])
+                self.assertEqual([(c.args, c.kwargs) for c in driver.open_tab.call_args_list],
+                                 [((url,), {"background": True}) for url in urls[1:]])
+                driver.select.assert_called_once_with(urls[1])
+                driver.close.assert_called_once_with()
+                self.assertEqual({name for name, _ in calls}, {"browser_tabs"})
+                self.assertEqual([args for _, args in calls if args["action"] != "list"], [{"action": "select", "index": 1}])
+                evidence = session.evidence
+                self.assertEqual((evidence["driver_calls"], evidence["driver_seconds"]), (5, 0.25))
+                self.assertEqual(evidence["seeded_owned_by_agent"], {False: 0, True: 2, None: None}[owned])
+                self.assertIs(evidence["setup_complete"], not owned)
+                self.assertEqual(evidence.get("seeding"), None if owned else "user_channel")
+                if not owned:
+                    self.assertEqual([(t["url"], t["active"]) for t in evidence["initial_tabs"]],
+                                     [(urls[0], False), (urls[1], True), (urls[2], False)])
+                    saved = json.loads(Path(folder, "evidence.json").read_text())
+                    self.assertEqual(saved["seeding"], "user_channel")
+
+        # A user channel that does not come up is a setup failure; unknown seeding is refused.
+        session = NativeSession({"target": "kitsune", "bootstrap_url": base + "/start", "urls": urls, "active_index": 1,
+                                 "evidence_path": "/dev/null", "seeding": "user_channel",
+                                 "user_driver": {"bidi_url": "ws://127.0.0.1:9"}})
+        with patch("kitsune_benchmark.personal_session.UserDriver", side_effect=BidiError("down")), \
+                patch.object(session, "wait_inventory", return_value=[{"id": 0, "url": "about:blank", "active": True}]), \
+                self.assertRaisesRegex(ValueError, "User channel setup failed"):
+            session.prepare()
+        self.assertFalse(session.evidence["setup_complete"])
+        for config in ({"seeding": "agent"}, {"seeding": "user_channel", "task_tab": "agent"}):
+            with self.subTest(config=config), self.assertRaisesRegex(ValueError, "seeding"):
+                NativeSession(config)
 
     def test_agent_task_tab_setup_runs_the_task_in_a_harness_opened_tab(self):
         # task_tab "agent" (gallery, kitsune#373): Kitsune's core tools, as main f57793a serves them. new opens an

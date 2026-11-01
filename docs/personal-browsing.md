@@ -237,12 +237,28 @@ Existing calendar events are read-only in this fixture. They cannot be edited
 through the exposed UI. Thus preserving them is a fixture property, not yet a
 strong test of choosing not to edit an editable existing event.
 
-**Seeding limit (v1):** starting tabs after the first are opened with the MCP
-server's own `browser_tabs new`, so Kitsune lists them (and the protected note)
-as agent-owned, and for Kitsune ≥ 0.3.1 the relay's `active` is the tool cursor
-`current`, not the tab the user sees. Nobody uses the browser during a run. The
-[coexistence track](coexistence.md) (`coexistence-local-v1`) re-runs these tasks
-with user-owned starting tabs and view telemetry, without changing them.
+**Seeding (#70):** the user opens the starting tabs through the
+[user channel](coexistence.md#the-user-channel) (WebDriver BiDi), as in the
+coexistence track: the profile's tab loads the bootstrap page and the first
+starting tab, the others open in the specification's order, and the user clicks
+the active tab. The channel closes before the agent starts; the agent never sees
+it. Kitsune therefore lists the starting tabs (and the protected note) as the
+user's, as in a real session. Setup fails (unscorable) if Kitsune lists any
+starting tab as agent-owned (`seeded_owned_by_agent`, `null` for Playwright,
+which has no tab ownership). The evidence and evaluation record
+`seeding: "user_channel"`; inventory and custody checks are unchanged. One hidden
+`browser_tabs select` still pins the tool cursor to the active tab, and for
+Kitsune ≥ 0.3.1 the relay's `active` is that cursor (`current`), not the tab the
+user sees. Nobody uses the browser during a run. The
+[coexistence track](coexistence.md) (`coexistence-local-v1`) adds view telemetry
+and a typing user.
+
+Before #70 (up to `taskset-v3.1.1`), starting tabs after the first were opened
+with the MCP server's own `browser_tabs new`, so Kitsune listed them as
+agent-owned and its user-tab rules never applied to them. Kitsune personal
+results from before and after this change are not comparable. Other experiments
+that reuse the personal fixtures (disclosure, target view, integrated startup)
+still seed through the MCP server.
 
 This is **not an adversarial security boundary**: the server and browser live
 on the same machine, the relay relies on native inventory formats, and tab

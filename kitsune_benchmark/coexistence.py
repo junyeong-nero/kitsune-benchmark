@@ -21,14 +21,14 @@ from dataclasses import dataclass, replace
 import hashlib
 import json
 from pathlib import Path
-import socket
 import sys
 
 from .adapter import claude_budget, harness_pins, with_claude_overrides, write_json
 from .coexistence_fixtures import COEXISTENCE_FIXTURES
 from .miniwob import UI_TOOLS
-from .personal import (PersonalServer, PersonalTrial, aggregate_results, catalog as personal_catalog,
-                       config as personal_config, pair_complete, runnable_ids as personal_runnable_ids)
+from .personal import (USER_CHANNEL_PREFS, PersonalServer, PersonalTrial, aggregate_results, catalog as personal_catalog,
+                       config as personal_config, free_port, pair_complete, runnable_ids as personal_runnable_ids,
+                       user_channel_args, with_playwright_user_channel)
 from .personal_session import ELICITATION_POLICIES
 from .smoke import ROOT, TARGETS, run_pair, source_revision
 from .specs import Server, Task
@@ -37,8 +37,6 @@ CONFIG = ROOT / "configs/benchmarks/coexistence.json"
 CATALOG = ROOT / "tasks/coexistence/catalog.json"
 TRACKS = ("coexistence", "delegation", "recovery")
 OUTCOMES = ("complete", "refuse", "handoff", "unknown")
-# Remote-agent "recommended preferences" would change browser defaults beyond opening the port.
-USER_CHANNEL_PREFS = {"remote.prefs.recommended": "false"}
 INTEGRITY = ("Synthetic local apps; personal-track graders unchanged. The simulated user acts over a "
              "privileged local WebDriver BiDi channel the agent cannot see. View samples are taken after "
              "each agent call and every sampler interval, so sub-interval flicker can be missed. "
@@ -100,12 +98,6 @@ def selected_tasks(ids: list[str] | None) -> list[dict]:
         raise ValueError("Selected task is unknown or specification-only.")
     # Personal graders report a category; a coexistence task's track plays that role.
     return [{**own[i], "category": own[i]["track"]} if i in own else personal[i] for i in ids]
-
-
-def free_port() -> int:
-    with socket.socket() as probe:
-        probe.bind(("127.0.0.1", 0))
-        return probe.getsockname()[1]
 
 
 @dataclass
@@ -184,11 +176,7 @@ class CoexistenceServer(PersonalServer):
         trial = self.trials[self.by_target[target]]
         port = self.bidi_ports[target]
         if target == "playwright":
-            options = pair_dir / "playwright-user-channel.json"
-            write_json(options, {"browser": {"launchOptions": {
-                "args": [f"--remote-debugging-port={port}", "--remote-allow-system-access"],
-                "firefoxUserPrefs": {key: value == "true" for key, value in USER_CHANNEL_PREFS.items()}}}})
-            server = replace(server, args=server.args + ("--config", str(options)))
+            server = with_playwright_user_channel(server, port, pair_dir)
         path = pair_dir / (target + "-session.json")
         evidence = pair_dir / (target + "-session-evidence.json")
         self.evidence_paths[target] = evidence
@@ -321,7 +309,7 @@ def run_coexistence(*, execute: bool = False, task_ids: list[str] | None = None,
                 harness=harness, targets=targets,
                 kitsune_env=({"KITSUNE_PROTECT_USER_TABS": "1"} if protect_user_tabs
                              else UNPROTECTED_KITSUNE_ENV if unprotected_user_tabs else None),
-                kitsune_firefox_args=(f"--remote-debugging-port={port}", "--remote-allow-system-access"),
+                kitsune_firefox_args=user_channel_args(port),
                 kitsune_firefox_prefs=USER_CHANNEL_PREFS, viewport_reports=fixture.viewport_reports,
                 equalize_kitsune_viewport=True)
         pair.update(coexistence_task=task["id"], variant=variant, protect_user_tabs=protect_user_tabs,
