@@ -204,6 +204,43 @@ class ReleaseReviewTests(unittest.TestCase):
                         self.assertIn(warned, report["compare"]["warning"])
                         self.assertIn("> **Warning:** elicitation policy", text)
 
+    def test_compare_says_no_holds_then_for_a_suite_without_a_policy_before_kitsune_364(self):
+        # #73: kitsune#364 (v0.7.1-10-g561719a) added Kitsune's holds; a suite on an earlier Kitsune had no prompt to answer.
+        with tempfile.TemporaryDirectory() as now, tempfile.TemporaryDirectory() as then:
+            self.suite(now)
+            self.suite(then)
+            for describe, no_holds in (("v0.7.1", True), ("v0.7.1-9-g5f3deb8", True), ("v0.3.0-4-gd616c50", True),
+                                       ("v0.7.1-10-g561719a", False), ("v0.7.1-21-gdea1ad4", False),
+                                       ("v0.7.1-dirty", False), (None, False)):
+                with self.subTest(describe=describe):
+                    (Path(now) / "suite-manifest.json").write_text(json.dumps({"elicitation": "decline"}))
+                    (Path(then) / "suite-manifest.json").write_text(json.dumps({"kitsune": {"describe": describe}}))
+                    self.assertEqual(release.before_holds(then), no_holds)
+                    report = release.review(now, compare=then)
+                    self.assertEqual(report["compare"]["no_holds"], no_holds)
+                    text = release.markdown(report, 1.10)
+                    if no_holds:
+                        self.assertIsNone(report["compare"]["warning"])
+                        self.assertIn("Elicitation policy: decline now, no holds then (Kitsune < #364).", text)
+                        self.assertNotIn("Warning", text)
+                    else:
+                        self.assertIn("not comparable", report["compare"]["warning"])
+                        self.assertIn("Elicitation policy: decline now, none recorded then.", text)
+            # A recorded policy then, or none now, keeps the policy label and the warning.
+            (Path(then) / "suite-manifest.json").write_text(json.dumps({"kitsune": {"describe": "v0.7.1"},
+                                                                        "elicitation": "accept"}))
+            report = release.review(now, compare=then)
+            self.assertFalse(report["compare"]["no_holds"])
+            self.assertIn("different policies", report["compare"]["warning"])
+            (Path(then) / "suite-manifest.json").write_text(json.dumps({"kitsune": {"describe": "v0.7.1"}}))
+            (Path(now) / "suite-manifest.json").unlink()
+            report = release.review(now, compare=then)
+            self.assertIn("none recorded now", report["compare"]["warning"])
+            self.assertIn("Elicitation policy: none recorded now, no holds then (Kitsune < #364).",
+                          release.markdown(report, 1.10))
+        with tempfile.TemporaryDirectory() as empty:
+            self.assertFalse(release.before_holds(empty), "no manifest")
+
     def test_policy_without_suite_manifest_falls_back_to_pair_records(self):
         # Suites before #59 have no policy in suite-manifest.json, or no manifest at all; #55's relay still wrote
         # elicitation_policy into each run's session evidence.

@@ -8,8 +8,9 @@ from unittest.mock import patch
 
 from kitsune_benchmark.disclosure_session import DisclosureSession
 from kitsune_benchmark.disclosure_experiment import (
-    ARMS, TASKS, EXPECT_GUIDANCE, ExperimentFixture, budget_allows, schedule, run)
+    ARMS, PIN, TASKS, EXPECT_GUIDANCE, ExperimentFixture, budget_allows, schedule, run)
 from kitsune_benchmark.personal import PersonalServer, selected_tasks
+from kitsune_benchmark.smoke import ROOT, source_revision
 
 
 class FakeSession(DisclosureSession):
@@ -164,6 +165,10 @@ class DisclosureTests(unittest.TestCase):
 @unittest.skipUnless(os.environ.get("DISCLOSURE_BROWSER_TEST") == "1", "opt-in no-model Firefox test")
 class NativeDisclosureTests(unittest.TestCase):
     def test_enrichment_in_real_firefox(self):
+        # v0.7.1+ core is Playwright-shaped: include_active/text are dropped and browser_page_text is unpublished.
+        revision = source_revision(Path(os.environ.get("KITSUNE_PROJECT", ROOT.parent / "kitsune")))["revision"]
+        if revision != PIN:
+            self.skipTest(f"rich disclosure targets the experiment's Kitsune {PIN[:7]}, not {revision}")
         from test_personal import isolated_kitsune
         task = selected_tasks([TASKS[0]])[0]
         with tempfile.TemporaryDirectory(prefix="disc-", dir="/tmp") as folder, PersonalServer(task, 0) as fixture:
@@ -181,10 +186,11 @@ class NativeDisclosureTests(unittest.TestCase):
                     session.send({"jsonrpc": "2.0", "method": "notifications/initialized"})
                     session.prepare()
                     inventory_before = session.inventory()
-                    for name in ("browser_tabs", "browser_snapshot", "browser_page_text"):
+                    for name, arguments in (("browser_tabs", {"action": "list"}), ("browser_snapshot", {}),
+                                            ("browser_page_text", {})):
                         responses = []
                         session.forward({"jsonrpc": "2.0", "id": name, "method": "tools/call",
-                            "params": {"name": name, "arguments": {}}}, responses.append)
+                            "params": {"name": name, "arguments": arguments}}, responses.append)
                         reply = responses[-1]
                         self.assertNotIn("error", reply)
                         self.assertFalse(reply["result"].get("isError", False))

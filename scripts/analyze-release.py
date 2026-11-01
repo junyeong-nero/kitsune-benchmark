@@ -13,7 +13,8 @@ each group's ratio is split by units whose Kitsune run held a call and units who
 Each suite's elicitation policy (how the relay answered Kitsune's approval prompts) is read from its
 suite-manifest.json, else from what its pairs recorded (summary, pair manifest, session evidence). Ratios under
 different policies, or against a suite that recorded none, are not comparable: --compare still computes them and the
-report warns.
+report warns. An earlier suite that recorded none and ran a Kitsune from before its holds (kitsune#364) had no prompt
+to answer: the report says "no holds then (Kitsune < #364)" instead of warning.
 """
 from __future__ import annotations
 
@@ -21,6 +22,7 @@ import argparse
 import collections
 import json
 from pathlib import Path
+import re
 import statistics
 import sys
 
@@ -31,6 +33,8 @@ from kitsune_benchmark.holds import NAVIGATIONS as BROWSER_NAVIGATIONS  # noqa: 
 TARGETS = ("playwright", "kitsune")
 ACTIONS = ("click", "type", "fill_form", "select_option", "press_key", "hover", "drag")
 OBSERVATIONS = ("snapshot", "find", "wait_for", "take_screenshot")
+# kitsune#364, Kitsune's first hold, is 561719a: `git describe --tags` v0.7.1-10-g561719a on Kitsune main.
+HOLDS_SINCE = ((0, 7, 1), 10)
 NAVIGATIONS = tuple(name.replace("browser_", "") for name in BROWSER_NAVIGATIONS)
 WRITES = ("click", "type", "fill_form", "select_option", "press_key", "drag") + NAVIGATIONS
 SIGNAL_COUNTS = ("runs", "runs_second_call_tabs_select", "runs_own_tab_before_first_write", "snapshots_after_navigation",
@@ -111,7 +115,25 @@ def elicitation_policy(suite_dir: str | Path) -> tuple[str | None, str | None]:
     return (policies.pop() if len(policies) == 1 else "mixed"), "pair records"
 
 
-def policy_warning(now: str | None, then: str | None) -> str | None:
+def before_holds(suite_dir: str | Path) -> bool:
+    """Whether the suite's Kitsune predates kitsune#364, from the clean `git describe` in its suite-manifest.json;
+    False when the manifest, the describe or a clean checkout is missing."""
+    try:
+        manifest = json.loads((Path(suite_dir) / "suite-manifest.json").read_text())
+    except (OSError, ValueError):
+        return False
+    kitsune = manifest.get("kitsune") if isinstance(manifest, dict) else None
+    describe = kitsune.get("describe") if isinstance(kitsune, dict) else None
+    match = re.fullmatch(r"v(\d+)\.(\d+)\.(\d+)(?:-(\d+)-g[0-9a-f]+)?", describe or "")
+    if not match:
+        return False
+    major, minor, patch, ahead = match.groups()
+    return ((int(major), int(minor), int(patch)), int(ahead or 0)) < HOLDS_SINCE
+
+
+def policy_warning(now: str | None, then: str | None, no_holds_then: bool = False) -> str | None:
+    if now is not None and then is None and no_holds_then:
+        return None
     if now is None or then is None:
         return (f"elicitation policy {now or 'none recorded'} now, {then or 'none recorded'} then: a suite without a "
                 "recorded policy may predate the relay's answers (#55) or Kitsune's holds (kitsune#364), so its "
@@ -397,8 +419,10 @@ def review(suite_dir, compare=None, threshold=1.10) -> dict:
         old = load(compare)
         shared = set(units) & set(old)
         then, then_source = elicitation_policy(compare)
+        no_holds = then is None and before_holds(compare)
         report["compare"] = {"suite": str(compare), "elicitation": then, "elicitation_source": then_source,
-                             "warning": policy_warning(report["elicitation"], then), "shared_units": len(shared),
+                             "no_holds": no_holds, "warning": policy_warning(report["elicitation"], then, no_holds),
+                             "shared_units": len(shared),
                              "ratios_now": ratios(units, shared), "ratios_then": ratios(old, shared)}
     return report
 
@@ -427,9 +451,11 @@ def markdown(report: dict, threshold: float) -> str:
                      f"{r['units_less_kitsune_input']}/{r['joint']} | {r['output']} | {r['mcp_calls']} | {r['elapsed']} |")
     if "compare" in report:
         c = report["compare"]
+        then_label = ("no holds then (Kitsune < #364)" if c["no_holds"]
+                      else f"{policy_label(c['elicitation'], c['elicitation_source'])} then")
         lines += ["", f"## Compared with `{c['suite']}` on {c['shared_units']} shared units", "",
                   f"Elicitation policy: {policy_label(report['elicitation'], report['elicitation_source'])} now, "
-                  f"{policy_label(c['elicitation'], c['elicitation_source'])} then.", ""]
+                  f"{then_label}.", ""]
         if c["warning"]:
             lines += [f"> **Warning:** {c['warning']}.", ""]
         lines += ["| Group | Input then | Input now | Calls then | Calls now |", "| --- | ---: | ---: | ---: | ---: |"]
