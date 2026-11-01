@@ -14,6 +14,7 @@ import json
 from math import comb
 from pathlib import Path
 import secrets
+import socket
 import sys
 import threading
 from urllib.parse import parse_qs, urlsplit
@@ -38,6 +39,29 @@ INTEGRITY = ("Synthetic local apps, test-cookie authentication and server-state 
 PRIMARY_CONTRACT = "v2_agent_tab_cleanup"
 CUSTODY_BUDGET = 4096  # readings x candidate alignments per checkpoint; beyond this custody is unknown
 CSP = "default-src 'none'; form-action 'self'; base-uri 'none'"
+# The user channel (WebDriver BiDi, docs/coexistence.md) that seeds starting tabs as the user's (#70).
+# Remote-agent "recommended preferences" would change browser defaults beyond opening the port.
+USER_CHANNEL_PREFS = {"remote.prefs.recommended": "false"}
+
+
+def free_port() -> int:
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        return probe.getsockname()[1]
+
+
+def user_channel_args(port: int) -> tuple[str, ...]:
+    """Firefox launch arguments that open the user channel on a private port."""
+    return (f"--remote-debugging-port={port}", "--remote-allow-system-access")
+
+
+def with_playwright_user_channel(server: Server, port: int, pair_dir: Path) -> Server:
+    """Playwright MCP launches its Firefox with the user channel through a --config file."""
+    options = pair_dir / "playwright-user-channel.json"
+    write_json(options, {"browser": {"launchOptions": {
+        "args": list(user_channel_args(port)),
+        "firefoxUserPrefs": {key: value == "true" for key, value in USER_CHANNEL_PREFS.items()}}}})
+    return replace(server, args=server.args + ("--config", str(options)))
 
 
 def close_only_failure(close_attempts: int, v2_success: bool | None) -> bool | None:
@@ -393,7 +417,7 @@ class PersonalTrial:
                 "category": self.task["category"], "scorable": scorable, "primary_contract": PRIMARY_CONTRACT,
                 "task_success": success_v2, "functional_success": bool(correct) if scorable else None,
                 "safety_pass": safe_v2, "custody_unknown_reason": custody["reason"] if scorable and safe_v2 is None else None,
-                "initial_state_verified": setup_ok,
+                "initial_state_verified": setup_ok, "seeding": evidence.get("seeding"),
                 "seeded_tabs_preserved": bool(preserved), "seeded_tab_custody": custody,
                 "forbidden_actions": list(self.forbidden),
                 "close_attempts": close_attempts, "outside_navigation": forbidden_navigation,
@@ -412,16 +436,22 @@ class PersonalTrial:
 
 
 class PersonalServer:
-    def __init__(self, task: dict, variant: int, *, report_viewport: bool = False, elicitation: str = "decline"):
+    def __init__(self, task: dict, variant: int, *, report_viewport: bool = False, elicitation: str = "decline",
+                 user_channel: bool = False):
         """report_viewport: every page of a personal-browsing-local-v3 run reports the content viewport
         (#21); other experiments reusing these fixtures serve taskset-v2's pages unchanged.
-        elicitation: the relay's answer to Kitsune's prompts during the agent's turn (personal_session.py)."""
+        elicitation: the relay's answer to Kitsune's prompts during the agent's turn (personal_session.py).
+        user_channel: the relay seeds the starting tabs through the user channel (#70), so Kitsune lists them as
+        the user's; the browsers then need user_channel_args(bidi_ports[target]). Other experiments seed them
+        with the MCP server's own browser_tabs new, unchanged."""
         if type(variant) is not int or variant not in range(3):
             raise ValueError("Variant must be 0, 1 or 2.")
         if elicitation not in ELICITATION_POLICIES:
             raise ValueError("Unknown elicitation policy.")
         self.task, self.variant, self.report_viewport = task, variant, report_viewport
         self.elicitation = elicitation
+        self.user_channel = user_channel
+        self.bidi_ports = {target: free_port() for target in TARGETS} if user_channel else {}
         self.trials: dict[str, PersonalTrial] = {}
         self.by_target: dict[str, str] = {}
         self.evidence_paths: dict[str, Path] = {}
@@ -546,12 +576,18 @@ class PersonalServer:
         path = pair_dir / (target + "-session.json")
         evidence = pair_dir / (target + "-session-evidence.json")
         self.evidence_paths[target] = evidence
+        seeding = {}
+        if self.user_channel:
+            port = self.bidi_ports[target]
+            if target == "playwright":
+                server = with_playwright_user_channel(server, port, pair_dir)
+            seeding = {"seeding": "user_channel", "user_driver": {"bidi_url": f"ws://127.0.0.1:{port}"}}
         write_json(path, {"target": target, "upstream": [server.command, *server.args],
             "bootstrap_url": trial.url("/start"), "urls": [trial.url(p) for p in trial.paths],
             "active_index": trial.active_index, "evidence_path": str(evidence), "origin": self.origin,
             "enabled_tools": list(server.enabled_tools), "elicitation": self.elicitation,
             "diagnostics_path": str(pair_dir / (target + "-native-rpc.jsonl")),
-            "metadata_path": str(pair_dir / (target + "-native-metadata.json"))})
+            "metadata_path": str(pair_dir / (target + "-native-metadata.json")), **seeding})
         return replace(server, command=sys.executable, args=(str(ROOT / "kitsune_benchmark/personal_session.py"), str(path)))
 
     def viewport_reports(self, target: str) -> list[dict] | None:
@@ -666,7 +702,8 @@ def run_personal(*, execute: bool = False, task_ids: list[str] | None = None, va
                 "harness": harness, "model": model, "targets": list(targets), "kitsune_tool_preset": kitsune_preset,
                 "elicitation": elicitation, "max_budget_usd_per_run": per_run, "suite_budget_usd": budget_usd,
                 "worst_case_usd": runs_per_pair * len(tasks) * per_run if per_run else None,
-                "variant": variant, "selected_tasks": tasks, "planned_model_runs": runs_per_pair * len(tasks),
+                "variant": variant, "seeding": "user_channel", "selected_tasks": tasks,
+                "planned_model_runs": runs_per_pair * len(tasks),
                 "catalog_tasks": len(catalog()["tasks"]), "runnable_tasks": len(runnable_ids()),
                 "specification_only_tasks": len(catalog()["tasks"]) - len(runnable_ids()),
                 "ui_tools": UI_TOOLS, "integrity": INTEGRITY,
@@ -686,12 +723,15 @@ def run_personal(*, execute: bool = False, task_ids: list[str] | None = None, va
             stopped = "kitsune_revision_changed"
             break
         experiment = {**spec, "selected_task": task, "variant": variant, "elicitation": elicitation,
+                      "seeding": "user_channel",
                       "catalog_sha256": hashlib.sha256((ROOT / spec["catalog"]).read_bytes()).hexdigest()}
-        with PersonalServer(task, variant, report_viewport=True, elicitation=elicitation) as fixture:
+        with PersonalServer(task, variant, report_viewport=True, elicitation=elicitation, user_channel=True) as fixture:
             pair = run_pair(execute=True, kitsune_project=kitsune_project, executable=executable,
                 experiment_spec=experiment, artifact_scope="personal", task_for_target=fixture.begin,
                 prepare_server=fixture.prepare_server, evaluate=fixture.evaluate, enabled_tools=UI_TOOLS,
                 harness=harness, kitsune_preset=kitsune_preset, targets=targets,
+                kitsune_firefox_args=user_channel_args(fixture.bidi_ports["kitsune"]),
+                kitsune_firefox_prefs=USER_CHANNEL_PREFS,
                 viewport_reports=fixture.viewport_reports, equalize_kitsune_viewport=True)
         pair["personal_task"] = task["id"]
         pair["variant"] = variant
