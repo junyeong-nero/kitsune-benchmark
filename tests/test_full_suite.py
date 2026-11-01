@@ -12,6 +12,10 @@ SPEC = importlib.util.spec_from_file_location(
     "run_full_suite", Path(__file__).resolve().parents[1] / "scripts/run-full-suite.py")
 suite = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(suite)
+MERGE_SPEC = importlib.util.spec_from_file_location(
+    "merge_suites", Path(__file__).resolve().parents[1] / "scripts/merge-suites.py")
+merge_suites = importlib.util.module_from_spec(MERGE_SPEC)
+MERGE_SPEC.loader.exec_module(merge_suites)
 
 
 
@@ -21,10 +25,11 @@ def suite_config_model():
 
 
 class FullSuiteTests(unittest.TestCase):
-    def invoke(self, results, *, sequential=False, first="personal-v0", extra=(), tracks=None):
+    def invoke(self, results, *, sequential=False, first="personal-v0", extra=(), tracks=None, out=None):
         launched = []
         waited = []
         with tempfile.TemporaryDirectory() as directory:
+            out = Path(out or directory)
             def popen(command, stdout, stderr):
                 index = len(launched)
                 launched.append(command)
@@ -35,7 +40,7 @@ class FullSuiteTests(unittest.TestCase):
                         waited.append(index)
                         return code
                 return Process()
-            argv = ["run-full-suite.py", "--kitsune-project", directory, "--out", directory]
+            argv = ["run-full-suite.py", "--kitsune-project", directory, "--out", str(out)]
             argv.extend(extra)
             if sequential:
                 argv.append("--sequential")
@@ -45,10 +50,10 @@ class FullSuiteTests(unittest.TestCase):
                               [(first, ["personal"]), ("next", ["personal"])]), \
                  patch.object(suite.subprocess, "Popen", side_effect=popen), redirect_stdout(io.StringIO()):
                 code = suite.main()
-            entries = [json.loads(line) for line in (Path(directory) / "suite-log.jsonl").read_text().splitlines()]
-            self.manifest = json.loads((Path(directory) / "suite-manifest.json").read_text())
-            self.summary = json.loads((Path(directory) / "suite-summary.json").read_text())
-            self.outputs = [str(p.relative_to(directory)) for p in Path(directory).rglob("*.json")]
+            entries = [json.loads(line) for line in (out / "suite-log.jsonl").read_text().splitlines()]
+            self.manifest = json.loads((out / "suite-manifest.json").read_text())
+            self.summary = json.loads((out / "suite-summary.json").read_text())
+            self.outputs = [str(p.relative_to(out)) for p in out.rglob("*.json")]
         return code, launched, waited, entries
 
     def test_failed_target_stops_later_tracks_after_active_peers(self):
@@ -125,6 +130,7 @@ class FullSuiteTests(unittest.TestCase):
                 self.assertCountEqual(self.outputs, outputs + ["suite-manifest.json", "suite-summary.json"])
                 self.assertEqual(self.manifest["attempts"], 1)
                 self.assertEqual(self.manifest["elicitation"], "decline")
+                self.assertEqual((self.manifest["resumed_from"], self.manifest["previous_suite"]), (None, None))
                 self.assertTrue(all(entry["attempt"] == 1 for entry in entries))
 
     def test_elicitation_policy_reaches_every_relay_track_and_the_manifest(self):
@@ -211,6 +217,56 @@ class FullSuiteTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(launched[0][launched[0].index("--targets") + 1], "kitsune,playwright")
         self.assertEqual(entries[0]["order"], "ba")
+
+    def test_from_starts_at_the_entry_and_records_the_previous_suite(self):
+        tracks = [("personal-v0", ["personal"]), ("coexistence-user-seeded", ["coexistence"]), ("external", ["external"])]
+        ok = {"requested_pairs": 1, "completed_pairs": 1}
+        with tempfile.TemporaryDirectory() as previous:
+            (Path(previous) / "suite-manifest.json").write_text("{}")
+            code, launched, _, entries = self.invoke(
+                [(0, ok)] * 3, tracks=tracks, extra=("--from", "coexistence-user-seeded", "--previous-suite", previous))
+        self.assertEqual(code, 0)
+        self.assertEqual([command[3] for command in launched], ["coexistence", "external", "external"])
+        self.assertEqual([entry["name"] for entry in entries], ["coexistence-user-seeded", "external", "external"])
+        self.assertEqual(self.manifest["resumed_from"], "coexistence-user-seeded")
+        self.assertEqual(self.manifest["previous_suite"], str(Path(previous).resolve()))
+        self.assertEqual(self.manifest["commands"], ["coexistence-user-seeded", "external"])
+
+    def test_from_refuses_before_launch(self):
+        with tempfile.TemporaryDirectory() as previous, tempfile.TemporaryDirectory() as empty:
+            (Path(previous) / "suite-manifest.json").write_text("{}")
+            for extra in (("--from", "personal-v0"), ("--previous-suite", previous),
+                          ("--from", "personal-v9", "--previous-suite", previous),
+                          ("--from", "next", "--previous-suite", empty),
+                          ("--from", "next", "--previous-suite", previous, "--attempts", "2")):
+                with self.subTest(extra=extra), patch.object(suite.sys, "stderr", io.StringIO()), \
+                        self.assertRaises(SystemExit):
+                    self.invoke([], extra=extra)
+
+    def test_session_limit_retry_merges_with_the_stopped_suite(self):
+        # #69: the first suite stops in coexistence-user-seeded; the retry restarts that entry in a fresh directory.
+        tracks = [("personal-v0", ["personal"]), ("coexistence-user-seeded", ["coexistence"]), ("external", ["external"])]
+        ok = {"requested_pairs": 1, "completed_pairs": 1}
+        stopped = {"requested_pairs": 24, "completed_pairs": 8, "stopped_reason": "unscorable_pair"}
+        with tempfile.TemporaryDirectory() as root:
+            first, retry, merged = (Path(root) / name for name in ("first", "retry", "merged"))
+            code, _, _, first_entries = self.invoke([(0, ok), (0, ok), (3, stopped)], tracks=tracks, out=first)
+            self.assertEqual(code, 3)
+            code, _, _, retry_entries = self.invoke(
+                [(0, ok)] * 3, tracks=tracks, out=retry,
+                extra=("--from", "coexistence-user-seeded", "--previous-suite", str(first)))
+            self.assertEqual(code, 0)
+            argv = ["merge-suites.py", str(first), str(retry), "--out", str(merged)]
+            with patch.object(suite.sys, "argv", argv), redirect_stdout(io.StringIO()):
+                self.assertEqual(merge_suites.main(), 0)
+            entries = [json.loads(line) for line in (merged / "suite-log.jsonl").read_text().splitlines()]
+            manifest = json.loads((merged / "suite-manifest.json").read_text())
+        self.assertEqual(entries, first_entries[:2] + retry_entries)
+        self.assertEqual(manifest["replaced"], ["coexistence-user-seeded"])
+        self.assertEqual(manifest["commands"], ["personal-v0", "coexistence-user-seeded", "external"])
+        self.assertEqual([source["suite"] for source in manifest["sources"]],
+                         [str(first.resolve()), str(retry.resolve())])
+        self.assertEqual(manifest["sources"][1]["manifest"]["resumed_from"], "coexistence-user-seeded")
 
     def test_refuses_nonempty_output_before_launch(self):
         with tempfile.TemporaryDirectory() as directory:

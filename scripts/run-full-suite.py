@@ -22,10 +22,16 @@ The default harness is `claude`: Claude Code on the claude.ai subscription login
 credit and has no dollar cap. API-key harnesses (`claude-api`, `claude-api-full`) bill ANTHROPIC_API_KEY
 credit and need --allow-api-billing plus --budget-usd and --max-budget-usd-per-run.
 
+--from ENTRY --previous-suite DIR starts the plan at ENTRY (for example after a session limit stopped DIR there), in a
+fresh --out, and records both in suite-manifest.json as resumed_from and previous_suite. Single attempts only.
+scripts/merge-suites.py then combines DIR and the retry into one directory for analyze-release.py.
+
 usage: uv run --locked python scripts/run-full-suite.py \
            --kitsune-project artifacts/vendor/kitsune-pinned --out artifacts/opus-full
        uv run --locked python scripts/run-full-suite.py --harness claude-api --allow-api-billing \
            --budget-usd 60 ...   # per-run cap follows the model: opus $1, sonnet $0.5, haiku $0.1
+       uv run --locked python scripts/run-full-suite.py --from coexistence-user-seeded \
+           --previous-suite artifacts/opus-full --out artifacts/opus-full-retry ...
 """
 
 from __future__ import annotations
@@ -116,11 +122,27 @@ def main() -> int:
     parser.add_argument("--elicitation", choices=ELICITATION_POLICIES, default="decline",
                         help="How the relay answers Kitsune's approval prompts on personal, gallery and coexistence "
                              "entries; recorded in suite-manifest.json")
+    parser.add_argument("--from", dest="from_entry", metavar="ENTRY",
+                        help="Start the plan at this entry, resuming --previous-suite; recorded as resumed_from")
+    parser.add_argument("--previous-suite", metavar="DIR",
+                        help="The suite directory --from resumes; recorded as previous_suite")
     args = parser.parse_args()
     try:
         plan = attempt_plan(args.attempts, args.order, args.sequential)
     except ValueError as exc:
         parser.error(str(exc))
+    planned = commands(args.plan)
+    if (args.from_entry is None) != (args.previous_suite is None):
+        parser.error("--from and --previous-suite go together.")
+    if args.from_entry is not None:
+        names = [name for name, _ in planned]
+        if args.from_entry not in names:
+            parser.error(f"--from {args.from_entry} is not an entry of the {args.plan} plan: {', '.join(names)}")
+        if args.attempts != 1:
+            parser.error("--from resumes a single-attempt suite; --attempts must be 1.")
+        if not (Path(args.previous_suite) / "suite-manifest.json").is_file():
+            parser.error(f"--previous-suite {args.previous_suite} has no suite-manifest.json.")
+        planned = planned[names.index(args.from_entry):]
     api = args.harness in ("claude-api", "claude-api-full")
     if args.model is None:
         if args.harness == "codex":
@@ -157,14 +179,16 @@ def main() -> int:
                 "started": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
                 "targets_in_parallel": not args.sequential, "attempts": args.attempts,
                 "order_policy": args.order, "attempt_plan": plan, "elicitation": args.elicitation,
-                "order_key": {"a": "playwright", "b": "kitsune"}, "plan": args.plan, "commands": [name for name, _ in commands(args.plan)]}
+                "order_key": {"a": "playwright", "b": "kitsune"}, "plan": args.plan, "commands": [name for name, _ in planned],
+                "resumed_from": args.from_entry,
+                "previous_suite": str(Path(args.previous_suite).resolve()) if args.previous_suite else None}
     (out / "suite-manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
     log = out / "suite-log.jsonl"
     all_entries = []
     for attempt in plan:
         attempt_dir = out if args.attempts == 1 else out / f"attempt-{attempt['attempt']:03d}"
         attempt_dir.mkdir(exist_ok=True)
-        for name, argv in commands(args.plan):
+        for name, argv in planned:
             remaining = args.budget_usd - spent if api else None
             worst_pair = 2 * args.max_budget_usd_per_run if api else 0.0
             if api and remaining < worst_pair:
