@@ -183,7 +183,9 @@ a decline and an accept suite. Do not compare either with a cohort from before
 kitsune#364, which held nothing, without saying so. `scripts/analyze-release.py`
 shows each suite's policy: from `suite-manifest.json`, else (suites before #59) from
 a pair's `experiment.elicitation` or a Kitsune run's session evidence. It warns when
-`--compare` mixes policies or compares with a suite that recorded none.
+`--compare` mixes policies or compares with a suite that recorded none. When that
+earlier suite's Kitsune (`git describe` in its `suite-manifest.json`) predates
+kitsune#364, it says "no holds then (Kitsune < #364)" instead.
 
 ```sh
 # Authorized model execution only: the accept arm of a lite suite, beside a decline suite on the same tag.
