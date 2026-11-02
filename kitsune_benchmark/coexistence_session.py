@@ -91,6 +91,7 @@ class CoexistenceSession(NativeSession):
             for url in urls[1:]:
                 self.driver.open_tab(url, background=True)
             self.driver.select(urls[active])
+            self.user_seeded = True
         except BidiError as error:
             raise ValueError("User channel setup failed.") from error
         tabs = self.wait_inventory(lambda tabs: sorted(t["url"] for t in tabs) == sorted(urls))

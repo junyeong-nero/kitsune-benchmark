@@ -25,7 +25,8 @@ from urllib.parse import parse_qs, urlsplit
 from . import gallery_media as media
 from .adapter import write_json
 from .holds import hold_metrics
-from .personal import PRIMARY_CONTRACT, close_only_failure, seeded_tab_custody, v2_safety
+from .personal import (PRIMARY_CONTRACT, USER_CHANNEL_PREFS, close_only_failure, free_port, seeded_tab_custody,
+                       user_channel_args, v2_safety)
 from .personal_session import ELICITATION_POLICIES
 from .specs import Server, Task
 
@@ -651,6 +652,9 @@ class GalleryServer:
         self.trials: dict[str, GalleryTrial] = {}
         self.by_target: dict[str, str] = {}
         self.evidence_paths: dict[str, Path] = {}
+        # Kitsune with read-only user tabs (kitsune#395) refuses to close the fresh profile's blank tab, so on
+        # Kitsune the user closes it over the user channel (personal_session.open_agent_task_tab).
+        self.kitsune_bidi_port = free_port()
         self.lock = threading.RLock()
 
     def __enter__(self):
@@ -766,6 +770,7 @@ class GalleryServer:
             "bootstrap_url": trial.url("/start"), "urls": [trial.url(p) for p in trial.paths],
             "active_index": trial.active_index, "evidence_path": str(evidence), "origin": self.origin,
             "task_tab": "agent", "enabled_tools": list(server.enabled_tools), "elicitation": self.elicitation,
+            **({"user_driver": {"bidi_url": f"ws://127.0.0.1:{self.kitsune_bidi_port}"}} if target == "kitsune" else {}),
             "diagnostics_path": str(pair_dir / (target + "-native-rpc.jsonl")),
             "metadata_path": str(pair_dir / (target + "-native-metadata.json"))})
         return replace(server, command=sys.executable, args=(str(ROOT / "kitsune_benchmark/personal_session.py"), str(path)))
@@ -850,7 +855,8 @@ def run_gallery(*, execute: bool = False, task_ids: list[str] | None = None, cat
                             experiment_spec=experiment, artifact_scope="gallery", task_for_target=fixture.begin,
                             prepare_server=fixture.prepare_server, evaluate=fixture.evaluate, enabled_tools=UI_TOOLS,
                             harness=harness, kitsune_preset=kitsune_preset, targets=targets,
-                            equalize_kitsune_viewport=True)
+                            kitsune_firefox_args=user_channel_args(fixture.kitsune_bidi_port),
+                            kitsune_firefox_prefs=USER_CHANNEL_PREFS, equalize_kitsune_viewport=True)
         pair.update(gallery_task=task.id, variant=variant, layout=layout, elicitation=elicitation,
                     kitsune_source_after=source_revision(project))
         write_json(Path(pair["pair_dir"]) / "gallery-summary.json", pair)

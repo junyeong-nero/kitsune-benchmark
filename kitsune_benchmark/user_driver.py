@@ -109,6 +109,14 @@ class UserDriver:
             raise BidiError("The user's tab to select is missing or ambiguous.")
         self.wait(lambda w: any(t["selected"] and t["url"] == url for t in self.all_tabs(w)), what="tab selection")
 
+    def close_tab(self, url: str) -> None:
+        """Like closing a tab from the tab strip. The URL must name exactly one tab."""
+        found = self.chrome(f"""(() => {{ const tabs = gBrowser.tabs.filter(t => t.linkedBrowser.currentURI.spec === {json.dumps(url)});
+            if (tabs.length !== 1) return tabs.length; gBrowser.removeTab(tabs[0]); return 1; }})()""")
+        if found != 1:
+            raise BidiError("The user's tab to close is missing or ambiguous.")
+        self.wait(lambda w: not any(t["url"] == url for t in self.all_tabs(w)), what="tab close")
+
     def type_text(self, text: str) -> str:
         """Trusted key presses into whatever has focus in the shown tab, like a real keyboard.
         Returns the URL of the tab that received them, read in the same chrome call.

@@ -131,6 +131,7 @@ class NativeSession:
         self.serial = 0
         self.tab_indexed = False
         self.held_view_current = False  # kitsune#390: see tabs_from_result and select_starting_tab
+        self.user_seeded = False  # the user, not the harness, opened the starting tabs and clicked the active one
         self.tab_list_result = None  # the latest inventory, as the native server listed it
         self.started_mono = time.monotonic()
         self.elicitation = config.get("elicitation", "decline")
@@ -334,9 +335,19 @@ class NativeSession:
         """Select the active starting tab. Kitsune after kitsune#390 selects a tab the agent did not open but does not
         list it `current` while the user may be viewing it: an ok select whose selected tab is active, not owned and
         not current turns on held_view_current for the session (evidence setup_current_hidden_by_view_hold).
-        Earlier Kitsune lists the selected tab current, so its inventories read as before."""
-        result = self.tool("browser_tabs", {"action": "select", field: value})
+        Earlier Kitsune lists the selected tab current, so its inventories read as before.
+        Kitsune with read-only user tabs (kitsune#395) refuses to select a user-seeded tab (user_tab_read_only). The
+        user already clicked it, so the agent starts without a current tab and reads use the viewed tab: that tab
+        stands in for current as under the hold (held_view_current; evidence setup_select_refused_read_only)."""
+        refusals = ("user_tab_read_only",) if self.config["target"] == "kitsune" else ()
+        result = self.tool("browser_tabs", {"action": "select", field: value}, refusal_codes=refusals)
         if self.config["target"] != "kitsune" or field != "index":
+            return
+        if result.get("isError"):
+            if not self.user_seeded:
+                raise ValueError("Kitsune refused to select a starting tab the user did not seed.")
+            self.held_view_current = True
+            self.evidence["setup_select_refused_read_only"] = True
             return
         listed = result_json(result, "tabs")
         listed = listed if isinstance(listed, list) else []
@@ -354,7 +365,8 @@ class NativeSession:
         The new tab loads the bootstrap page (session cookie), then the task page. The fresh profile's initial tab
         is the user's: it is closed while the task tab is its only neighbour, so the browser shows the task tab.
         Kitsune holds that close for the user's approval, the only one setup needs (approved_tool, evidence
-        setup_closed_initial_blank)."""
+        setup_closed_initial_blank). Kitsune with read-only user tabs (kitsune#395) refuses it (user_tab_read_only):
+        with a user channel (config user_driver), the user clicks the task tab and closes their blank tab instead."""
         task = self.config["urls"][self.config["active_index"]]
         self.tool("browser_tabs", {"action": "new", "url": self.config["bootstrap_url"]})
         self.tool("browser_navigate", {"url": task})  # the new tab is current
@@ -363,9 +375,30 @@ class NativeSession:
         if len(initial) != 1:
             raise ValueError("The task page did not open in a tab of its own.")
         field = "index" if self.config["target"] == "playwright" or self.tab_indexed else "tab_id"
-        via = self.approved_tool("browser_tabs", {"action": "close", field: initial[0]["id"]})
+        try:
+            via = self.approved_tool("browser_tabs", {"action": "close", field: initial[0]["id"]})
+        except ValueError:
+            if ((self.evidence.get("native_error") or {}).get("code") != "user_tab_read_only"
+                    or "user_driver" not in self.config):
+                raise
+            self.evidence.pop("native_error")
+            self.user_closes_initial_tab(initial_url, task)
+            via = "user_channel"
         self.evidence["setup_closed_initial_blank"] = {"via": "close" if via == "call" else via}
         self.wait_inventory(lambda tabs: [t["url"] for t in tabs] == [task])
+
+    def user_closes_initial_tab(self, initial_url: str, task: str):
+        try:
+            driver = UserDriver(self.config["user_driver"]["bidi_url"])
+            try:
+                driver.select(task)
+                driver.close_tab(initial_url)
+            finally:
+                self.evidence.update(driver_calls=self.evidence.get("driver_calls", 0) + driver.calls,
+                                     driver_seconds=round(self.evidence.get("driver_seconds", 0) + driver.seconds, 3))
+                driver.close()
+        except (BidiError, OSError) as error:
+            raise ValueError("User channel setup failed.") from error
 
     def check_agent_task_tab(self, tabs: list[dict], task: str):
         """Record, and on Kitsune require, that the harness owns every starting tab and the task tab is shown."""
@@ -396,6 +429,7 @@ class NativeSession:
                 for url in urls[1:]:
                     driver.open_tab(url, background=True)
                 driver.select(urls[self.config["active_index"]])
+                self.user_seeded = True
             finally:
                 self.evidence.update(driver_calls=driver.calls, driver_seconds=round(driver.seconds, 3))
                 driver.close()

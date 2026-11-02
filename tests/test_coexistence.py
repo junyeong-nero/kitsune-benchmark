@@ -623,7 +623,8 @@ class NativeKitsuneCoexistenceTests(NativeMixin, unittest.TestCase):
 
     def test_typing_user_is_not_disturbed(self):
         result = self.run_reference("co-typing-01", write_user_tab_first=True)
-        self.assertIn('"code":"user_active"', self.user_tab_write)
+        # Kitsune with read-only user tabs (kitsune#395) gives the agent no current tab on a user-seeded session.
+        self.assertRegex(self.user_tab_write, r'"code":"(user_active|no_current_tab|user_tab_read_only)"')
         self.assertTrue(result["task_success"], result)
         self.assertGreater(result["user_input"]["typed_chars"], 0, result["user_input"])
         self.assertTrue(result["user_input"]["user_input_intact"], result["user_input"])
