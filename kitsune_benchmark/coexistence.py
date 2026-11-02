@@ -22,6 +22,7 @@ import hashlib
 import json
 from pathlib import Path
 import sys
+import time
 
 from .adapter import claude_budget, harness_pins, with_claude_overrides, write_json
 from .coexistence_fixtures import COEXISTENCE_FIXTURES
@@ -152,6 +153,21 @@ def input_metrics(evidence: dict) -> dict | None:
             "typing_errors": record.get("errors", 0), "user_finished_typing": record.get("finished")}
 
 
+def wait_session_closed(path: Path, timeout: float = 30) -> dict:
+    """The session evidence once its relay has closed (the simulated user's record is saved on close). The relay
+    runs detached from the client (coexistence_session.main), so it can still be closing when the client exits.
+    After the timeout, or for a session that never completed setup, the evidence as it is."""
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            evidence = json.loads(path.read_text())
+        except (OSError, ValueError):
+            evidence = {}
+        if evidence.get("session_closed") or not evidence.get("setup_complete") or time.monotonic() >= deadline:
+            return evidence
+        time.sleep(0.1)
+
+
 class CoexistenceServer(PersonalServer):
     def __init__(self, task: dict, variant: int, *, protect_user_tabs: bool = False, unprotected_user_tabs: bool = False,
                  elicitation: str = "decline"):
@@ -192,11 +208,8 @@ class CoexistenceServer(PersonalServer):
                        args=(str(ROOT / "kitsune_benchmark/coexistence_session.py"), str(path)))
 
     def evaluate(self, target: str, result: dict) -> dict:
+        evidence = wait_session_closed(self.evidence_paths[target])
         base = super().evaluate(target, result)
-        try:
-            evidence = json.loads(self.evidence_paths[target].read_text())
-        except (OSError, ValueError):
-            evidence = {}
         view = view_metrics(evidence)
         typing = input_metrics(evidence)
         with self.lock:

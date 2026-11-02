@@ -20,7 +20,9 @@ in `user_tab_refusals`.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
+import subprocess
 import sys
 import time
 
@@ -182,9 +184,20 @@ class CoexistenceSession(NativeSession):
             self.evidence["user_channel_error"] = True
             self.save()
         super().close()
+        self.evidence["session_closed"] = True  # the evaluator waits for this (CoexistenceServer.evaluate)
+        self.save()
+
+
+DETACHED = "COEXISTENCE_RELAY_DETACHED"
 
 
 def main() -> int:
+    if os.environ.get(DETACHED) != "1":
+        # Codex stops an MCP server by signalling its process group (SIGTERM, then a kill about 0.5 s later), which
+        # ends the relay before the simulated user's record is saved. The relay runs in its own session on the same
+        # stdin/stdout; this process only waits, and the relay finishes on stdin EOF once the client goes away.
+        relay = subprocess.Popen([sys.executable, *sys.argv], env={**os.environ, DETACHED: "1"}, start_new_session=True)
+        return relay.wait()
     config = json.loads(Path(sys.argv[1]).read_text())
     session = CoexistenceSession(config)
 
