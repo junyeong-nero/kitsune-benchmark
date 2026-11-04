@@ -16,8 +16,9 @@ from urllib.parse import urlencode
 from urllib.request import HTTPCookieProcessor, ProxyHandler, Request, build_opener
 
 from kitsune_benchmark.__main__ import main
-from kitsune_benchmark.personal import (PROTECTED_NOTE, PersonalServer, aggregate_results, catalog, config,
-                                       incomplete_stop, run_personal, seeded_tab_custody, selected_tasks)
+from kitsune_benchmark.personal import (PROTECTED_NOTE, USER_CHANNEL_PREFS, PersonalServer, aggregate_results, catalog,
+                                       config, incomplete_stop, run_personal, seeded_tab_custody, selected_tasks,
+                                       user_channel_args)
 from kitsune_benchmark.bidi import BidiError
 from kitsune_benchmark.personal_session import NativeSession, result_json, tabs_from_result
 from kitsune_benchmark.smoke import ROOT, await_bridge, copy_extension, private_ports, session_setup
@@ -1145,8 +1146,9 @@ for line in sys.stdin:
 
 
 @contextmanager
-def isolated_kitsune(folder, height=720):
-    """Match the paired runner's isolated Firefox/extension setup, without Codex."""
+def isolated_kitsune(folder, height=720, bidi_port=None):
+    """Match the paired runner's isolated Firefox/extension setup, without Codex. With bidi_port, Firefox also opens
+    the user channel (WebDriver BiDi) on that port, as the personal track's runs do (#70)."""
     import secrets
     import subprocess
     project = Path(os.environ.get("KITSUNE_PROJECT", ROOT.parent / "kitsune"))
@@ -1171,7 +1173,10 @@ def isolated_kitsune(folder, height=720):
         browser = spawn([str(ROOT / "node_modules/.bin/web-ext"), "run", "--no-config-discovery", "--no-input",
             "--source-dir", str(destination), "--artifacts-dir", str(Path(folder) / "web-ext"),
             "--firefox", binary, "--no-reload", "--start-url", "about:blank", "--args=-headless",
-            "--args=--width=1280", f"--args=--height={height}"], "firefox.log")
+            "--args=--width=1280", f"--args=--height={height}",
+            *(("--args=" + arg for arg in user_channel_args(bidi_port)) if bidi_port else ()),
+            *((f"--pref={key}={value}" for key, value in USER_CHANNEL_PREFS.items()) if bidi_port else ())],
+            "firefox.log")
         await_bridge(http_port, env["KITSUNE_TOKEN"], browser, extension=True)
         with patch.dict(os.environ, env):
             yield ["uv", "run", "--locked", "--project", str(project), "kitsune"]
@@ -1189,23 +1194,20 @@ def agent_tool(session, name: str, arguments: dict) -> dict:
 @unittest.skipUnless(os.environ.get("PERSONAL_KITSUNE_TEST") == "1", "opt-in isolated Kitsune/Firefox MCP test; no model calls")
 class NativeKitsuneTests(unittest.TestCase):
     def test_six_fixtures_seed_and_solve_via_real_kitsune_ui(self):
-        # Initialized through the relay, as in a model run, the session declares elicitation and Kitsune main asks it
-        # to approve setup's holds; initialized directly, it declares none and setup repeats them with confirm tokens.
-        # Kitsune main also holds the scripted agent's writes on the user's viewed tab (user_viewing): the user
-        # approves them, by the relay's elicitation policy "accept" or by the agent repeating them with the token.
-        def approved_agent_tool(session, name, arguments):
-            result = agent_tool(session, name, arguments)
-            token = (result_json(result, "state") or {}).get("confirmToken")
-            return agent_tool(session, name, {**arguments, "confirm_token": token}) if isinstance(token, str) else result
-
+        # As the personal track runs them (#70): the user opens the starting tabs over the user channel, so Kitsune
+        # lists them as the user's. Kitsune with read-only user tabs (kitsune#395) refuses writes and select there, so
+        # the scripted agent opens the page it writes in a tab of its own, as model runs do (#95). The session is
+        # initialized through the relay, which declares elicitation, and directly, which declares none.
         for task, relayed in ((task, relayed) for task in selected_tasks() for relayed in (True, False)):
-            with self.subTest(task=task["id"], relayed=relayed), tempfile.TemporaryDirectory(prefix="pb-", dir="/tmp") as folder, PersonalServer(task, 0) as server:
+            with self.subTest(task=task["id"], relayed=relayed), tempfile.TemporaryDirectory(prefix="pb-", dir="/tmp") as folder, PersonalServer(task, 0, user_channel=True) as server:
                 server.begin("kitsune")
                 trial = server.trials[server.by_target["kitsune"]]
-                with isolated_kitsune(folder) as upstream:
+                port = server.bidi_ports["kitsune"]
+                with isolated_kitsune(folder, bidi_port=port) as upstream:
                     settings = {"target": "kitsune", "upstream": upstream,
                         "bootstrap_url": trial.url("/start"), "urls": [trial.url(p) for p in trial.paths],
                         "active_index": trial.active_index, "evidence_path": folder + "/evidence.json", "origin": server.origin,
+                        "seeding": "user_channel", "user_driver": {"bidi_url": f"ws://127.0.0.1:{port}"},
                         **({"elicitation": "accept"} if relayed else {})}
                     session = NativeSession(settings)
                     try:
@@ -1221,21 +1223,24 @@ class NativeKitsuneTests(unittest.TestCase):
                             session.request("initialize", initialize)
                             session.send({"jsonrpc": "2.0", "method": "notifications/initialized"})
                         session.prepare()
-                        self.assertLessEqual(set(session.evidence["setup_navigated_initial_tab"]["via"]),
-                                             {"call", "elicitation"} if relayed else {"call", "confirm_token"})
+                        self.assertEqual((session.evidence["seeding"], session.evidence["seeded_owned_by_agent"]),
+                                         ("user_channel", 0))
                         source = {"policy": "/policy/current", "orders": "/order/2"}.get(task["fixture"])
                         if source:
                             agent_tool(session, "browser_tabs", {"action": "new", "url": trial.url(source)})
                         draft = task["fixture"] in {"calendar", "contact"}
                         path = {"article": "/article", "products": "/compare", "policy": "/search", "orders": "/orders",
                                 "calendar": "/calendar", "contact": "/contact"}[task["fixture"]]
-                        tab = next(t for t in session.inventory() if t["url"] == trial.url(path))
-                        # Kitsune >= 0.3.1 publishes Playwright MCP's core tools: index-addressed tabs, `target`.
-                        agent_tool(session, "browser_tabs", {"action": "select", "index": tab["id"]})
+                        # Kitsune >= 0.3.1 publishes Playwright MCP's core tools: index-addressed tabs, `target`. The new
+                        # tab is the agent's and becomes its current tab.
+                        opened = agent_tool(session, "browser_tabs", {"action": "new", "url": trial.url(path)})
+                        self.assertFalse(opened.get("isError"), opened)
                         values = trial.expected if draft else {"메모": trial.expected["answer"]}
                         for label, value in values.items():
-                            approved_agent_tool(session, "browser_type", {"target": f'input[name="{label}"]', "text": value})
-                        approved_agent_tool(session, "browser_click", {"target": "form > button:first-of-type"})
+                            typed = agent_tool(session, "browser_type", {"target": f'input[name="{label}"]', "text": value})
+                            self.assertFalse(typed.get("isError"), typed)
+                        clicked = agent_tool(session, "browser_click", {"target": "form > button:first-of-type"})
+                        self.assertFalse(clicked.get("isError"), clicked)
                         evaluation = trial.evaluate({"execution_status": "completed_unscored"}, session.evidence)
                         self.assertTrue(evaluation["task_success"], evaluation)
                     finally:
