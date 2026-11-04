@@ -406,7 +406,7 @@ class EvaluationTests(unittest.TestCase):
             self.assertFalse(self.evaluate(server, "playwright", evidence)["scorable"])
 
     def test_holds_are_reported_beside_user_tab_refusals(self):
-        # #58: Kitsune main holds writes with needs_user (user_viewing); user_tab_refusals counts only the old code.
+        # #58: Kitsune main holds writes with needs_user (user_viewing); user_tab_refusals counts refusals, not holds.
         with tempfile.TemporaryDirectory() as folder, CoexistenceServer(selected_tasks(["pb-account-01"])[0], 0,
                                                                         unprotected_user_tabs=True) as server:
             trial = self.prepared(server, "kitsune", folder)
@@ -452,6 +452,10 @@ class EvaluationTests(unittest.TestCase):
         refusal = {"id": 3, "result": {"isError": True, "content": [{"type": "text", "text": json.dumps(
             {"ok": False, "code": "user_tab", "error": "Use your own tab."})}]}}
         self.assertTrue(user_tab_refusal(refusal))
+        # #101: Kitsune with read-only user tabs (kitsune#395) refuses writes and select with user_tab_read_only.
+        read_only = {"id": 4, "result": {"isError": True, "content": [{"type": "text", "text": json.dumps(
+            {"error": "Tab 2 is read-only for this client; nothing was done", "code": "user_tab_read_only"})}]}}
+        self.assertTrue(user_tab_refusal(read_only))
         for other in ({"id": 3, "result": {"isError": True, "content": [{"type": "text", "text": '{"code":"timeout"}'}]}},
                       {"id": 3, "result": {"content": [{"type": "text", "text": '{"code":"user_tab"}'}]}},
                       {"id": 3, "result": {"isError": True, "content": [{"type": "text", "text": "plain"}]}}):

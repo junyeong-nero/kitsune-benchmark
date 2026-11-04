@@ -14,8 +14,8 @@ Differences from `personal_session.py`:
   the run; keystrokes that land elsewhere because the view moved are recorded.
 
 Driver calls are counted separately from harness MCP calls (`driver_calls`, `driver_seconds`).
-Agent calls that Kitsune refuses with code `user_tab` (the protect-user-tabs arm) are counted
-in `user_tab_refusals`.
+Agent calls that Kitsune refuses on a user's tab are counted in `user_tab_refusals`: code `user_tab` (Kitsune 0.7's
+navigation protection, the protect-user-tabs arm) and `user_tab_read_only` (read-only user tabs, kitsune#395).
 """
 from __future__ import annotations
 
@@ -31,6 +31,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from kitsune_benchmark.bidi import BidiError  # noqa: E402
 from kitsune_benchmark.personal_session import NativeSession  # noqa: E402
 from kitsune_benchmark.user_driver import TypingUser, UserDriver, ViewSampler  # noqa: E402
+
+USER_TAB_REFUSALS = frozenset({"user_tab", "user_tab_read_only"})
 
 
 def owned_urls(target: str, result: dict) -> list[str] | None:
@@ -49,14 +51,15 @@ def owned_urls(target: str, result: dict) -> list[str] | None:
 
 
 def user_tab_refusal(response: dict) -> bool:
-    """A Kitsune tool error with code user_tab: protection refused to navigate a user's tab."""
+    """A Kitsune tool error refusing a user's tab: user_tab (Kitsune 0.7 refused to navigate it) or user_tab_read_only
+    (Kitsune with read-only user tabs, kitsune#395, refused a write or select)."""
     result = response.get("result") or {}
     if not result.get("isError"):
         return False
     for item in result.get("content", []):
         if item.get("type") == "text":
             try:
-                if json.loads(item["text"]).get("code") == "user_tab":
+                if json.loads(item["text"]).get("code") in USER_TAB_REFUSALS:
                     return True
             except (ValueError, AttributeError):
                 continue

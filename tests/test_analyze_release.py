@@ -279,6 +279,63 @@ class ReleaseReviewTests(unittest.TestCase):
             self.assertEqual(release.elicitation_policy(folder), ("decline", "suite-manifest"))
             self.assertIn("different policies", release.policy_warning("mixed", "mixed"))
 
+    def test_read_only_refusals_copies_and_their_split(self):
+        # #101: Kitsune with read-only user tabs refuses `select` (user_tab_read_only) and the agent copies the user's tab.
+        with tempfile.TemporaryDirectory() as folder:
+            memo, article = "http://l/t/memo", "http://l/t/article"
+            listing = ("tabs", {"action": "list"}, '{"tabs":[]}', False)
+            refused = ("tabs", {"action": "select", "index": 1},
+                       '{"error":"Tab 2 is read-only for this client","code":"user_tab_read_only"}', True)
+            refused_type = ("type", {"target": "e3", "text": "x"}, '{"error":"read-only","code":"user_tab_read_only"}', True)
+            copy = ("tabs", {"action": "new", "url": memo}, '{"ok":true}', False)
+            other_tab = ("tabs", {"action": "new", "url": "http://l/t/source"}, '{"ok":true}', False)
+            click = ("click", {"target": "e1"}, '{"ok":true}', False)
+
+            def pair_dir(name, seeding):
+                path = Path(folder) / name
+                path.mkdir()
+                (path / "kitsune-session-evidence.json").write_text(json.dumps(
+                    {"seeding": seeding, "initial_tabs": [{"id": 0, "active": True, "url": article},
+                                                         {"id": 1, "active": False, "url": memo}]}))
+                return str(path)
+
+            summaries = {
+                "personal-v0": [
+                    {"personal_task": "pb-copy", "pair_dir": pair_dir("c", "user_channel"), "results": {
+                        "playwright": run(folder, "c-p", True, 1000, [listing, click]),
+                        "kitsune": run(folder, "c-k", True, 1500, [listing, refused, refused_type, copy, click])}},
+                    {"personal_task": "pb-plain", "pair_dir": pair_dir("p", "user_channel"), "results": {
+                        "playwright": run(folder, "p-p", True, 1000, [listing, click]),
+                        "kitsune": run(folder, "p-k", True, 800, [listing, other_tab, click])}}],
+                "gallery-isolated-v0": [{"gallery_task": "ui-x", "pair_dir": pair_dir("g", None), "results": {
+                    "playwright": run(folder, "g-p", True, 1000, [click]),
+                    "kitsune": run(folder, "g-k", True, 900, [copy, click])}}],
+            }
+            log = []
+            for name, pairs in summaries.items():
+                path = Path(folder) / f"{name}.json"
+                path.write_text(json.dumps({"pairs": pairs}))
+                log.append({"name": name, "suite_summary_path": str(path)})
+            (Path(folder) / "suite-log.jsonl").write_text("".join(json.dumps(e) + "\n" for e in log))
+
+            report = release.review(folder)
+            personal = report["read_only"]["personal-v0"]
+            self.assertEqual(personal, {"runs": 2, "runs_with_refusal": 1, "refusals": 2,
+                                        "refused_calls": {"tabs select": 1, "type": 1}, "user_seeded_runs": 2,
+                                        "runs_with_copy": 1, "copies": 1})
+            # Gallery's starting tabs are the harness's, not the user's: a tab at their URL is not a copy.
+            gallery = report["read_only"]["gallery-isolated-v0"]
+            self.assertEqual((gallery["user_seeded_runs"], gallery["copies"]), (0, 0))
+            self.assertEqual(report["read_only_split"], {"personal": {"with_refusal_or_copy": {"units": 1, "input": 1.5},
+                                                                    "without": {"units": 1, "input": 0.8}}})
+            text = release.markdown(report, 1.10)
+            self.assertIn("| personal-v0 | 2 | 1 | 2 | 1× tabs select, 1× type | 2 | 1 | 1 |", text)
+            self.assertIn("| personal | 1 | 1.5 | 1 | 0.8 |", text)
+            compared = release.review(folder, compare=folder)
+            self.assertEqual(compared["compare"]["read_only_now"]["personal"]["runs_with_copy"], 1)
+            self.assertIn("| personal | 1/2 | 1/2 | 1/2 | 1/2 |", release.markdown(compared, 1.10))
+            self.assertIn("| gallery-isolated | 0/1 | 0/1 | — | — |", release.markdown(compared, 1.10))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -129,7 +129,10 @@ unchanged. The relay counts these refusals (`user_tab_refusals`).
 **On Kitsune after v0.7.1 this arm equals the default.** Kitsune main turns the protection on by default
 ([kitsune#371](https://github.com/junyeong-nero/kitsune/issues/371)) and adds a hold on writes to the tab
 the user is viewing. Both act through `needs_user` holds and approval prompts (kitsune#364, #376), not the
-`user_tab` code, so `user_tab_refusals` stays 0 there. `KITSUNE_PROTECT_USER_TABS=1` then sets what the
+`user_tab` code, so `user_tab_refusals` stays 0 there. Kitsune v0.7.2 holds nothing: user tabs are read-only
+(kitsune#395), and writes and `select` on them are refused with `user_tab_read_only`, which `user_tab_refusals`
+also counts (#101). `scripts/analyze-release.py` reports these refusals, and the agents' copies of the user's
+tabs, for every entry. `KITSUNE_PROTECT_USER_TABS=1` then sets what the
 default arm already runs. The arm stays as frozen; the [holds](#kitsune-holds-and-redo-after-decline) show
 what protection does on Kitsune main, and the unprotected arm below measures an agent without it.
 
