@@ -1,55 +1,47 @@
 # Kitsune Benchmark
 
-Compare **Playwright MCP vs Kitsune MCP** on everyday browser tasks, using a
-fixed Codex/model configuration, external task evidence, token usage and local
-CPU/RAM measurements.
+Does an AI agent do everyday browser work as well with **Kitsune MCP** as with **Playwright MCP**, and does it leave
+the user's browser alone while it works? This repository runs both on the same tasks, with the same model and tool
+allowlist. The results are checked from outside the agent: the apps' saved state, the tabs left behind and the user's
+view, along with tokens, time and local CPU/RAM.
 
-**Start here:** [Documentation](docs/README.md) · [Running guide](docs/running.md) ·
-[Personal browsing taskset](docs/personal-browsing.md) · [Results](docs/results/README.md)
+**Docs:** [Overview](docs/README.md) · [Running guide](docs/running.md) · [Results](docs/results/README.md) ·
+[Results by Kitsune version](docs/results/kitsune-versions.md)
 
-## Current focus and status
-
-Latest release check: [Kitsune v0.7.2 on Opus subscription, release cohort (lite plan)](docs/results/2026-11-04-opus-subscription-v0.7.2.md)
-on `taskset-v3.2`: 306 scorable runs. Personal Playwright 56/56 vs Kitsune 54/56 (both misses `pb-tabs-03`, where the
-grader reads Kitsune's `current` tab); gallery 42/42 both. On jointly solved units Kitsune used 1.5% more / **37%**
-less / 4% less input than Playwright (personal / crowded / isolated). User tabs are read-only in v0.7.2, so nothing is
-held. Coexistence: Kitsune never moved the user's view (Playwright did in 26/28).
-Previous: [v0.7.1](docs/results/2026-10-29-opus-subscription-v0.7.1.md). Not comparable with v1.x/v2 reports.
+## Latest result: Kitsune v0.7.2
 
 [![Kitsune v0.7.2 vs Playwright MCP 0.0.83, lite plan: kept the user's tab in front in 28 of 28 tasks vs 2 of 28; list-price cost on tasks both solved 0.97× personal, 0.56× crowded, 0.87× isolated; task success 96 of 98 vs 98 of 98](docs/assets/2026-11-04-v0.7.2-chart.png)](docs/results/2026-11-04-opus-subscription-v0.7.2.md)
 
-<sub>The numbers come from the [v0.7.2 report](docs/results/2026-11-04-opus-subscription-v0.7.2.md). "Kept the user's
-tab in front" counts coexistence runs that never moved the user's view. Cost is Claude Code's list-price estimate,
-not a subscription charge. Drawn by Kitsune's `scripts/benchmark_chart.py`, the chart in Kitsune's README.</sub>
+Claude Opus 5.5 through Claude Code, `taskset-v3.2`, lite plan (two data variants), one run per task, 306 runs
+([report](docs/results/2026-11-04-opus-subscription-v0.7.2.md)):
 
-The primary track evaluates **personal browsing**: continuing work in existing
-tabs and a pre-established test session, gathering information, transferring it
-to drafts, and respecting do-not-submit/preserve-context boundaries.
+- **The user's view:** Kitsune never moved it in 28 coexistence tasks. Playwright MCP moved it in 26. When the user
+  was typing, Kitsune kept their input in 3 of 3 runs and Playwright in 0 of 3.
+- **Success:** Playwright 98/98, Kitsune 96/98 on the personal and gallery tasks. Kitsune's two misses are one task,
+  `pb-tabs-03`, in two variants. The user's tab stayed in front, but the grader reads Kitsune's `current` tab
+  ([#94](https://github.com/junyeong-nero/kitsune-benchmark/issues/94)).
+- **Input on tasks both solved, Kitsune / Playwright:** personal 0.985, crowded gallery 0.625, isolated gallery 0.962.
+  External MiniWoB++ tasks: 7/7 both.
 
-| Track | Implemented scope | Actual model evidence |
+These are single attempts, so read the differences as observations, not a ranking. Earlier releases:
+[v0.7.1](docs/results/2026-10-29-opus-subscription-v0.7.1.md), [v0.7.0](docs/results/2026-10-26-opus-subscription-v0.7.0.md).
+
+## What it measures
+
+| Track | What the agent does | Graded by |
 | --- | --- | --- |
-| **Personal browsing** | 28 original specifications, **all runnable** local tasks (six-task pilot default, `--all` for 28); three data variants each; frozen as `taskset-v3` | Opus subscription on Kitsune v0.7.2, lite plan 28 × v0–v1 (2026-11-04, `taskset-v3.2`): Playwright 56/56, Kitsune 54/56 ([report](docs/results/2026-11-04-opus-subscription-v0.7.2.md)). v0.7.1, same plan on `taskset-v3.1.1` (2026-10-29): 56/56 both ([report](docs/results/2026-10-29-opus-subscription-v0.7.1.md)). v0.7.0, 28 × 3 (2026-10-26): 83/84 Playwright, 84/84 Kitsune ([report](docs/results/2026-10-26-opus-subscription-v0.7.0.md)). Earlier: 24 variant-0 Haiku pairs 21/24 vs 23/24; six-task Codex pilot 3/6 vs 4/6 |
-| **Coexistence** (frozen `coexistence-local-v1`, `taskset-v3.1`) | The user is in the browser too: user-owned starting tabs, view telemetry, a typing user ([protocol](docs/coexistence.md)). 28 personal tasks user-seeded, the Kitsune `protect-user-tabs` arm and `co-typing-01`; 25 more specified only | Opus subscription on Kitsune v0.7.2, frozen plan (2026-11-04): v2 28/28 vs 27/28, **user view moved by Playwright in 26/28 runs, by Kitsune in none**; `co-typing-01` v0-2 user input 0/3 vs 3/3; protect arm 27/28 ([report](docs/results/2026-11-04-opus-subscription-v0.7.2.md)). v0.7.1 (2026-10-29): v3 user view 2/28 vs 28/28, protect arm 28/28 ([report](docs/results/2026-10-29-opus-subscription-v0.7.1.md)). Same on v0.7.0 ([2026-10-28](docs/results/2026-10-28-new-tracks-v0.7.0.md)) |
-| **External** (`external-v1`) | 7 pinned MiniWoB++ tasks graded by the upstream reward (incl. a `login-user` form) + 3 live public-web tasks (Steam, Wikipedia, MDN), recorded but never graded ([protocol](docs/external.md)) | Opus subscription on Kitsune v0.7.2 (2026-11-04) and v0.7.1 (2026-10-29): MiniWoB 7/7 both; 3 live tasks completed by both ([v0.7.2](docs/results/2026-11-04-opus-subscription-v0.7.2.md), [v0.7.1](docs/results/2026-10-29-opus-subscription-v0.7.1.md)). Same on v0.7.0 ([2026-10-28](docs/results/2026-10-28-new-tracks-v0.7.0.md)) |
-| Hostile-UI matrix (draft, no model) | 26 real-web components (17 defense pages + 9 real UI libraries) × scripted tool strategies ([track](docs/hostile.md)) | Kitsune v0.7.1: Playwright 23/26 vs Kitsune 20/26 with synthetic input; Kitsune 21/26 on a dev build with opt-in `browser_trusted_click` ([v0.7.1](docs/results/2026-10-29-opus-subscription-v0.7.1.md#hostile-ui-matrix-on-v071-no-model-synthetic-input), [first run](docs/results/2026-10-29-hostile-headless.md)) |
-| Read-only smoke | Example Domain, no external task-success grader | One completed historical `gpt-6.1-sol` pair on 2026-10-18 |
+| [Personal browsing](docs/personal-browsing.md) | 28 tasks in already-open tabs and a signed-in test session: look things up, fill in drafts, don't submit or close what it shouldn't | The local apps' saved state and the tabs it leaves |
+| [Component gallery](docs/gallery.md) | 21 tasks: custom widgets, shadow DOM, iframes, media puzzles and one hand-off, on a crowded page and one at a time | Each task's recorded outcome |
+| [Coexistence](docs/coexistence.md) | The personal tasks while a user is in the browser: tabs the user opened, a watched view, a user typing | Personal grading plus the user's view and input |
+| [External](docs/external.md) | 7 MiniWoB++ tasks and 3 live sites (Steam, Wikipedia, MDN) | MiniWoB++'s own reward; live tasks are recorded, not graded |
+| [Hostile UI](docs/hostile.md) (draft, no model) | 26 real-web components that resist automation | Scripted tool strategies |
 
-Execution defaults to **Claude Code `2.1.303` on the claude.ai subscription** (`--harness claude`; no API credit). API-key billing needs `--harness claude-api --allow-api-billing`. The Codex harness (`gpt-6-luna`, Codex CLI `0.163.0`) remains available.
-Subscription runs consume plan usage, not API credit, and have no dollar cap; there is
-never an API-key fallback. See the [running guide](docs/running.md#default-harness-claude-code-on-the-subscription).
-
-The [six-task report](docs/results/2026-10-19-personal-six-task.md) records all
-12 agent runs. Kitsune's total input was only 0.61% higher, while its raw elapsed
-was 8.77% higher; a no-model intervention identified stale tab-list cache polling
-as a major setup delay. See [optimization findings and logs](docs/optimization-findings.md).
-This is one fixed-order variant, **not a general ranking**; strict output-format
-and tab-preservation grading affect scores. The [first one-task report](docs/results/2026-10-19-personal-current-page.md)
-remains a separate historical experiment.
+The personal and gallery apps are synthetic and local. No real account or everyday browser profile is used.
 
 ## Setup
 
-Requires Python 3.11+, uv, Node/npm, a supported Codex ChatGPT login and the
-Kitsune source checkout (normally sibling `../kitsune`).
+Needs Python 3.11+, uv, Node/npm, Claude Code logged in to a claude.ai subscription, and a Kitsune checkout
+(`../kitsune` by default).
 
 ```sh
 uv sync --locked
@@ -57,86 +49,53 @@ npm ci --ignore-scripts --no-audit --no-fund
 npm run setup:firefox
 ```
 
-npm pins Playwright MCP `0.0.83` and web-ext `10.8.0`; Python uses locked psutil.
-Firefox is installed in a **private cache with shared-cache GC disabled**.
-Automated paired commands use the same private Firefox binary, separate fresh
-profiles and private Kitsune bridge ports. No everyday Firefox/Zen profile or
-real personal account is connected. Personal fixtures preload synthetic tabs,
-data and test-session cookies before agent tool use.
+This pins Playwright MCP `0.0.83`, web-ext `10.8.0` and a private Firefox. Every run gets a fresh profile and its own
+Kitsune bridge ports.
 
-## Start small
+## Run
 
 ```sh
-# CLI/version/login diagnostics only; no inference.
+# Check the CLI and the login; no model calls.
 uv run --locked python -m kitsune_benchmark doctor --json
 
-# Plan one personal task pair; no browser or model calls.
+# Plan one task pair; no browser or model calls.
 uv run --locked python -m kitsune_benchmark personal --task pb-current-01 --variant 0
 
-# Explicitly consumes subscription usage: at most two agent runs.
-uv run --locked python -m kitsune_benchmark personal \
-  --task pb-current-01 --variant 0 --execute
+# Run it: two agent runs on your subscription. Without --task, --execute runs the six-task pilot (12 runs).
+uv run --locked python -m kitsune_benchmark personal --task pb-current-01 --variant 0 --execute
+
+# A release cohort (306 agent runs), then its review.
+uv run --locked python scripts/run-full-suite.py --plan lite \
+  --kitsune-project artifacts/vendor/kitsune-v0.7.2 --out artifacts/my-suite
+uv run --locked python scripts/analyze-release.py artifacts/my-suite
 ```
 
-A separately budgeted six-task pilot is `personal --execute` (**up to 12 agent
-runs**, not all 28 specs). Do not start it just to inspect configuration.
-Use `--kitsune-project` or `--codex` for non-default paths. See the
-[running guide](docs/running.md) for track commands, input validation, quota,
-stopping behavior, exit codes and evidence inspection.
+By default runs use Claude Code on the subscription: they count against your plan, use no API credit and never fall
+back to an API key. API billing (`--harness claude-api --allow-api-billing`) and Codex (`--harness codex`) are opt-in.
+The [running guide](docs/running.md) covers every track, budgets, stopping and exit codes.
 
 ## Tests
 
 ```sh
-# No real model calls. Native browser integration tests are opt-in.
-uv run --locked python -m unittest discover -s tests -v
+# No model calls.
+uv run --locked python -m unittest discover -s tests
 
-# Real native MCP/Firefox fixture tests, still no model inference.
+# Real Firefox and both MCP servers, still no model calls.
 PERSONAL_BROWSER_TEST=1 PERSONAL_KITSUNE_TEST=1 \
-  uv run --locked python -m unittest discover -s tests -p 'test_personal.py' -v
-
-# Coexistence user channel (WebDriver BiDi) through both real MCP servers; no model.
+  uv run --locked python -m unittest discover -s tests -p 'test_personal.py'
 PERSONAL_BROWSER_TEST=1 PERSONAL_KITSUNE_TEST=1 \
-  uv run --locked python -m unittest discover -s tests -p 'test_coexistence.py' -v
+  uv run --locked python -m unittest discover -s tests -p 'test_coexistence.py'
 ```
 
-## Layout and detailed docs
+## Reading the results
 
-| Path | Purpose |
-| --- | --- |
-| `configs/benchmarks/personal.json` | Model/pins, default six-task pilot selection, time budget |
-| `tasks/personal/catalog.json` | All 28 task specifications, implementation status and source references |
-| `kitsune_benchmark/` | Codex execution/audit, paired lifecycle, fixtures, evaluators and resource collection |
-| `artifacts/` | Private, gitignored raw evidence and browser/vendor resources |
-| [Documentation index](docs/README.md) | Guide map, track status and source-of-truth boundaries |
-| [Results by Kitsune version](docs/results/kitsune-versions.md) | Reports per Kitsune revision, frozen `taskset-v1` and upgrade rules |
-| [Personal protocol](docs/personal-browsing.md) | Catalog, session/reset setup, state-based grading and provenance |
-| [Coexistence track](docs/coexistence.md) | Frozen `coexistence-local-v1`: user channel, v3 contracts, run plan, comparability; delegation/recovery specs |
-| [Codex harness](docs/codex-harness.md) | Authentication, tool policy, generic runs and process cleanup |
-| [Resource methodology](docs/resources.md) | CPU/RSS scope, attribution and sampling caveats |
-| [Optimization findings](docs/optimization-findings.md) | Evidence-backed cache/observation/schema targets, RPC logs and offline analysis |
-| [External track](docs/external.md) | `external-v1`: 7 MiniWoB++ tasks (upstream reward) + 3 ungraded live-site tasks |
-| [MCP candidates](docs/comparison-candidates.md) | Future server/browser cohorts, not implemented benchmark adapters |
+- Look at `scorable` and `task_success` from the grader, not at the exit code or the agent's final answer.
+- Input tokens already include cached input. Cost figures are Claude Code's list-price estimate, not what a
+  subscription charges.
+- Elapsed time includes the harness's own setup calls. The two targets often run at the same time, so time is measured
+  under shared load. Summed RSS is not unique memory.
+- A result describes a model + harness + MCP configuration on these tasks. Compare Kitsune versions only on the same
+  [taskset tag](docs/results/kitsune-versions.md#frozen-taskset).
+- Raw logs, profiles and session state stay in the gitignored `artifacts/`. Review them before you share anything.
 
-## Interpretation and safety
-
-- The evaluation unit is **model + Codex + MCP configuration**, not an intrinsic
-  model/server score. Current reports are fixed-order, single-attempt pairs.
-- Read external `scorable` and `task_success`, not just exit status or the final
-  chat answer. Generic `completed_unscored` and an external success can coexist.
-- Input usage **includes cached input**. Do not add cached tokens again or infer
-  subscription charges/remaining quota from token counts.
-- Personal elapsed time includes hidden setup/readiness/inventory calls;
-  these are counted separately from agent calls. Startup asymmetry, cache effects
-  and effective viewport equivalence outside the personal track's measured
-  runs (gallery and coexistence are equalized by construction but unmeasured)
-  remain confounders.
-- Local summed RSS is not unique physical memory; remote inference is not measured.
-- The personal catalog is newly authored with benchmark design references, not
-  imported WebArena/WebVoyager/AssistantBench tasks or official upstream scores.
-  All implemented apps are synthetic and local.
-- MCP servers are trusted code. Codex's read-only workspace does not make browser
-  mutations read-only. Use controlled test data; keep raw logs/profiles/tokens
-  private and review/redact before sharing. User auth/config is never edited.
-
-WebArena, live personal accounts, complete tool/prompt attestation, repeated and
-counterbalanced statistics, and token-budget stopping remain future work.
+WebArena-style tasks, real personal accounts and repeated, counterbalanced runs are future work.
