@@ -697,6 +697,9 @@ for line in sys.stdin:
                 if current["shown"] and not current["owned"]:
                     return refusal({"code": "user_viewing", "state": {"confirmToken": "never"}})
                 current["url"] = args["url"]
+            elif name == "browser_snapshot":
+                # Kitsune #410/#384: the navigate result carried the page, so the next snapshot answers unchanged.
+                return text({"snapshot": "unchanged since the browser_navigate result", "unchanged_since": "browser_navigate"})
             elif args["action"] == "new":
                 state["opened"] = state.get("opened", 0) + 1
                 tabs.append({"id": 100 + state["opened"], "url": args["url"], "owned": True, "shown": False})
@@ -757,7 +760,7 @@ for line in sys.stdin:
                 self.assertEqual([(t["url"], t["active"]) for t in evidence["initial_tabs"]],
                                  [(base + "/gallery", True), (base + "/notes", False)])
                 # The bootstrap page loads in the harness's new tab before the task page; nothing navigates the initial tab.
-                actions = [(name, args.get("action") or args["url"]) for name, args in calls if args.get("action") != "list"]
+                actions = [(name, args.get("action") or args.get("url")) for name, args in calls if args.get("action") != "list"]
                 self.assertEqual(actions[:2], [("browser_tabs", "new"), ("browser_navigate", base + "/gallery")])
                 self.assertEqual(calls[1][1], {"action": "new", "url": base + "/start"})
                 tokens = [args for _, args in calls if "confirm_token" in args]
@@ -767,6 +770,10 @@ for line in sys.stdin:
                 self.assertEqual(evidence["setup_task_tab_shown"], owned)
                 self.assertEqual(evidence["setup_tabs_owned"], [True, True] if owned else None)
                 self.assertNotIn("native_error", evidence)
+                # On Kitsune the harness's own last call is the whole-page snapshot that drops the navigate's record.
+                self.assertEqual(calls[-1][0] == "browser_snapshot", target == "kitsune")
+                self.assertEqual(evidence.get("setup_snapshot_unchanged_since"),
+                                 "browser_navigate" if target == "kitsune" else None)
                 if target == "kitsune":
                     self.assertEqual([(t["url"], t["owned"], t["shown"]) for t in tabs],
                                      [(base + "/gallery", True, True), (base + "/notes", True, False)])
@@ -843,6 +850,8 @@ while True:
         answer = elicit("The agent asks: Sign in, please.", ASK)
         if answer.get("content") != {"answer": "Done"}:
             result = held("sign_in", "declined", "agent_request")
+    elif name == "browser_snapshot":
+        result = text({"snapshot": "- heading"})
     elif args["action"] == "new":
         tabs.append({"url": args["url"], "owned": True, "active": False})
         current = len(tabs) - 1

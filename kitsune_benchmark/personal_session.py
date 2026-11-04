@@ -387,6 +387,14 @@ class NativeSession:
         self.evidence["setup_closed_initial_blank"] = {"via": "close" if via == "call" else via}
         self.wait_inventory(lambda tabs: [t["url"] for t in tabs] == [task])
 
+    def drop_setup_action_page(self):
+        """Kitsune after kitsune#410 carries a small page's snapshot in the result of the setup navigate, and the next
+        whole-page browser_snapshot then answers unchanged_since (kitsune#384) instead of the page. The agent never saw
+        that result, so the harness takes that snapshot itself, which drops the record, and the agent's first snapshot
+        reads the page. Evidence setup_snapshot_unchanged_since: what the harness snapshot answered, else None."""
+        result = self.tool("browser_snapshot", {})
+        self.evidence["setup_snapshot_unchanged_since"] = result_json(result, "unchanged_since")
+
     def user_closes_initial_tab(self, initial_url: str, task: str):
         try:
             driver = UserDriver(self.config["user_driver"]["bidi_url"])
@@ -499,6 +507,8 @@ class NativeSession:
             raise ValueError("Active starting tab was not established.")
         if self.config.get("task_tab") == "agent":
             self.check_agent_task_tab(tabs, desired)
+            if self.config["target"] == "kitsune":
+                self.drop_setup_action_page()
         if self.config.get("seeding") == "user_channel":
             self.check_user_seeded_tabs()
             self.evidence["seeding"] = "user_channel"
