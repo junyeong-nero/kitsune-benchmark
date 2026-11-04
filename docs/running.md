@@ -5,10 +5,11 @@
 
 ## Setup
 
-Prerequisites: Python 3.11+, uv, Node/npm, a supported Codex ChatGPT subscription
-login and the Kitsune source checkout (normally sibling `../kitsune`). The
-current harness pins Codex CLI `0.163.0`; execution configs request
-`gpt-6-luna` with reasoning `medium`.
+Prerequisites: Python 3.11+, uv, Node/npm, Claude Code `2.1.303` logged in to a
+claude.ai subscription (the [default harness](#default-harness-claude-code-on-the-subscription)),
+and the Kitsune source checkout (normally sibling `../kitsune`). The Codex harness
+(`--harness codex`) needs a supported Codex ChatGPT login instead; it pins Codex CLI
+`0.163.0`, and the configs request `gpt-6-luna` with reasoning `medium`.
 
 ```sh
 uv sync --locked
@@ -20,7 +21,8 @@ The browser helper installs to the private `artifacts/browsers` cache with
 shared-cache garbage collection disabled. Automated pair commands use isolated
 headless profiles and private bridge ports, not an everyday Firefox/Zen session.
 Use `--kitsune-project /absolute/path/to/kitsune` if the checkout is not the
-sibling directory; `--codex /path/to/codex` disambiguates CLI discovery.
+sibling directory; with the Codex harness, `--codex /path/to/codex` disambiguates
+CLI discovery.
 
 Do not import real account credentials or attach a normal browser profile.
 Personal tasks use synthetic local app state and test cookies. See
@@ -37,17 +39,22 @@ uv run --locked python -m kitsune_benchmark personal \
   --task pb-current-01 --variant 0
 ```
 
-`doctor` flags inherited model API credentials. Actual execution uses a restricted
-child environment that strips them. To run a standalone subscription-only doctor
-check when the shell has such variables, omit them only for that child command:
+`doctor` flags inherited API credentials: `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`,
+`CLAUDE_CODE_OAUTH_TOKEN` and the Bedrock/Vertex/Foundry switches for the Claude
+harness, the OpenAI/Codex keys for `--harness codex`. Actual execution uses a
+restricted child environment that strips them. To run a standalone subscription-only
+doctor check when the shell has such variables, omit them only for that child command:
 
 ```sh
-env -u OPENAI_API_KEY -u CODEX_API_KEY -u OPENAI_AUTH_TOKEN -u AZURE_OPENAI_API_KEY \
+env -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN -u CLAUDE_CODE_OAUTH_TOKEN \
   uv run --locked python -m kitsune_benchmark doctor --json
+env -u OPENAI_API_KEY -u CODEX_API_KEY -u OPENAI_AUTH_TOKEN -u AZURE_OPENAI_API_KEY \
+  uv run --locked python -m kitsune_benchmark doctor --harness codex --json
 ```
 
-No command edits the user's Codex authentication/configuration. The CLI alone
-reads its existing login; there is no API-key or alternate-model fallback.
+No command edits Claude Code's or Codex's login or configuration. Each CLI reads its
+existing login; there is no API-key or alternate-model fallback. API billing is only
+the explicit `--harness claude-api` described below.
 
 ## Choose the smallest relevant run
 
