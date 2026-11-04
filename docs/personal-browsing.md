@@ -74,7 +74,7 @@ provenance. All 28 have implemented fixtures and graders.
 | Current page | `pb-current-04` | Find the cheapest eligible plan in the current pricing table | Runnable |
 | Existing tabs | `pb-tabs-01` | Compare three already-open products including shipping and delivery constraints | Runnable |
 | Existing tabs | `pb-tabs-02` | Combine event and transport information across open tabs | Runnable |
-| Existing tabs | `pb-tabs-03` | Look up a policy and return to the original active tab | Runnable |
+| Existing tabs | `pb-tabs-03` | Look up a policy and return to the original active tab (graded on the tab the user sees, `taskset-v3.3`) | Runnable |
 | Existing tabs | `pb-tabs-04` | Distinguish similar reservation tabs by date | Runnable |
 | Research | `pb-research-01` | Find current official policy among stale and unofficial search results | Runnable |
 | Research | `pb-research-02` | Reconcile opening hours with an exceptional closure/update | Runnable |

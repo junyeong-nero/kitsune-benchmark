@@ -1057,6 +1057,13 @@ for line in sys.stdin:
         tabs = {"tabs": [{"id": 33, "url": "http://localhost/a", "title": "A", "active": True}]}
         for response in ({"structuredContent": tabs}, {"content": [{"type": "text", "text": json.dumps(tabs)}]}):
             self.assertEqual(tabs_from_result("kitsune", response)[0]["id"], 33)
+        # #94: Kitsune's `current` is the agent's tab (`active` here); its `active` is the tab it shows (`shown`).
+        indexed = {"content": [{"type": "text", "text": json.dumps({"tabs": [
+            {"index": 0, "url": "http://localhost/order", "active": True},
+            {"index": 1, "url": "http://localhost/memo", "current": True, "owned": True}]})}]}
+        self.assertEqual([(t["active"], t["shown"]) for t in tabs_from_result("kitsune", indexed)],
+                         [(False, True), (True, False)])
+        self.assertNotIn("shown", tabs_from_result("playwright", playwright)[0])
         for target in ("kitsune", "playwright"):
             for response in ({}, {"isError": True}, {"content": [{"type": "text", "text": "unknown format"}]}):
                 with self.assertRaises(ValueError):

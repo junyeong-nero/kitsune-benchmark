@@ -80,7 +80,9 @@ def held_refusal(result: dict) -> dict | None:
 def tabs_from_result(target: str, result: dict, held_view_current: bool = False) -> list[dict]:
     """held_view_current: Kitsune after kitsune#390 does not mark the current tab `current` while it is an active tab
     the agent did not open (its writes are held for the user's view). With the flag, a list with no `current` tab
-    reads its single active, not owned tab as current, which is exactly the tab #390 hides."""
+    reads its single active, not owned tab as current, which is exactly the tab #390 hides.
+    Kitsune inventories also record `shown`, the tab its browser shows (Kitsune's `active`); for Kitsune with read-only
+    user tabs the agent's current tab and the shown tab differ once the agent works in a tab of its own (#94)."""
     if result.get("isError"):
         raise ValueError("Tab inventory failed.")
     texts = [item.get("text", "") for item in result.get("content", []) if item.get("type") == "text"]
@@ -111,8 +113,9 @@ def tabs_from_result(target: str, result: dict, held_view_current: bool = False)
             held = [i for i, tab in enumerate(listed) if tab.get("active") and not tab.get("owned")]
             hidden = held[0] if len(held) == 1 else None
         tabs = [{"id": tab["index"], "active": bool(tab.get("current")) or i == hidden, "title": tab.get("title") or "",
-                 "url": tab["url"]} if "index" in tab else
-                {"id": tab["id"], "active": tab["active"], "title": tab.get("title", ""), "url": tab["url"]}
+                 "url": tab["url"], "shown": bool(tab.get("active"))} if "index" in tab else
+                {"id": tab["id"], "active": tab["active"], "title": tab.get("title", ""), "url": tab["url"],
+                 "shown": bool(tab["active"])}
                 for i, tab in enumerate(listed)]
     else:
         raise ValueError("Unknown MCP target.")
