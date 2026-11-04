@@ -73,7 +73,10 @@ class HandoffApplication(Fixture):  # tp-handoff-01 (handoff accepted)
     paths = ("/apply", "/notice", "/protected")
     required = ("/notice",)
     MEMBERS = ["M-2027-4181", "M-2027-5292", "M-2027-6303"]
-    user_activity = {"tab_index": 0, "selector": 'input[name="이름"]', "text": APPLICANT, "prefill": True}
+    # The user types their name, then presses Tab: Kitsune counts a focused field holding the user's text as typing
+    # until focus leaves it (kitsune#397), which would pause even a handed-off tab's writes.
+    user_activity = {"tab_index": 0, "selector": 'input[name="이름"]', "text": APPLICANT, "prefill": True,
+                     "leave_field": True}
 
     def __init__(self, trial):
         super().__init__(trial)
@@ -157,7 +160,7 @@ class BusySheet(Fixture):  # tp-busy-01
     @property
     def user_activity(self):
         return {"url": self.url("/sheet"), "wait_for_tab": True, "selector": 'textarea[name="의견"]',
-                "text": SHEET_COMMENT, "chunk": 3, "interval": 0.6}
+                "text": SHEET_COMMENT, "chunk": 3, "interval": 0.6, "leave_field": True}
 
     @property
     def expected(self):

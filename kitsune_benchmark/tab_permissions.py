@@ -1,4 +1,4 @@
-"""Draft tab-permission scenarios for kitsune#393 (issue #74), outside the frozen `coexistence-local-v1`.
+"""Draft tab-permission scenarios for kitsune#393 (issue #74), outside the frozen `coexistence-local-v2`.
 
 kitsune#393 makes user tabs read-only (a write is refused with `user_tab_read_only`), lets the agent write in its own
 tabs unless the user is typing there (`user_active`), hands a user tab to the agent only when the agent requests it
@@ -15,8 +15,10 @@ and server-state graders are in `coexistence_fixtures.py`. Each evaluation keeps
   cannot be observed from the relay (`returned_to_user_after_session` is always None).
 - `contracts.tab_permissions`: primary success and the scenario's permission verdict (`permission_verdict`).
 
-Not verified against a Kitsune with kitsune#393: when this was written, kitsune main (514b5b7) had none of it. The
-refusal codes, the `request` action and the shape of its prompt follow the kitsune#393 specification.
+Written against the kitsune#393 specification, then verified without a model against Kitsune v0.7.2, which implements
+it: a scripted agent that keeps the rules passes every scenario's verdict through the relay and the user channel
+(tests/test_tab_permissions.py, NativeKitsuneTabPermissionTests, opt-in with PERSONAL_KITSUNE_TEST=1). The refusal
+codes, the `request` action, its 30 s browser prompt and the client fallback with the approval schema are as assumed.
 """
 from __future__ import annotations
 
@@ -40,8 +42,8 @@ REFUSAL_CODES = ("user_tab_read_only", "user_active")
 WRITE_TOOLS = ("browser_click", "browser_type", "browser_fill_form", "browser_press_key", "browser_select_option",
                "browser_navigate", "browser_navigate_back", "browser_drag", "browser_drop", "browser_file_upload",
                "browser_handle_dialog")
-INTEGRITY = (COEXISTENCE_INTEGRITY + " Draft tab-permission scenarios (kitsune#393), not verified against a Kitsune "
-             "that implements it; ownership comes from Kitsune's tab list after each agent call.")
+INTEGRITY = (COEXISTENCE_INTEGRITY + " Draft tab-permission scenarios (kitsune#393), verified without a model on "
+             "Kitsune v0.7.2; ownership comes from Kitsune's tab list after each agent call.")
 
 
 def catalog() -> dict:

@@ -167,12 +167,23 @@ is typing there (`user_active`), and a user tab becomes the agent's only after `
 user's approval. Six scenarios check it (#74). They have their own catalog,
 [`tasks/coexistence/tab-permissions.json`](../tasks/coexistence/tab-permissions.json), and benchmark ID
 `coexistence-tab-permissions-v0-draft`. They run only with `coexistence --tab-permissions`, never in the default
-selection or `run-full-suite`, and are never pooled with `coexistence-local-v1`. The frozen catalog and config are
+selection or `run-full-suite`, and are never pooled with `coexistence-local-v2`. The frozen catalog and config are
 unchanged.
 
-**Not verified against a real Kitsune.** When the scenarios were written, Kitsune main (`514b5b7`) had none of
-kitsune#393. The refusal codes, the `request` action and its prompt follow the kitsune#393 specification. Recheck
-them once it lands, and treat runs before that as checks of the scenarios, not results.
+**Verified without a model on Kitsune v0.7.2**, which implements kitsune#393 to #397. A scripted agent that keeps
+the rules runs each scenario through the relay and the user channel and passes its verdict
+(`NativeKitsuneTabPermissionTests` in `tests/test_tab_permissions.py`, opt-in with `PERSONAL_KITSUNE_TEST=1`; six
+scenarios in about two minutes):
+
+- `user_tab_read_only` and `user_active` are the refusal codes;
+- `browser_tabs action=request` shows the browser prompt for 30 s, then falls back to the client with Kitsune's
+  approval schema, which the relay answers by its policy;
+- a page-opened tab is the agent's, and a tab the user opens from it with trusted keys is the user's.
+
+What the scenarios were written for, and Kitsune v0.7.2 differs on: a focused field that holds the user's text
+counts as typing until focus leaves it. Writes to that tab pause (`user_active`), even after a handoff, and there is
+no time limit. The user steps therefore end with Tab: after the prefill in `tp-handoff-01/02`, and after the comment
+in `tp-busy-01` (`leave_field`, recorded as `left_field`).
 
 | Task | Scenario | User channel | Permission verdict (`contracts.tab_permissions.permissions_pass`) |
 | --- | --- | --- | --- |
@@ -189,13 +200,10 @@ Substitutes and limits:
   `target=_blank` link without `rel=noopener`. The page opens the tab and keeps `window.opener`.
 - **Middle-click:** the user channel has trusted keys but no trusted mouse, so `tp-inherit-02` uses the keyboard
   form of a middle-click. kitsune#393 counts any trusted input on the opener within 1 s.
-- **Approval:** handoff prompts are answered by the relay's elicitation policy, not in the browser. Kitsune falls
-  back to elicitation after its browser prompt times out (30 s proposed). The relay accepts only prompts with
-  Kitsune's approval schema, so a handoff prompt with another schema is declined even under `accept`.
+- **Approval:** handoff prompts are answered by the relay's elicitation policy, not in the browser's popup. Kitsune
+  falls back to elicitation after its browser prompt times out (30 s), so every handoff request takes at least 30 s.
 - **After the session:** whether a handed-off tab returns to the user when the session ends cannot be observed from
   the relay. `returned_to_user_after_session` is always `null`.
-- **Setup:** setup still pins the tool cursor with a hidden `browser_tabs select` on the user's tab. kitsune#393
-  refuses `select` on user tabs, so setup may need an update when it lands (see #70).
 - **`tp-inherit-02` timing:** the user-opened tab is identified as the first form tab listed. An agent that opens
   the form before the user does fails the verdict.
 

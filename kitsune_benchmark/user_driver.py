@@ -201,12 +201,14 @@ class TypingUser(threading.Thread):
     """
 
     def __init__(self, driver: UserDriver, *, url: str, selector: str, text: str,
-                 chunk: int = 3, interval: float = 0.6, wait_for_tab: bool = False):
+                 chunk: int = 3, interval: float = 0.6, wait_for_tab: bool = False, leave_field: bool = False):
         """wait_for_tab (tab-permission scenarios): `url` is a tab the agent opens. The user waits until it has
-        loaded, selects it, and only then starts typing (`record["tab_selected"]`)."""
+        loaded, selects it, and only then starts typing (`record["tab_selected"]`). leave_field: once the text is
+        typed, the user presses Tab, as a person who is done with the field (`record["left_field"]`). Kitsune counts a
+        focused field that holds the user's text as typing until focus leaves it (kitsune#397)."""
         super().__init__(daemon=True)
         self.driver, self.url, self.selector, self.text = driver, url, selector, text
-        self.chunk, self.interval, self.wait_for_tab = chunk, interval, wait_for_tab
+        self.chunk, self.interval, self.wait_for_tab, self.leave_field = chunk, interval, wait_for_tab, leave_field
         self.stop_event = threading.Event()
         self.record = {"url": url, "selector": selector, "typed_into_user_field": "", "misdirected": [],
                        "ticks": 0, "errors": 0, "finished": False}
@@ -243,6 +245,12 @@ class TypingUser(threading.Thread):
             self.record["ticks"] += 1
             self.stop_event.wait(self.interval)
         self.record["finished"] = position >= len(self.text)
+        if self.leave_field and self.record["finished"] and not self.stop_event.is_set():
+            try:
+                self.record["left_field"] = self.driver.press_keys(["Tab"]) == self.url
+            except Exception:  # noqa: BLE001 - counted like a failed keystroke
+                self.record["errors"] += 1
+                self.record["left_field"] = False
 
     def stop(self) -> dict:
         self.stop_event.set()

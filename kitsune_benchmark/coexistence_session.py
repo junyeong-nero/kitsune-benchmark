@@ -152,11 +152,14 @@ class CoexistenceSession(NativeSession):
                                 "typed_into_user_field": activity["text"] if shown == url else "",
                                 "misdirected": [] if shown == url else [{"url": shown, "text": activity["text"]}],
                                 "ticks": 1, "errors": 0, "finished": True, "alive_at_stop": False, "prefill": True}
+                if activity.get("leave_field"):  # done with the field: Tab moves focus on (TypingUser leave_field)
+                    self.prefill["left_field"] = self.driver.press_keys(["Tab"]) == url
             elif activity:
                 self.typist = TypingUser(self.driver, url=activity.get("url") or urls[activity["tab_index"]],
                                          selector=activity["selector"], text=activity["text"],
                                          chunk=activity.get("chunk", 3), interval=activity.get("interval", 0.6),
-                                         wait_for_tab=bool(activity.get("wait_for_tab")))
+                                         wait_for_tab=bool(activity.get("wait_for_tab")),
+                                         leave_field=bool(activity.get("leave_field")))
                 self.typist.start()
             link = self.config.get("user_link")
             if link:
