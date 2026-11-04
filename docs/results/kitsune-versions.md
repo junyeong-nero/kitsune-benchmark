@@ -126,6 +126,7 @@ Needs benchmark #91 (setup on read-only user tabs) and #92 (no unseen `unchanged
 
 | Date | Report | Model / harness | Kitsune revision | Notes |
 | --- | --- | --- | --- | --- |
+| 2026-11-04 | [Tab-permission scenarios, first pilot](2026-11-04-tab-permissions-pilot-v0.7.2.md) | `claude-opus-5-5`, Claude Code subscription | `v0.7.2` | Draft scenarios (#74), 12 runs: Kitsune 6/6 with 0 user-tab writes (handoff accepted and declined, inheritance, busy agent tab, read-only reads); Playwright 5/6 (submitted in the user's tab in the declined case) and moved the user's view in 4/4. Handoffs ≥ 30 s; K/PW input 0.83 |
 | 2026-11-04 | [Release cohort, lite plan](2026-11-04-opus-subscription-v0.7.2.md) | `claude-opus-5-5`, Claude Code subscription | `v0.7.2` | 306 scorable runs; gallery isolated rerun after #92 and merged. Kitsune misses only `pb-tabs-03` (4 entries: its own memo tab stays `current` while the order tab stays in front). No holds; 75 refused `select`s of user tabs in 70 runs. K/PW input (`514b5b7` → v0.7.2): personal 0.973 → 0.985, crowded 0.693 → 0.625, isolated 0.667 → 0.962, coexistence 0.977 → 0.936, external 1.023 → 0.936. Coexistence: K never moved the user's view; typing 3/3 vs 0/3 |
 
 ## main `dea1ad4` → main `514b5b7` (pre-release main)
