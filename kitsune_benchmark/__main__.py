@@ -100,6 +100,9 @@ def main(argv: list[str] | None = None) -> int:
                              help="Kitsune arm with user-tab protection off: KITSUNE_USER_TABS=writable, and "
                                   "KITSUNE_PROTECT_USER_TABS=0 KITSUNE_HOLD_VIEWED_TAB=0 for Kitsune before v0.7.2; the "
                                   "coexistence-local-v2 arm (reported separately)")
+    coexistence.add_argument("--tab-permissions", action="store_true",
+                             help="Draft kitsune#393 tab-permission scenarios (tp-* tasks, outside coexistence-local-v2; "
+                                  "reported separately); default: every tp-* task the --elicitation policy runs")
     coexistence.add_argument("--variant", type=int, choices=(0, 1, 2), default=0)
     coexistence.add_argument("--codex", default="codex")
     coexistence.add_argument("--kitsune-project")
@@ -183,11 +186,14 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "coexistence":
             if args.all_personal and args.task_ids:
                 raise ValueError("Use either --all-personal or --task.")
+            if args.all_personal and args.tab_permissions:
+                raise ValueError("Use either --all-personal or --tab-permissions.")
             result = run_coexistence(execute=args.execute, task_ids=runnable_ids() if args.all_personal else args.task_ids,
                                      variant=args.variant, kitsune_project=args.kitsune_project, executable=executable,
                                      harness=args.harness, budget_usd=args.budget_usd,
                                      protect_user_tabs=args.protect_user_tabs, elicitation=args.elicitation,
                                      unprotected_user_tabs=args.unprotected_user_tabs,
+                                     tab_permissions=args.tab_permissions,
                                      targets=tuple(args.targets.split(",")), **overrides)
             print(json.dumps(result, indent=2, ensure_ascii=False))
             if not args.execute:
