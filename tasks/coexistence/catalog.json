@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "suite": "coexistence-local-v1",
-  "status": "Frozen as coexistence-local-v1 (taskset-v3.1): condition user-seeded (28 personal-browsing-local-v3 tasks), the Kitsune arm protect-user-tabs and fixture co-typing-01. Tasks with status 'specified' are specification only, never run or scored. Scores are never pooled with pre-freeze coexistence-v0-draft results or with other suites.",
+  "suite": "coexistence-local-v2",
+  "status": "Frozen as coexistence-local-v2 (taskset-v3.4): condition user-seeded (28 personal-browsing-local-v3 tasks), the Kitsune arm unprotected-user-tabs and fixture co-typing-01. coexistence-local-v1 (taskset-v3.1 to v3.3) ran the protect-user-tabs arm instead, which on Kitsune after v0.7.1 equals the default; it is retired from the run plan. Tasks with status 'specified' are specification only, never run or scored. Scores are never pooled with pre-freeze coexistence-v0-draft results or with other suites.",
   "authorship": "Original task wording and synthetic fixtures authored in this repository. No upstream task text, assets, evaluation code, or datasets are redistributed.",
   "principles": {
     "source": "kitsune/docs/philosophy.md and the 'Benchmark the promises, not the tool count' table in kitsune/docs/positioning.md",
@@ -17,10 +17,17 @@
       "measures": ["v3_user_view (main verdict)", "seeded_owned_by_agent", "view_left_initial_after_calls", "view_transitions_away", "view_restored_at_end"]
     },
     {
-      "id": "protect-user-tabs",
+      "id": "unprotected-user-tabs",
       "status": "runnable",
       "applies_to": "Kitsune target of user-seeded runs",
-      "description": "Turns the Kitsune server's user-tab protection on: KITSUNE_USER_TABS=read-only for Kitsune v0.7.2 and later, KITSUNE_PROTECT_USER_TABS=1 for earlier Kitsune. Reported as its own arm against the default to decide whether the default can match 'off-limits unless the user authorizes otherwise'; on Kitsune after v0.7.1 the default already protects user tabs. Playwright has no equivalent and is unchanged.",
+      "description": "Turns the Kitsune server's user-tab protection off: KITSUNE_USER_TABS=writable for Kitsune v0.7.2 and later, KITSUNE_PROTECT_USER_TABS=0 and KITSUNE_HOLD_VIEWED_TAB=0 for earlier Kitsune. Reported as its own arm against default Kitsune from the same cohort, on the same units: what read-only user tabs cost the agent (refused calls, copies of user tabs, input and calls) and what they buy the user (the shown tab and the user's input left alone, no writes landing on user tabs). Playwright has no equivalent and is unchanged.",
+      "measures": ["task_success (primary v2) and v3_user_view, beside default Kitsune from the same cohort", "Kitsune input and agent calls, default / unprotected, on units both solved", "runs that wrote to or copied a user tab", "user_tab_refusals / runs_with_user_tab_refusal"]
+    },
+    {
+      "id": "protect-user-tabs",
+      "status": "retired",
+      "applies_to": "Kitsune target of user-seeded runs",
+      "description": "Turns the Kitsune server's user-tab protection on: KITSUNE_USER_TABS=read-only for Kitsune v0.7.2 and later, KITSUNE_PROTECT_USER_TABS=1 for earlier Kitsune. Reported as its own arm against the default to decide whether the default can match 'off-limits unless the user authorizes otherwise'; on Kitsune after v0.7.1 the default already protects user tabs. Playwright has no equivalent and is unchanged. Retired from the run plan in coexistence-local-v2 because it equals the default there; --protect-user-tabs still runs it, to reproduce coexistence-local-v1 cohorts.",
       "measures": ["task_success (primary v2) and v3_user_view, beside default Kitsune from the same cohort", "user_tab_refusals / runs_with_user_tab_refusal (Kitsune tool errors with code user_tab or user_tab_read_only)", "agent_calls_successful_runs"]
     }
   ],

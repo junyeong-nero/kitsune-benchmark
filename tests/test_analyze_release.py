@@ -336,6 +336,47 @@ class ReleaseReviewTests(unittest.TestCase):
             self.assertIn("| personal | 1/2 | 1/2 | 1/2 | 1/2 |", release.markdown(compared, 1.10))
             self.assertIn("| gallery-isolated | 0/1 | 0/1 | — | — |", release.markdown(compared, 1.10))
 
+    def test_kitsune_arm_against_default_kitsune(self):
+        # coexistence-local-v2: the unprotected arm (user tabs writable) beside default Kitsune on the same user-seeded units.
+        with tempfile.TemporaryDirectory() as folder:
+            refused = ("tabs", {"action": "select", "index": 1}, '{"error":"read-only","code":"user_tab_read_only"}', True)
+            click = ("click", {"target": "e1"}, '{"ok":true}', False)
+
+            def coexistence_run(name, success, tokens, calls, moved=0):
+                result = run(folder, name, success, tokens, calls)
+                result["benchmark_evaluation"].update(contracts={"v3_user_view": {"task_success": success and not moved}},
+                                                      user_view={"view_left_initial_after_calls": moved})
+                return result
+            summaries = {
+                "coexistence-user-seeded": [
+                    {"coexistence_task": "pb-a", "results": {"playwright": coexistence_run("a-p", True, 1000, [click], 2),
+                                                            "kitsune": coexistence_run("a-k", True, 1200, [refused, click])}},
+                    {"coexistence_task": "pb-b", "results": {"playwright": coexistence_run("b-p", True, 1000, [click]),
+                                                            "kitsune": coexistence_run("b-k", False, 900, [click])}}],
+                "coexistence-unprotected": [
+                    {"coexistence_task": "pb-a", "results": {"kitsune": coexistence_run("a-u", True, 600, [click], 1)}},
+                    {"coexistence_task": "pb-b", "results": {"kitsune": coexistence_run("b-u", True, 800, [click])}}],
+            }
+            log = []
+            for name, pairs in summaries.items():
+                path = Path(folder) / f"{name}.json"
+                path.write_text(json.dumps({"pairs": pairs}))
+                log.append({"name": name, "suite_summary_path": str(path)})
+            (Path(folder) / "suite-log.jsonl").write_text("".join(json.dumps(e) + "\n" for e in log))
+
+            report = release.review(folder)
+            self.assertNotIn("coexistence-unprotected", report["ratios"], "a Kitsune-only arm has no Playwright ratio")
+            arm = report["kitsune_arms"]["coexistence-unprotected"]
+            self.assertEqual((arm["units"], arm["joint"], arm["input"], arm["mcp_calls"]), (2, 1, 0.5, 0.5))
+            self.assertEqual(arm["default"], {"successes": 1, "v3_user_view": 1, "runs_moved_view": 0,
+                                              "runs_with_refusal": 1, "runs_with_copy": 0})
+            self.assertEqual(arm["arm"], {"successes": 2, "v3_user_view": 1, "runs_moved_view": 1,
+                                          "runs_with_refusal": 0, "runs_with_copy": 0})
+            text = release.markdown(report, 1.10)
+            self.assertIn("## Default Kitsune vs `coexistence-unprotected` on 2 user-seeded units", text)
+            self.assertIn("| Runs that moved the user's view | 0 | 1 |", text)
+            self.assertIn("the arm's input is 0.5× and its agent calls 0.5× default Kitsune's.", text)
+
 
 if __name__ == "__main__":
     unittest.main()

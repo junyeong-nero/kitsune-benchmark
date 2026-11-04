@@ -102,8 +102,9 @@ class FullSuiteTests(unittest.TestCase):
         tracks.append(("coexistence-user-seeded", ["coexistence", "--all-personal", "--variant", "0"]))
         tracks += [(f"coexistence-typing-v{v}", ["coexistence", "--task", "co-typing-01", "--variant", str(v)])
                    for v in range(3)]
-        tracks.append(("coexistence-protect", ["coexistence", "--all-personal", "--variant", "0",
-                                               "--protect-user-tabs", "--targets", "kitsune"]))
+        # coexistence-local-v2: the unprotected (writable) Kitsune arm replaces the retired protect arm.
+        tracks.append(("coexistence-unprotected", ["coexistence", "--all-personal", "--variant", "0",
+                                                   "--unprotected-user-tabs", "--targets", "kitsune"]))
         tracks.append(("external", ["external"]))
         self.assertEqual(suite.commands(), tracks)
         result = {"requested_pairs": 1, "completed_pairs": 1, "results": {"kitsune": {}}}

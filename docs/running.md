@@ -241,7 +241,7 @@ reports apart from visits, form writes and forbidden actions, so grading is
 unchanged. No agent-visible call or resize is involved. Apart from that script
 and its CSP header, the 24 original tasks serve the same pages as `taskset-v2`;
 reproduce v2 results from the `taskset-v2` checkout. Coexistence
-(`coexistence-local-v1`) serves the same instrumented personal pages and reports
+(`coexistence-local-v1`, now `v2`) serves the same instrumented personal pages and reports
 them the same way. Gallery, external and the older experiments that reuse personal
 fixtures serve uninstrumented pages and are not measured. The personal, gallery and
 coexistence tracks launch Kitsune's window at 1280×805 (720 + 85), so its content

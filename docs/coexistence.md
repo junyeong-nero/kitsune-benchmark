@@ -1,13 +1,17 @@
-# Coexistence track (`coexistence-local-v1`)
+# Coexistence track (`coexistence-local-v2`)
 
 [Documentation index](README.md) · [Running guide](running.md) ·
 [Spec catalog](../tasks/coexistence/catalog.json) · [Personal protocol](personal-browsing.md)
 
-**Status: frozen as benchmark `coexistence-local-v1`, part of `taskset-v3.1`.** The frozen scope is:
+**Status: frozen as benchmark `coexistence-local-v2`, part of `taskset-v3.4`.** The frozen scope is:
 
 - the `user-seeded` condition (all 28 `personal-browsing-local-v3` tasks);
-- the Kitsune `protect-user-tabs` arm;
+- the Kitsune `unprotected-user-tabs` arm (user tabs writable), compared with default Kitsune;
 - the `co-typing-01` fixture.
+
+`coexistence-local-v1` (`taskset-v3.1` to `v3.3`) ran the `protect-user-tabs` arm in its place. On Kitsune after
+v0.7.1 that arm equals the default, so v2 retires it from the run plan and measures the counterfactual instead.
+The user-seeded condition and `co-typing-01` are unchanged.
 
 The 25 tasks with status `specified` are specification only. They are never run or scored. See
 [Frozen protocol](#frozen-protocol) for the run plan, the main verdicts and the comparability rules.
@@ -117,7 +121,7 @@ things:
    0.25 s in between (`evidence["view"]`). The `driver_calls` and
    `driver_seconds` counters are kept apart from the harness MCP calls.
 
-### `protect-user-tabs` (runnable): a Kitsune arm
+### `protect-user-tabs` (retired in v2): a Kitsune arm
 
 Turns Kitsune's user-tab protection on: `KITSUNE_USER_TABS=read-only` for Kitsune v0.7.2 and later, and
 `KITSUNE_PROTECT_USER_TABS=1` for earlier Kitsune, which reads only the old name (#100). Up to v0.7.1 the
@@ -135,18 +139,23 @@ the user is viewing. Both act through `needs_user` holds and approval prompts (k
 (kitsune#395), and writes and `select` on them are refused with `user_tab_read_only`, which `user_tab_refusals`
 also counts (#101). `scripts/analyze-release.py` reports these refusals, and the agents' copies of the user's
 tabs, for every entry. On these versions the arm's setting is what the default arm already runs (on v0.7.2
-`KITSUNE_PROTECT_USER_TABS` is a deprecated alias, and Kitsune logs a deprecation warning to stderr). The arm
-stays as frozen; the [holds](#kitsune-holds-and-redo-after-decline) show
-what protection does on Kitsune main, and the unprotected arm below measures an agent without it.
+`KITSUNE_PROTECT_USER_TABS` is a deprecated alias, and Kitsune logs a deprecation warning to stderr).
+`coexistence-local-v2` therefore retires the arm from the run plan; `--protect-user-tabs` still runs it, to
+reproduce `coexistence-local-v1` cohorts. The unprotected arm below takes its place.
 
-### `unprotected-user-tabs` (outside the frozen scope): a Kitsune arm
+### `unprotected-user-tabs` (in the frozen plan since v2): a Kitsune arm
 
 `--unprotected-user-tabs` runs Kitsune with every user-tab protection off (#58): `KITSUNE_USER_TABS=writable`
 for Kitsune v0.7.2 and later, and `KITSUNE_PROTECT_USER_TABS=0 KITSUNE_HOLD_VIEWED_TAB=0` for earlier Kitsune
 (#100). v0.7.2 still reads the old names as deprecated aliases for one release; without the new setting, the
-arm would turn read-only once they are removed. Each run manifest records the `kitsune_env` it launched with. It is not a catalog condition and not part of the frozen run plan. Its
-evaluations and summaries carry `unprotected_user_tabs: true`; report it as its own column, like the
-protection arm, and never pool it with default-Kitsune totals. It cannot be combined with
+arm would turn read-only once they are removed. Each run manifest records the `kitsune_env` it launched with.
+
+Since `coexistence-local-v2` it is a catalog condition and runs in the frozen plan, after the default pairs and on
+the same Kitsune revision. Default Kitsune on the same units is its baseline. The pair answers the question
+the protect arm stopped answering: what read-only user tabs cost the agent (refused calls, copies of user tabs,
+input and calls) and what they buy the user (the shown tab left alone, `v3_user_view`). Its evaluations and
+summaries carry `unprotected_user_tabs: true`. Report it as its own column and never pool it with
+default-Kitsune totals; `scripts/analyze-release.py` prints the comparison. It cannot be combined with
 `--protect-user-tabs`. On Kitsune ≤ v0.7.1 the protection is already off by default and
 `KITSUNE_HOLD_VIEWED_TAB` does not exist, so there this arm equals the default.
 
@@ -274,7 +283,7 @@ That is 28 runs with a declined hold (personal 12, coexistence 16), all 28 redon
 
 ## Frozen protocol
 
-**Identity.** The benchmark ID is `coexistence-local-v1`. It is set in
+**Identity.** The benchmark ID is `coexistence-local-v2` (`coexistence-local-v1` up to `taskset-v3.3`). It is set in
 `configs/benchmarks/coexistence.json` and must equal the catalog's `suite`. The code checks this
 and writes it into every evaluation's `benchmark`. The model pins and timeout belong to this
 config; they are no longer borrowed from the personal config. The minimum Kitsune version is 0.7.0,
@@ -287,6 +296,8 @@ of user tabs.
 typing pattern and contracts. The personal fixtures, graders and relay are imported unchanged.
 #58 added fields beside them (the relay's `held_refusals`, `holds`, `unprotected_user_tabs`) and the
 unprotected arm's option; fixtures, conditions, contracts, verdicts and the run plan are unchanged.
+v2 changes the Kitsune arm only: the catalog's `unprotected-user-tabs` condition is runnable and in the run plan,
+and `protect-user-tabs` is retired.
 
 **Run plan per attempt.** `scripts/run-full-suite.py` runs these entries, always as paired runs in
 one process and in the attempt's order (`--targets playwright,kitsune` for AB, the reverse for BA):
@@ -295,12 +306,14 @@ one process and in the attempt's order (`--targets playwright,kitsune` for AB, t
 | --- | --- | --- |
 | `coexistence-user-seeded` | `coexistence --all-personal --variant 0` | 56 |
 | `coexistence-typing-v0..2` | `coexistence --task co-typing-01 --variant N` | 6 |
-| `coexistence-protect` | `coexistence --all-personal --variant 0 --protect-user-tabs --targets kitsune` | 28 |
+| `coexistence-unprotected` | `coexistence --all-personal --variant 0 --unprotected-user-tabs --targets kitsune` | 28 |
+
+v1's third entry was `coexistence-protect` (`--protect-user-tabs`, 28 runs).
 
 Since #59 the driver adds `--elicitation decline` (or the suite's `--elicitation accept`) to each
 command above. Decline is the default, so a command without the flag runs the same plan.
 
-The protection arm runs after the default pairs, on the same Kitsune revision.
+The unprotected arm runs after the default pairs, on the same Kitsune revision.
 
 **Main verdicts.**
 
@@ -311,20 +324,24 @@ Always report the personal contracts beside them: primary `task_success` (v2),
 `functional_success`, `safety_pass` and `v1_strict_close`. Keep four dimensions separate: function,
 ownership safety, the foreground view, and typing interference.
 
-**The protection arm** is reported as a third column, "Kitsune + protect", beside default Kitsune
-from the same cohort. It is never pooled with default-Kitsune totals. Report:
+**The unprotected arm** is reported as a third column, "Kitsune, user tabs writable", beside default
+Kitsune from the same cohort, on the same units. It is never pooled with default-Kitsune totals. Report:
 
-- primary and `v3_user_view` successes;
-- `user_tab_refusals` and `runs_with_user_tab_refusal`;
-- `agent_calls_successful_runs`, compared with the default arm. The difference is the cost of
-  turning protection on.
+- primary and `v3_user_view` successes, and runs that moved the user's view;
+- runs with a `user_tab_read_only` refusal and runs with a copy of a user tab;
+- the arm's input and agent calls over default Kitsune's on units both solved. The difference is the
+  cost of read-only user tabs; the view and `v3_user_view` columns are what they buy.
 
-A failure caused by a system refusal counts as the arm's design cost, not as a Kitsune defect.
+A failure caused by a system refusal counts as the protection's design cost, not as a Kitsune defect.
+(v1 reported its protect arm the same way, as "Kitsune + protect".)
 
 ### Comparability
 
 - The four runs before the freeze (2026-10-23, -24, -25, -26) are **pre-freeze observations**
   under `coexistence-v0-draft`. They are never pooled with `coexistence-local-v1` or relabeled.
+- `coexistence-local-v2` keeps v1's user-seeded condition and `co-typing-01` unchanged, so their results
+  compare across the two (with the personal grader change of `taskset-v3.3` for `pb-tabs-03`). The Kitsune
+  arms differ: v1's protect arm and v2's unprotected arm are never compared with each other.
   - Before `taskset-v2`, the v3 contracts required strict v1 success. The 2026-10-23 and -24
     reports therefore count close-only failures as v3 failures.
   - The draft opened the active tab first and served pages without the viewport report. Every
@@ -357,11 +374,11 @@ track; add `--harness claude-api --allow-api-billing` only to spend API credit:
 ```sh
 # The coexistence fixture(s): 2 agent runs per task.
 uv run --locked python -m kitsune_benchmark coexistence --execute
-# All 28 personal tasks user-seeded (56 runs), then the Kitsune protection arm (28 runs).
+# All 28 personal tasks user-seeded (56 runs), then the Kitsune arm with user tabs writable (28 runs).
 uv run --locked python -m kitsune_benchmark coexistence --all-personal --execute
-uv run --locked python -m kitsune_benchmark coexistence --all-personal --protect-user-tabs --targets kitsune --execute
-# Outside the frozen plan: Kitsune with both user-tab protections off (28 runs).
 uv run --locked python -m kitsune_benchmark coexistence --all-personal --unprotected-user-tabs --targets kitsune --execute
+# coexistence-local-v1's retired protect arm, to reproduce a v1 cohort (28 runs).
+uv run --locked python -m kitsune_benchmark coexistence --all-personal --protect-user-tabs --targets kitsune --execute
 ```
 
 Artifacts go to `artifacts/coexistence/<pair-id>/`. They include

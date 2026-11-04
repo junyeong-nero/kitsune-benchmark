@@ -4,7 +4,7 @@ Runs personal-browsing tasks under the `user-seeded` condition, plus coexistence
 that need a simulated user. Starting tabs belong to the user (opened over WebDriver BiDi,
 not through the MCP server), and the tab the user sees is recorded throughout the run.
 
-Benchmark `coexistence-local-v1` (configs/benchmarks/coexistence.json). The personal fixtures,
+Benchmark `coexistence-local-v2` (configs/benchmarks/coexistence.json). The personal fixtures,
 graders and relay are imported, never modified. Their contracts are reported as they are
 (primary `v2_agent_tab_cleanup`, strict v1 beside it); the coexistence contracts build on the
 primary one:
@@ -46,10 +46,11 @@ INTEGRITY = ("Synthetic local apps; personal-track graders unchanged. The simula
 # default) and keeps KITSUNE_PROTECT_USER_TABS and KITSUNE_HOLD_VIEWED_TAB for one release as deprecated aliases, of
 # which only a false value counts (writable); earlier Kitsune reads only the old names and ignores the new one. Each arm
 # sets both, so it keeps its meaning before #398, on v0.7.2 and after the aliases are removed.
-# The frozen protect arm turns protection on. On Kitsune after 0.7.1 that is the default (kitsune#371, then read-only
-# user tabs), so the arm configures what the default arm runs.
+# The protect arm turns protection on. On Kitsune after 0.7.1 that is the default (kitsune#371, then read-only user
+# tabs), so the arm configures what the default arm runs: coexistence-local-v2 retires it from the run plan, and it is
+# kept to reproduce coexistence-local-v1 cohorts.
 PROTECTED_KITSUNE_ENV = {"KITSUNE_USER_TABS": "read-only", "KITSUNE_PROTECT_USER_TABS": "1"}
-# Not part of coexistence-local-v1: a Kitsune arm with every user-tab protection off.
+# The unprotected arm, in coexistence-local-v2's run plan: every user-tab protection off, against the default arm.
 UNPROTECTED_KITSUNE_ENV = {"KITSUNE_USER_TABS": "writable", "KITSUNE_PROTECT_USER_TABS": "0",
                            "KITSUNE_HOLD_VIEWED_TAB": "0"}
 
@@ -86,7 +87,7 @@ def catalog() -> dict:
         if task["track"] == "delegation" and task.get("kitsune_mode") not in {"read", "draft", "act"}:
             raise ValueError(f"Delegation task without a Kitsune mode: {task['id']}.")
     conditions = {c["id"] for c in spec["conditions"]}
-    if conditions != {"user-seeded", "protect-user-tabs"}:
+    if conditions != {"user-seeded", "unprotected-user-tabs", "protect-user-tabs"}:
         raise ValueError("Unexpected coexistence conditions.")
     return spec
 

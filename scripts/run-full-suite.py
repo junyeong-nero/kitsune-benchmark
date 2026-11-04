@@ -10,9 +10,9 @@ playwright / --targets kitsune), each with its own fixture server, ports, profil
 Both targets then share the machine, so elapsed time and CPU/RSS are measured under that contention.
 --sequential restores one process per track with paired runs, Playwright-first unless --order selects otherwise.
 The external track runs like the others; its three live tasks are recorded, never graded.
-Coexistence (coexistence-local-v1) follows its frozen plan: the 28 personal tasks user-seeded on variant 0,
-co-typing-01 on variants 0-2, then the Kitsune protect-user-tabs arm on variant 0. Its entries always run
-paired in one process (the user channel was validated that way), in the attempt's order.
+Coexistence (coexistence-local-v2) follows its frozen plan: the 28 personal tasks user-seeded on variant 0,
+co-typing-01 on variants 0-2, then the Kitsune unprotected-user-tabs arm (user tabs writable) on variant 0. Its
+entries always run paired in one process (the user channel was validated that way), in the attempt's order.
 
 --elicitation (decline by default, or accept) sets how the relay answers Kitsune's approval prompts on every
 personal, gallery and coexistence entry, and is recorded in suite-manifest.json. External does not use the relay.
@@ -59,8 +59,8 @@ def commands(plan: str = "full") -> list[tuple[str, list[str]]]:
               for layout in ("crowded", "isolated") for v in variants["gallery"]]
     items.append(("coexistence-user-seeded", ["coexistence", "--all-personal", "--variant", "0"]))
     items += [(f"coexistence-typing-v{v}", ["coexistence", "--task", "co-typing-01", "--variant", str(v)]) for v in range(3)]
-    items.append(("coexistence-protect", ["coexistence", "--all-personal", "--variant", "0", "--protect-user-tabs",
-                                          "--targets", "kitsune"]))
+    items.append(("coexistence-unprotected", ["coexistence", "--all-personal", "--variant", "0", "--unprotected-user-tabs",
+                                              "--targets", "kitsune"]))
     items.append(("external", ["external"]))
     return items
 

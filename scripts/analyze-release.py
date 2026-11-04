@@ -16,6 +16,10 @@ or write in. Refusals are counted from the agents' tool results, copies from the
 evidence `seeding`), per entry and per group (#101); each group's ratio is also split by units whose Kitsune run had a
 refusal or a copy and units whose run had neither, and --compare shows how often runs had them then and now.
 
+A Kitsune-only coexistence arm (coexistence-local-v2's unprotected arm, with user tabs writable, or v1's protect arm)
+is compared with default Kitsune on the user-seeded entry, task by task: what protection costs the agent (refusals,
+copies, input, calls) against what it buys the user (the view left alone, `v3_user_view`).
+
 Each suite's elicitation policy (how the relay answered Kitsune's approval prompts) is read from its
 suite-manifest.json, else from what its pairs recorded (summary, pair manifest, session evidence). Ratios under
 different policies, or against a suite that recorded none, are not comparable: --compare still computes them and the
@@ -45,6 +49,9 @@ NAVIGATIONS = tuple(name.replace("browser_", "") for name in BROWSER_NAVIGATIONS
 WRITES = ("click", "type", "fill_form", "select_option", "press_key", "drag") + NAVIGATIONS
 # Session evidence `seeding` of runs whose starting tabs the user opened: personal (#70) and coexistence.
 USER_SEEDINGS = ("user_channel", "user_bidi")
+# Kitsune-only coexistence arms, compared with default Kitsune on the user-seeded entry: coexistence-local-v2's
+# unprotected arm (user tabs writable) and coexistence-local-v1's protect arm.
+KITSUNE_ARMS = ("coexistence-unprotected", "coexistence-protect")
 SIGNAL_COUNTS = ("runs", "runs_second_call_tabs_select", "runs_own_tab_before_first_write", "snapshots_after_navigation",
                  "snapshot_after_navigation_chars", "unchanged_since", "wait_for_text", "wait_for_text_under_50ms",
                  "wait_for_with_delta", "wait_for_without_delta")
@@ -52,7 +59,7 @@ SIGNAL_COUNTS = ("runs", "runs_second_call_tabs_select", "runs_own_tab_before_fi
 
 def group_of(entry: str) -> str | None:
     """The ratio group of a suite entry; None for Kitsune-only arms."""
-    if entry.startswith("coexistence-protect"):
+    if entry.startswith(KITSUNE_ARMS):
         return None
     for prefix in ("personal", "gallery-crowded", "gallery-isolated", "coexistence-user-seeded", "coexistence-typing",
                    "external", "miniwob"):
@@ -478,6 +485,42 @@ def hold_split(units: dict) -> dict:
             for group, row in split.items() if row["with_hold"] or row["without_hold"]}
 
 
+def moved_view(run: dict) -> bool:
+    return ((evaluation(run).get("user_view") or {}).get("view_left_initial_after_calls") or 0) > 0
+
+
+def kitsune_arms(units: dict) -> dict:
+    """Each Kitsune-only coexistence arm against default Kitsune on the user-seeded entry, task by task: successes,
+    `v3_user_view`, runs that moved the user's view, runs with a read-only refusal or a copy of a user tab, and the
+    arm's input and agent calls over default Kitsune's on units both solved."""
+    default = {task: runs["kitsune"] for (entry, task), runs in units.items()
+               if entry == "coexistence-user-seeded" and "kitsune" in runs}
+    out = {}
+    for arm in KITSUNE_ARMS:
+        pairs = [(default[task], runs["kitsune"]) for (entry, task), runs in units.items()
+                 if entry == arm and "kitsune" in runs and task in default]
+        if not pairs:
+            continue
+
+        def side(i):
+            runs = [pair[i] for pair in pairs]
+            rows = [run_read_only(run) for run in runs]
+            return {"successes": sum(solved(run) for run in runs),
+                    "v3_user_view": sum(((evaluation(run).get("contracts") or {}).get("v3_user_view") or {})
+                                        .get("task_success") is True for run in runs),
+                    "runs_moved_view": sum(moved_view(run) for run in runs),
+                    "runs_with_refusal": sum(bool(row["refusals"]) for row in rows),
+                    "runs_with_copy": sum(bool(row["copies"]) for row in rows)}
+        joint = [pair for pair in pairs if solved(pair[0]) and solved(pair[1])]
+
+        def ratio(field):
+            base = sum(field(pair[0]) for pair in joint)
+            return round(sum(field(pair[1]) for pair in joint) / base, 3) if base else None
+        out[arm] = {"units": len(pairs), "default": side(0), "arm": side(1), "joint": len(joint),
+                    "input": ratio(input_tokens), "mcp_calls": ratio(lambda run: run.get("mcp_calls") or 0)}
+    return out
+
+
 def review(suite_dir, compare=None, threshold=1.10) -> dict:
     units = load(suite_dir)
     policy, source = elicitation_policy(suite_dir)
@@ -485,7 +528,8 @@ def review(suite_dir, compare=None, threshold=1.10) -> dict:
               "outcomes": outcomes(units), "ratios": ratios(units),
               "outliers": outliers(units, threshold), "behaviour": behaviour(units), "signals": signals(units),
               "holds": holds(units), "hold_split": hold_split(units),
-              "read_only": read_only(units), "read_only_split": read_only_split(units)}
+              "read_only": read_only(units), "read_only_split": read_only_split(units),
+              "kitsune_arms": kitsune_arms(units)}
     if compare:
         old = load(compare)
         shared = set(units) & set(old)
@@ -608,6 +652,17 @@ def markdown(report: dict, threshold: float) -> str:
     for group, s in report["read_only_split"].items():
         lines.append(f"| {group} | {s['with_refusal_or_copy']['units']} | {s['with_refusal_or_copy']['input']} | "
                      f"{s['without']['units']} | {s['without']['input']} |")
+    for arm, a in report["kitsune_arms"].items():
+        d, x = a["default"], a["arm"]
+        lines += ["", f"## Default Kitsune vs `{arm}` on {a['units']} user-seeded units", "",
+                  "| Signal | Default Kitsune | Arm |", "| --- | ---: | ---: |"]
+        for key, label in (("successes", "Successes (primary)"), ("v3_user_view", "`v3_user_view`"),
+                           ("runs_moved_view", "Runs that moved the user's view"),
+                           ("runs_with_refusal", "Runs with a `user_tab_read_only` refusal"),
+                           ("runs_with_copy", "Runs with a copy of a user tab")):
+            lines.append(f"| {label} | {d[key]} | {x[key]} |")
+        lines += ["", f"On the {a['joint']} units both solved, the arm's input is {a['input']}× and its agent calls "
+                  f"{a['mcp_calls']}× default Kitsune's."]
     return "\n".join(lines) + "\n"
 
 
