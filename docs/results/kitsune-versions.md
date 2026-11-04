@@ -12,7 +12,8 @@ when model, harness and tasks match.
 
 | Kitsune | Revisions | Reports |
 | --- | --- | --- |
-| **v0.7.0** | `1dea68e` (tag) | Subscription full suite + coexistence (2026-10-26; first `taskset-v3` cohort) |
+| **v0.7.2** | `28ca61c` (tag) | Release cohort, lite plan (2026-11-04; `taskset-v3.2` + #91, #92) |
+| v0.7.0 | `1dea68e` (tag) | Subscription full suite + coexistence (2026-10-26; first `taskset-v3` cohort) |
 | v0.4.1 | `83acfe9` (tag) | Subscription full suite + coexistence (2026-10-25), completed after startup correction and one explicit setup retry; earlier incomplete attempt retained |
 | v0.4.0 | `a03df44` (tag) | Opus full suite + coexistence (2026-10-24; API harness) |
 | v0.3.1 | `4ad65ee` (tag) | Opus full suite (2026-10-23; `taskset-v1.2`) |
@@ -106,6 +107,24 @@ These are observations; a release-improvement claim still goes through a
 (`coexistence-v0-draft`); from `taskset-v3.1` the frozen
 [coexistence track](../coexistence.md) is part of the full suite. The taskset-v2
 user-seeded tab custody contract is retained unchanged.
+
+## v0.7.2
+
+`28ca61cfaf8a0d5e860b50c382156fc90114f311`. The changes this benchmark measured since `514b5b7`:
+
+- user and other clients' tabs are read-only, refused with `user_tab_read_only` and no prompt; the viewed-tab hold
+  is gone (#395, #398, #412, #413, #433);
+- per-client tab ownership, browser-first tab handoff (`browser_tabs request`), pauses on user activity (#394, #396,
+  #397);
+- a small page's text in navigate results (#410), shorter instructions (#405), `find load_more` and `wait_for`
+  deltas (#402–#404);
+- toolbar popup with connection and usage, agent-tab idle cleanup after 5 minutes by default (#420, #422).
+
+Needs benchmark #91 (setup on read-only user tabs) and #92 (no unseen `unchanged_since` after gallery setup).
+
+| Date | Report | Model / harness | Kitsune revision | Notes |
+| --- | --- | --- | --- | --- |
+| 2026-11-04 | [Release cohort, lite plan](2026-11-04-opus-subscription-v0.7.2.md) | `claude-opus-5-5`, Claude Code subscription | `v0.7.2` | 306 scorable runs; gallery isolated rerun after #92 and merged. Kitsune misses only `pb-tabs-03` (4 entries: its own memo tab stays `current` while the order tab stays in front). No holds; 75 refused `select`s of user tabs in 70 runs. K/PW input (`514b5b7` → v0.7.2): personal 0.973 → 0.985, crowded 0.693 → 0.625, isolated 0.667 → 0.962, coexistence 0.977 → 0.936, external 1.023 → 0.936. Coexistence: K never moved the user's view; typing 3/3 vs 0/3 |
 
 ## main `dea1ad4` → main `514b5b7` (pre-release main)
 
