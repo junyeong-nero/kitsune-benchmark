@@ -48,7 +48,7 @@ select the fresh profile's only tab and retry, but only when that refusal occurs
 | --- | --- | ---: | ---: |
 | Personal | `personal --all --variant 0/1`: all 28 tasks, data variants 0 and 1 | 56 | 112 |
 | Gallery | `gallery --layout crowded/isolated --variant 0`: all 21 tasks, both layouts, variant 0 | 42 | 84 |
-| Coexistence (frozen plan) | user-seeded 28 tasks v0; `co-typing-01` v0–2; Kitsune protect-user-tabs arm 28 tasks v0 | 59 | 90 |
+| Coexistence (frozen plan) | user-seeded 28 tasks v0; `co-typing-01` v0–2; Kitsune unprotected-user-tabs arm (user tabs writable; protect-user-tabs before `taskset-v3.4`) 28 tasks v0 | 59 | 90 |
 | External | 7 MiniWoB++ + 3 live tasks | 10 | 20 |
 
 The `lite` plan keeps every personal and gallery task and both gallery layouts. Only data variants are dropped:
@@ -116,7 +116,8 @@ external are the same in both plans.
 Per track and per target, all runs included:
 
 - success, under the primary contract (v2), strict v1, functional and safety;
-- for coexistence, the main verdicts (`v3_user_view`, `v3_user_input`) and the protect-user-tabs arm as a third column;
+- for coexistence, the main verdicts (`v3_user_view`, `v3_user_input`) and the Kitsune arm as a third column, compared
+  with default Kitsune on the same units (unprotected-user-tabs since `taskset-v3.4`, protect-user-tabs before);
 - for external, MiniWoB full-reward successes, plus live completions and advisory answer matches, which are never
   graded.
 
