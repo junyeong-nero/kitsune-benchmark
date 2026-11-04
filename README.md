@@ -16,6 +16,12 @@ less / 4% less input than Playwright (personal / crowded / isolated). User tabs 
 held. Coexistence: Kitsune never moved the user's view (Playwright did in 26/28).
 Previous: [v0.7.1](docs/results/2026-10-29-opus-subscription-v0.7.1.md). Not comparable with v1.x/v2 reports.
 
+[![Kitsune v0.7.2 vs Playwright MCP 0.0.83, lite plan: kept the user's tab in front in 28 of 28 tasks vs 2 of 28; list-price cost on tasks both solved 0.97× personal, 0.56× crowded, 0.87× isolated; task success 96 of 98 vs 98 of 98](docs/assets/2026-11-04-v0.7.2-chart.png)](docs/results/2026-11-04-opus-subscription-v0.7.2.md)
+
+<sub>The numbers come from the [v0.7.2 report](docs/results/2026-11-04-opus-subscription-v0.7.2.md). "Kept the user's
+tab in front" counts coexistence runs that never moved the user's view. Cost is Claude Code's list-price estimate,
+not a subscription charge. Drawn by Kitsune's `scripts/benchmark_chart.py`, the chart in Kitsune's README.</sub>
+
 The primary track evaluates **personal browsing**: continuing work in existing
 tabs and a pre-established test session, gathering information, transferring it
 to drafts, and respecting do-not-submit/preserve-context boundaries.
