@@ -10,6 +10,12 @@ the two suites share, so a lite run can be compared with the matching units of a
 for the user's approval, and declined writes redone in another tab) are recomputed per entry from session evidence, and
 each group's ratio is split by units whose Kitsune run held a call and units whose run did not.
 
+Kitsune with read-only user tabs (kitsune#395) holds nothing; it refuses writes and `select` on the user's tabs with
+`user_tab_read_only`, and the agent then opens a copy of the user's tab (a `tabs new` with a starting tab's URL) to read
+or write in. Refusals are counted from the agents' tool results, copies from the starting tabs the user opened (session
+evidence `seeding`), per entry and per group (#101); each group's ratio is also split by units whose Kitsune run had a
+refusal or a copy and units whose run had neither, and --compare shows how often runs had them then and now.
+
 Each suite's elicitation policy (how the relay answered Kitsune's approval prompts) is read from its
 suite-manifest.json, else from what its pairs recorded (summary, pair manifest, session evidence). Ratios under
 different policies, or against a suite that recorded none, are not comparable: --compare still computes them and the
@@ -37,6 +43,8 @@ OBSERVATIONS = ("snapshot", "find", "wait_for", "take_screenshot")
 HOLDS_SINCE = ((0, 7, 1), 10)
 NAVIGATIONS = tuple(name.replace("browser_", "") for name in BROWSER_NAVIGATIONS)
 WRITES = ("click", "type", "fill_form", "select_option", "press_key", "drag") + NAVIGATIONS
+# Session evidence `seeding` of runs whose starting tabs the user opened: personal (#70) and coexistence.
+USER_SEEDINGS = ("user_channel", "user_bidi")
 SIGNAL_COUNTS = ("runs", "runs_second_call_tabs_select", "runs_own_tab_before_first_write", "snapshots_after_navigation",
                  "snapshot_after_navigation_chars", "unchanged_since", "wait_for_text", "wait_for_text_under_50ms",
                  "wait_for_with_delta", "wait_for_without_delta")
@@ -366,14 +374,76 @@ def signals(units: dict) -> dict:
             for group, by_target in counts.items()}
 
 
-def run_holds(run: dict) -> dict | None:
-    """A Kitsune run's holds from its pair's session evidence (holds.py); None when the evidence is missing or truncated."""
+def session_evidence(run: dict) -> dict | None:
+    """The Kitsune session evidence of the run's pair; None when it is missing or truncated."""
     pair_dir = run.get("pair_dir")
     try:
         evidence = json.loads((Path(pair_dir) / "kitsune-session-evidence.json").read_text()) if pair_dir else None
     except (OSError, ValueError):
         evidence = None
-    return hold_metrics(evidence) if isinstance(evidence, dict) else None
+    return evidence if isinstance(evidence, dict) else None
+
+
+def run_holds(run: dict) -> dict | None:
+    """A Kitsune run's holds from its pair's session evidence (holds.py); None when the evidence is missing or truncated."""
+    evidence = session_evidence(run)
+    return hold_metrics(evidence) if evidence is not None else None
+
+
+def run_read_only(run: dict) -> dict:
+    """A Kitsune run's `user_tab_read_only` refusals, by call (`tabs select`, `type`, ...), and its copies of the user's
+    starting tabs: `tabs new` calls whose URL is a starting tab's. Copies are None when the session evidence does not
+    say the user opened the starting tabs (seeding user_channel or user_bidi)."""
+    calls = tool_calls(run)
+    refused = collections.Counter(" ".join(filter(None, (name, tabs_action((name, args, text, error)))))
+                                  for name, args, text, error in calls
+                                  if result_fields(text).get("code") == "user_tab_read_only")
+    evidence = session_evidence(run) or {}
+    copies = None
+    if evidence.get("seeding") in USER_SEEDINGS:
+        starting = {tab.get("url") for tab in evidence.get("initial_tabs") or []}
+        copies = sum(tabs_action(call) == "new" and call[1].get("url") in starting for call in calls)
+    return {"refusals": sum(refused.values()), "refused_calls": dict(refused), "copies": copies}
+
+
+def read_only_totals(rows: list[dict]) -> dict:
+    refused = collections.Counter()
+    for row in rows:
+        refused.update(row["refused_calls"])
+    seeded = [row for row in rows if row["copies"] is not None]
+    return {"runs": len(rows), "runs_with_refusal": sum(bool(row["refusals"]) for row in rows),
+            "refusals": sum(row["refusals"] for row in rows), "refused_calls": dict(refused.most_common()),
+            "user_seeded_runs": len(seeded), "runs_with_copy": sum(bool(row["copies"]) for row in seeded),
+            "copies": sum(row["copies"] for row in seeded)}
+
+
+def read_only(units: dict, by=lambda entry: entry, keys=None) -> dict:
+    """Kitsune refusals and copies per entry (or per `by(entry)`, such as group_of), over `keys` when given."""
+    rows = collections.defaultdict(list)
+    for key, runs in units.items():
+        name = by(key[0])
+        if name and "kitsune" in runs and (keys is None or key in keys):
+            rows[name].append(run_read_only(runs["kitsune"]))
+    return {name: read_only_totals(values) for name, values in rows.items()}
+
+
+def read_only_split(units: dict) -> dict:
+    """Per group, Kitsune/Playwright input on joint successes whose Kitsune run had a refusal or a copy and on those
+    whose run had neither; groups with neither in any joint success are left out."""
+    split = collections.defaultdict(lambda: {"with": [], "without": []})
+    for (entry, _), runs in units.items():
+        group = group_of(entry)
+        if not group or not all(solved(runs.get(t)) for t in TARGETS):
+            continue
+        row = run_read_only(runs["kitsune"])
+        split[group]["with" if row["refusals"] or row["copies"] else "without"].append(runs)
+
+    def side(joint):
+        pw = sum(input_tokens(runs["playwright"]) for runs in joint)
+        return {"units": len(joint),
+                "input": round(sum(input_tokens(runs["kitsune"]) for runs in joint) / pw, 3) if pw else None}
+    return {group: {"with_refusal_or_copy": side(row["with"]), "without": side(row["without"])}
+            for group, row in split.items() if row["with"]}
 
 
 def holds(units: dict) -> dict:
@@ -414,7 +484,8 @@ def review(suite_dir, compare=None, threshold=1.10) -> dict:
     report = {"suite": str(suite_dir), "elicitation": policy, "elicitation_source": source, "audit": audit(units),
               "outcomes": outcomes(units), "ratios": ratios(units),
               "outliers": outliers(units, threshold), "behaviour": behaviour(units), "signals": signals(units),
-              "holds": holds(units), "hold_split": hold_split(units)}
+              "holds": holds(units), "hold_split": hold_split(units),
+              "read_only": read_only(units), "read_only_split": read_only_split(units)}
     if compare:
         old = load(compare)
         shared = set(units) & set(old)
@@ -423,7 +494,9 @@ def review(suite_dir, compare=None, threshold=1.10) -> dict:
         report["compare"] = {"suite": str(compare), "elicitation": then, "elicitation_source": then_source,
                              "no_holds": no_holds, "warning": policy_warning(report["elicitation"], then, no_holds),
                              "shared_units": len(shared),
-                             "ratios_now": ratios(units, shared), "ratios_then": ratios(old, shared)}
+                             "ratios_now": ratios(units, shared), "ratios_then": ratios(old, shared),
+                             "read_only_now": read_only(units, group_of, shared),
+                             "read_only_then": read_only(old, group_of, shared)}
     return report
 
 
@@ -462,6 +535,14 @@ def markdown(report: dict, threshold: float) -> str:
         for group, now in c["ratios_now"].items():
             then = c["ratios_then"].get(group, {})
             lines.append(f"| {group} | {then.get('input')} | {now['input']} | {then.get('mcp_calls')} | {now['mcp_calls']} |")
+        lines += ["", "Kitsune runs on the shared units with a `user_tab_read_only` refusal, and with a copy of a user's "
+                  "starting tab (of the runs whose starting tabs the user opened):", "",
+                  "| Group | Runs with a refusal then | Now | Runs with a copy then | Now |", "| --- | ---: | ---: | ---: | ---: |"]
+        for group, now in c["read_only_now"].items():
+            then = c["read_only_then"].get(group)
+            refusal = lambda r: f"{r['runs_with_refusal']}/{r['runs']}" if r else "—"
+            copy = lambda r: f"{r['runs_with_copy']}/{r['user_seeded_runs']}" if r and r["user_seeded_runs"] else "—"
+            lines.append(f"| {group} | {refusal(then)} | {refusal(now)} | {copy(then)} | {copy(now)} |")
     lines += ["", f"## Units where Kitsune input exceeds {threshold}× Playwright", "",
               "| Unit | Ratio | Input PW / K | Calls PW / K | Kitsune calls |", "| --- | ---: | --- | --- | --- |"]
     for o in report["outliers"]:
@@ -513,6 +594,20 @@ def markdown(report: dict, threshold: float) -> str:
     no_record = sum(h["no_record"] for h in report["hold_split"].values())
     if no_record:
         lines += ["", f"{no_record} joint successes have no readable Kitsune session evidence and are left out of the split."]
+    lines += ["", "## Kitsune on read-only user tabs", "",
+              "Refusals are `user_tab_read_only` results; a copy is a `tabs new` with the URL of a starting tab the user "
+              "opened (counted only for runs whose session evidence says so).", "",
+              "| Entry | Runs | Runs with a refusal | Refusals | Refused calls | User-seeded runs | Runs with a copy | Copies |",
+              "| --- | ---: | ---: | ---: | --- | ---: | ---: | ---: |"]
+    for entry, r in report["read_only"].items():
+        calls = ", ".join(f"{n}× {call}" for call, n in r["refused_calls"].items()) or "none"
+        lines.append(f"| {entry} | {r['runs']} | {r['runs_with_refusal']} | {r['refusals']} | {calls} | "
+                     f"{r['user_seeded_runs']} | {r['runs_with_copy']} | {r['copies']} |")
+    lines += ["", "## Kitsune / Playwright input on joint successes, by refusal or copy", "",
+              "| Group | Units with a refusal or copy | Input | Units with neither | Input |", "| --- | ---: | ---: | ---: | ---: |"]
+    for group, s in report["read_only_split"].items():
+        lines.append(f"| {group} | {s['with_refusal_or_copy']['units']} | {s['with_refusal_or_copy']['input']} | "
+                     f"{s['without']['units']} | {s['without']['input']} |")
     return "\n".join(lines) + "\n"
 
 
