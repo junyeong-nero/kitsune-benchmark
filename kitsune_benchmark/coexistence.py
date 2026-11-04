@@ -42,9 +42,16 @@ INTEGRITY = ("Synthetic local apps; personal-track graders unchanged. The simula
              "privileged local WebDriver BiDi channel the agent cannot see. View samples are taken after "
              "each agent call and every sampler interval, so sub-interval flicker can be missed. "
              "Remote agent activity can be visible to pages (navigator.webdriver) in both browsers.")
-# Not part of coexistence-local-v1: a Kitsune arm with both user-tab protections off. On Kitsune after 0.7.1 they are on by
-# default (kitsune#371), so the frozen protect arm's KITSUNE_PROTECT_USER_TABS=1 configures what the default arm runs.
-UNPROTECTED_KITSUNE_ENV = {"KITSUNE_PROTECT_USER_TABS": "0", "KITSUNE_HOLD_VIEWED_TAB": "0"}
+# The two Kitsune arms' user-tab settings (#100). Kitsune v0.7.2 (kitsune#398) reads KITSUNE_USER_TABS (read-only by
+# default) and keeps KITSUNE_PROTECT_USER_TABS and KITSUNE_HOLD_VIEWED_TAB for one release as deprecated aliases, of
+# which only a false value counts (writable); earlier Kitsune reads only the old names and ignores the new one. Each arm
+# sets both, so it keeps its meaning before #398, on v0.7.2 and after the aliases are removed.
+# The frozen protect arm turns protection on. On Kitsune after 0.7.1 that is the default (kitsune#371, then read-only
+# user tabs), so the arm configures what the default arm runs.
+PROTECTED_KITSUNE_ENV = {"KITSUNE_USER_TABS": "read-only", "KITSUNE_PROTECT_USER_TABS": "1"}
+# Not part of coexistence-local-v1: a Kitsune arm with every user-tab protection off.
+UNPROTECTED_KITSUNE_ENV = {"KITSUNE_USER_TABS": "writable", "KITSUNE_PROTECT_USER_TABS": "0",
+                           "KITSUNE_HOLD_VIEWED_TAB": "0"}
 
 
 def config() -> dict:
@@ -320,7 +327,7 @@ def run_coexistence(*, execute: bool = False, task_ids: list[str] | None = None,
                 experiment_spec=experiment, artifact_scope="coexistence", task_for_target=fixture.begin,
                 prepare_server=fixture.prepare_server, evaluate=fixture.evaluate, enabled_tools=UI_TOOLS,
                 harness=harness, targets=targets,
-                kitsune_env=({"KITSUNE_PROTECT_USER_TABS": "1"} if protect_user_tabs
+                kitsune_env=(PROTECTED_KITSUNE_ENV if protect_user_tabs
                              else UNPROTECTED_KITSUNE_ENV if unprotected_user_tabs else None),
                 kitsune_firefox_args=user_channel_args(port),
                 kitsune_firefox_prefs=USER_CHANNEL_PREFS, viewport_reports=fixture.viewport_reports,

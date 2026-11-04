@@ -446,7 +446,13 @@ class EvaluationTests(unittest.TestCase):
                 patch("kitsune_benchmark.coexistence.source_revision", return_value={}), self.assertRaises(RuntimeError):
             run_coexistence(execute=True, task_ids=["pb-account-01"], unprotected_user_tabs=True, targets=("kitsune",),
                             harness="claude")
-        self.assertEqual(launched, [{"KITSUNE_PROTECT_USER_TABS": "0", "KITSUNE_HOLD_VIEWED_TAB": "0"}])
+        # #100: KITSUNE_USER_TABS for Kitsune v0.7.2 and later (kitsune#398), the old names for Kitsune before it.
+        self.assertEqual(launched, [{"KITSUNE_USER_TABS": "writable", "KITSUNE_PROTECT_USER_TABS": "0",
+                                     "KITSUNE_HOLD_VIEWED_TAB": "0"}])
+        with patch("kitsune_benchmark.coexistence.run_pair", pair), \
+                patch("kitsune_benchmark.coexistence.source_revision", return_value={}), self.assertRaises(RuntimeError):
+            run_coexistence(execute=True, task_ids=["pb-account-01"], protect_user_tabs=True, harness="claude")
+        self.assertEqual(launched[-1], {"KITSUNE_USER_TABS": "read-only", "KITSUNE_PROTECT_USER_TABS": "1"})
 
     def test_user_tab_refusals_are_counted_from_kitsune_errors(self):
         refusal = {"id": 3, "result": {"isError": True, "content": [{"type": "text", "text": json.dumps(

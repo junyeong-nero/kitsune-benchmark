@@ -20,8 +20,8 @@
       "id": "protect-user-tabs",
       "status": "runnable",
       "applies_to": "Kitsune target of user-seeded runs",
-      "description": "Adds KITSUNE_PROTECT_USER_TABS=1 to the Kitsune server. Reported as its own arm against the default (off) to decide whether the default can match 'off-limits unless the user authorizes otherwise'. Playwright has no equivalent and is unchanged.",
-      "measures": ["task_success (primary v2) and v3_user_view, beside default Kitsune from the same cohort", "user_tab_refusals / runs_with_user_tab_refusal (Kitsune tool errors with code user_tab)", "agent_calls_successful_runs"]
+      "description": "Turns the Kitsune server's user-tab protection on: KITSUNE_USER_TABS=read-only for Kitsune v0.7.2 and later, KITSUNE_PROTECT_USER_TABS=1 for earlier Kitsune. Reported as its own arm against the default to decide whether the default can match 'off-limits unless the user authorizes otherwise'; on Kitsune after v0.7.1 the default already protects user tabs. Playwright has no equivalent and is unchanged.",
+      "measures": ["task_success (primary v2) and v3_user_view, beside default Kitsune from the same cohort", "user_tab_refusals / runs_with_user_tab_refusal (Kitsune tool errors with code user_tab or user_tab_read_only)", "agent_calls_successful_runs"]
     }
   ],
   "tasks": [
