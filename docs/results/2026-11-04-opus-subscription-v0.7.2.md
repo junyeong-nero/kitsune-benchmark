@@ -161,6 +161,13 @@ it would get the same unseen `unchanged_since`; that is a Kitsune issue candidat
 
 ## Follow-ups
 
-- `pb-tabs-03`: decide whether "the tab in front" should be Kitsune's `active` tab, in the next taskset.
-- Kitsune: key the `unchanged_since` record by client (see above).
-- `test_six_fixtures_seed_and_solve_via_real_kitsune_ui`: move it to user-channel seeding.
+- `pb-tabs-03`: done in `taskset-v3.3` ([#94](https://github.com/junyeong-nero/kitsune-benchmark/issues/94)),
+  which grades it on the tab the user sees. This cohort's evidence predates that field, so its four misses are not
+  re-graded.
+- Kitsune: key the `unchanged_since` record by client
+  ([kitsune#442](https://github.com/junyeong-nero/kitsune/issues/442)).
+- `test_six_fixtures_seed_and_solve_via_real_kitsune_ui`: seeds through the user channel since
+  [#95](https://github.com/junyeong-nero/kitsune-benchmark/issues/95).
+- Refusals and copies of user tabs are now in `analyze-release.py`
+  ([#101](https://github.com/junyeong-nero/kitsune-benchmark/issues/101)); the arms set `KITSUNE_USER_TABS`
+  ([#100](https://github.com/junyeong-nero/kitsune-benchmark/issues/100)).
