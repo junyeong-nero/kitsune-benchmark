@@ -471,14 +471,20 @@ class UserTimelineTests(unittest.TestCase):
     def test_typing_user_waits_for_the_agent_tab(self):
         driver = Mock()
         driver.loaded_tab.side_effect = [False, True]
+        driver.select_in_any_window.return_value = 13
         driver.type_text.return_value = "u/sheet"
+        driver.press_keys.return_value = "u/sheet"
         user = TypingUser(driver, url="u/sheet", selector="textarea", text="abcdef", chunk=3, interval=0.01,
-                          wait_for_tab=True)
+                          wait_for_tab=True, leave_field=True)
         user.start()
         user.join(timeout=5)
         record = user.stop()
-        driver.select.assert_called_once_with("u/sheet")
-        self.assertEqual((record["tab_selected"], record["typed_into_user_field"], record["finished"]), (True, "abcdef", True))
+        # The agent's tab may be in another window (Playwright MCP): the user selects it there and types in that window.
+        driver.select_in_any_window.assert_called_once_with("u/sheet")
+        self.assertEqual([c.kwargs for c in driver.type_text.call_args_list], [{"window_id": 13}] * 2)
+        driver.press_keys.assert_called_once_with(["Tab"], window_id=13)
+        self.assertEqual((record["tab_selected"], record["typed_into_user_field"], record["finished"], record["left_field"]),
+                         (True, "abcdef", True, True))
         never = TypingUser(Mock(**{"loaded_tab.return_value": False}), url="u/sheet", selector="t", text="abc",
                            interval=0.01, wait_for_tab=True)
         never.start()
@@ -491,12 +497,14 @@ class UserTimelineTests(unittest.TestCase):
         counts = iter([1, 1, 2])  # an agent tab at the form URL already exists; the user's makes two
         driver.all_tabs.side_effect = lambda windows: [{"url": "u/form"}] * next(counts)
         driver.press_keys.return_value = "u/hub"
+        driver.select_in_any_window.return_value = 13
         user = LinkOpeningUser(driver, agent_tab_url="u/hub", opens_url="u/form", interval=0.01)
         user.start()
         user.join(timeout=5)
         record = user.stop()
+        driver.select_in_any_window.assert_called_once_with("u/hub")
         self.assertEqual(driver.press_keys.call_args_list[0].args, (["Tab"],))
-        self.assertEqual(driver.press_keys.call_args_list[1].kwargs, {"accel": True})
+        self.assertEqual(driver.press_keys.call_args_list[1].kwargs, {"accel": True, "window_id": 13})
         self.assertEqual(driver.press_keys.call_count, 2)
         self.assertEqual((record["opened"], record["pressed_in"], record["errors"], record["alive_at_stop"]),
                          (True, "u/hub", 0, False))

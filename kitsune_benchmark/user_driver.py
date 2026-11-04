@@ -23,6 +23,14 @@ from .bidi import Bidi, BidiError
 
 SYSTEM = "{triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal()"
 
+# Tab-permission scenarios (#74): the agent's tab can be in another browser window (Playwright MCP opens each new tab
+# in a window of its own). Such a user step names the window by its browsing context ID, and the key presses go to it
+# (`window_id`); without one, they go to the first window, as in the frozen coexistence track.
+IN_WINDOW = """const window = [...Services.wm.getEnumerator('navigator:browser')]
+            .find(w => w.browsingContext.id === {window_id});
+          if (!window) return null;
+          const {{document, gBrowser}} = window;"""
+
 TABS_JS = """(() => [...Services.wm.getEnumerator('navigator:browser')].map(w => ({
   focused: Services.focus.activeWindow === w,
   tabs: w.gBrowser.tabs.map(t => ({url: t.linkedBrowser.currentURI.spec, selected: t.selected,
@@ -109,6 +117,18 @@ class UserDriver:
             raise BidiError("The user's tab to select is missing or ambiguous.")
         self.wait(lambda w: any(t["selected"] and t["url"] == url for t in self.all_tabs(w)), what="tab selection")
 
+    def select_in_any_window(self, url: str) -> int:
+        """Like clicking a tab in whichever browser window has it, then that window. The URL must name exactly one
+        tab across the windows. Returns the window's browsing context ID, for type_text and press_keys."""
+        found = self.chrome(f"""(() => {{ const hits = [...Services.wm.getEnumerator('navigator:browser')].flatMap(w =>
+              w.gBrowser.tabs.filter(t => t.linkedBrowser.currentURI.spec === {json.dumps(url)}).map(t => [w, t]));
+            if (hits.length !== 1) return null; const [w, tab] = hits[0];
+            w.gBrowser.selectedTab = tab; w.focus(); return w.browsingContext.id; }})()""")
+        if not isinstance(found, int):
+            raise BidiError("The user's tab to select is missing or ambiguous.")
+        self.wait(lambda w: any(t["selected"] and t["url"] == url for t in self.all_tabs(w)), what="tab selection")
+        return found
+
     def close_tab(self, url: str) -> None:
         """Like closing a tab from the tab strip. The URL must name exactly one tab."""
         found = self.chrome(f"""(() => {{ const tabs = gBrowser.tabs.filter(t => t.linkedBrowser.currentURI.spec === {json.dumps(url)});
@@ -117,16 +137,17 @@ class UserDriver:
             raise BidiError("The user's tab to close is missing or ambiguous.")
         self.wait(lambda w: not any(t["url"] == url for t in self.all_tabs(w)), what="tab close")
 
-    def type_text(self, text: str) -> str:
+    def type_text(self, text: str, *, window_id: int | None = None) -> str:
         """Trusted key presses into whatever has focus in the shown tab, like a real keyboard.
-        Returns the URL of the tab that received them, read in the same chrome call.
+        Returns the URL of the tab that received them, read in the same chrome call. window_id: the shown tab of
+        that window (select_in_any_window) instead of the first window's.
 
         Uses the chrome window's nsITextInputProcessor, not BiDi `input.performActions`:
         content-side BiDi input permanently breaks Playwright's Juggler-instrumented pages
         (probe, 2026-10-23), which would fault one target and not the other.
         """
-        result = self.chrome(f"""(() => {{ const tip = Cc['@mozilla.org/text-input-processor;1']
-            .createInstance(Ci.nsITextInputProcessor);
+        result = self.chrome(f"""(() => {{ {IN_WINDOW.format(window_id=window_id) if window_id is not None else ''}
+          const tip = Cc['@mozilla.org/text-input-processor;1'].createInstance(Ci.nsITextInputProcessor);
           // A person's keys go to the page they look at, not the address bar.
           if (document.activeElement !== gBrowser.selectedBrowser) gBrowser.selectedBrowser.focus();
           if (!tip.beginInputTransactionForTests(window)) return null;
@@ -138,11 +159,11 @@ class UserDriver:
             raise BidiError("The keyboard is busy.")
         return result
 
-    def press_keys(self, keys: list[str], *, accel: bool = False) -> str:
+    def press_keys(self, keys: list[str], *, accel: bool = False, window_id: int | None = None) -> str:
         """Trusted presses of named keys (Tab, Enter) into the shown tab, like type_text, optionally while holding the
         platform's accel key (Cmd on macOS, else Ctrl). Returns the URL of the tab that received them."""
-        result = self.chrome(f"""(() => {{ const tip = Cc['@mozilla.org/text-input-processor;1']
-            .createInstance(Ci.nsITextInputProcessor);
+        result = self.chrome(f"""(() => {{ {IN_WINDOW.format(window_id=window_id) if window_id is not None else ''}
+          const tip = Cc['@mozilla.org/text-input-processor;1'].createInstance(Ci.nsITextInputProcessor);
           if (document.activeElement !== gBrowser.selectedBrowser) gBrowser.selectedBrowser.focus();
           if (!tip.beginInputTransactionForTests(window)) return null;
           const shown = gBrowser.selectedBrowser.currentURI.spec;
@@ -203,12 +224,14 @@ class TypingUser(threading.Thread):
     def __init__(self, driver: UserDriver, *, url: str, selector: str, text: str,
                  chunk: int = 3, interval: float = 0.6, wait_for_tab: bool = False, leave_field: bool = False):
         """wait_for_tab (tab-permission scenarios): `url` is a tab the agent opens. The user waits until it has
-        loaded, selects it, and only then starts typing (`record["tab_selected"]`). leave_field: once the text is
+        loaded, selects it in whichever window has it, and only then starts typing in that window
+        (`record["tab_selected"]`). leave_field: once the text is
         typed, the user presses Tab, as a person who is done with the field (`record["left_field"]`). Kitsune counts a
         focused field that holds the user's text as typing until focus leaves it (kitsune#397)."""
         super().__init__(daemon=True)
         self.driver, self.url, self.selector, self.text = driver, url, selector, text
         self.chunk, self.interval, self.wait_for_tab, self.leave_field = chunk, interval, wait_for_tab, leave_field
+        self.window_id = None  # wait_for_tab: the window the user selected the agent's tab in
         self.stop_event = threading.Event()
         self.record = {"url": url, "selector": selector, "typed_into_user_field": "", "misdirected": [],
                        "ticks": 0, "errors": 0, "finished": False}
@@ -219,7 +242,7 @@ class TypingUser(threading.Thread):
         while not self.stop_event.is_set():
             try:
                 if self.driver.loaded_tab(self.url):
-                    self.driver.select(self.url)
+                    self.window_id = self.driver.select_in_any_window(self.url)
                     self.record["tab_selected"] = True
                     return True
             except Exception:  # noqa: BLE001 - counted; the typing record is then incomplete
@@ -234,7 +257,8 @@ class TypingUser(threading.Thread):
         while not self.stop_event.is_set() and position < len(self.text):
             piece = self.text[position:position + self.chunk]
             try:
-                shown = self.driver.type_text(piece)
+                shown = (self.driver.type_text(piece, window_id=self.window_id) if self.window_id is not None
+                         else self.driver.type_text(piece))
                 if shown == self.url:
                     self.record["typed_into_user_field"] += piece
                 else:
@@ -247,7 +271,7 @@ class TypingUser(threading.Thread):
         self.record["finished"] = position >= len(self.text)
         if self.leave_field and self.record["finished"] and not self.stop_event.is_set():
             try:
-                self.record["left_field"] = self.driver.press_keys(["Tab"]) == self.url
+                self.record["left_field"] = self.driver.press_keys(["Tab"], window_id=self.window_id) == self.url
             except Exception:  # noqa: BLE001 - counted like a failed keystroke
                 self.record["errors"] += 1
                 self.record["left_field"] = False
@@ -274,16 +298,17 @@ class LinkOpeningUser(threading.Thread):
         return sum(t["url"] == self.opens_url for t in self.driver.all_tabs(self.driver.windows()))
 
     def run(self) -> None:
-        before = None
+        before = window_id = None
         while not self.stop_event.is_set() and not self.record["opened"]:
             try:
                 if not self.record["tab_selected"] and self.driver.loaded_tab(self.agent_tab_url):
-                    self.driver.select(self.agent_tab_url)
+                    window_id = self.driver.select_in_any_window(self.agent_tab_url)
                     self.record["tab_selected"] = True
                 if self.record["tab_selected"] and self.record["pressed_in"] is None:
                     before = self.tabs_at_target()
-                    self.driver.press_keys(["Tab"])  # the hub's first focusable element is the link
-                    self.record["pressed_in"] = self.driver.press_keys(["Enter"], accel=True)
+                    # The hub's first focusable element is the link; the keys go to the window the user selected in.
+                    self.driver.press_keys(["Tab"], window_id=window_id)
+                    self.record["pressed_in"] = self.driver.press_keys(["Enter"], accel=True, window_id=window_id)
                 if self.record["pressed_in"] is not None and self.tabs_at_target() > before:
                     self.record["opened"] = True
             except Exception:  # noqa: BLE001 - counted; the record is then incomplete
