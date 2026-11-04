@@ -93,9 +93,11 @@ def main(argv: list[str] | None = None) -> int:
                                   "default: runnable co-* tasks")
     coexistence.add_argument("--all-personal", action="store_true", help="All 28 personal tasks under the user-seeded condition")
     coexistence.add_argument("--protect-user-tabs", action="store_true",
-                             help="Kitsune arm with KITSUNE_PROTECT_USER_TABS=1 (reported separately)")
+                             help="Kitsune arm with user-tab protection on: KITSUNE_USER_TABS=read-only, and "
+                                  "KITSUNE_PROTECT_USER_TABS=1 for Kitsune before v0.7.2 (reported separately)")
     coexistence.add_argument("--unprotected-user-tabs", action="store_true",
-                             help="Kitsune arm with KITSUNE_PROTECT_USER_TABS=0 KITSUNE_HOLD_VIEWED_TAB=0, outside "
+                             help="Kitsune arm with user-tab protection off: KITSUNE_USER_TABS=writable, and "
+                                  "KITSUNE_PROTECT_USER_TABS=0 KITSUNE_HOLD_VIEWED_TAB=0 for Kitsune before v0.7.2; outside "
                                   "coexistence-local-v1 (reported separately)")
     coexistence.add_argument("--variant", type=int, choices=(0, 1, 2), default=0)
     coexistence.add_argument("--codex", default="codex")

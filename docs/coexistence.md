@@ -119,7 +119,9 @@ things:
 
 ### `protect-user-tabs` (runnable): a Kitsune arm
 
-Adds `KITSUNE_PROTECT_USER_TABS=1`, which is off by default. The philosophy says
+Turns Kitsune's user-tab protection on: `KITSUNE_USER_TABS=read-only` for Kitsune v0.7.2 and later, and
+`KITSUNE_PROTECT_USER_TABS=1` for earlier Kitsune, which reads only the old name (#100). Up to v0.7.1 the
+protection is off by default. The philosophy says
 "off-limits unless the user authorizes otherwise", and this arm measures what
 turning the protection on by default would cost. In Kitsune ≥ 0.7.0 the protection refuses
 `browser_navigate`, `browser_navigate_back` and `browser_forward` on tabs the agent did not open,
@@ -132,14 +134,17 @@ the user is viewing. Both act through `needs_user` holds and approval prompts (k
 `user_tab` code, so `user_tab_refusals` stays 0 there. Kitsune v0.7.2 holds nothing: user tabs are read-only
 (kitsune#395), and writes and `select` on them are refused with `user_tab_read_only`, which `user_tab_refusals`
 also counts (#101). `scripts/analyze-release.py` reports these refusals, and the agents' copies of the user's
-tabs, for every entry. `KITSUNE_PROTECT_USER_TABS=1` then sets what the
-default arm already runs. The arm stays as frozen; the [holds](#kitsune-holds-and-redo-after-decline) show
+tabs, for every entry. On these versions the arm's setting is what the default arm already runs (on v0.7.2
+`KITSUNE_PROTECT_USER_TABS` is a deprecated alias, and Kitsune logs a deprecation warning to stderr). The arm
+stays as frozen; the [holds](#kitsune-holds-and-redo-after-decline) show
 what protection does on Kitsune main, and the unprotected arm below measures an agent without it.
 
 ### `unprotected-user-tabs` (outside the frozen scope): a Kitsune arm
 
-`--unprotected-user-tabs` runs Kitsune with `KITSUNE_PROTECT_USER_TABS=0 KITSUNE_HOLD_VIEWED_TAB=0`, both
-protections off (#58). It is not a catalog condition and not part of the frozen run plan. Its
+`--unprotected-user-tabs` runs Kitsune with every user-tab protection off (#58): `KITSUNE_USER_TABS=writable`
+for Kitsune v0.7.2 and later, and `KITSUNE_PROTECT_USER_TABS=0 KITSUNE_HOLD_VIEWED_TAB=0` for earlier Kitsune
+(#100). v0.7.2 still reads the old names as deprecated aliases for one release; without the new setting, the
+arm would turn read-only once they are removed. Each run manifest records the `kitsune_env` it launched with. It is not a catalog condition and not part of the frozen run plan. Its
 evaluations and summaries carry `unprotected_user_tabs: true`; report it as its own column, like the
 protection arm, and never pool it with default-Kitsune totals. It cannot be combined with
 `--protect-user-tabs`. On Kitsune ≤ v0.7.1 the protection is already off by default and
