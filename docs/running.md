@@ -68,6 +68,8 @@ the explicit `--harness claude-api` described below.
 | `external --execute` | All 10 external tasks: 7 MiniWoB++ + 3 live sites | 20 |
 | `coexistence --execute` | The `co-typing-01` typing-user pair, variant 0 | 2 |
 | `smoke --execute` | One read-only Example Domain pair | 2 |
+| `full-native --unit pb-longpage-01 --execute` | One [full-native](full-native.md) unit, both Kitsune arms | 2 |
+| `full-native --execute` | All 14 full-native units, both Kitsune arms, one variant | 28 |
 
 These are **agent run counts**, not LLM turn counts, token caps or prices. One
 agent run can contain many model/tool interactions. There is no `full-test`
@@ -75,7 +77,7 @@ command that automatically executes every upstream benchmark.
 
 ### Default harness: Claude Code on the subscription
 
-`smoke`, `benchmark`, `personal`, `gallery`, `coexistence`, `doctor` and
+`smoke`, `benchmark`, `personal`, `gallery`, `coexistence`, `full-native`, `doctor` and
 `scripts/run-full-suite.py` default to **`--harness claude`**. It runs **Claude Code
 `2.1.303`** on the existing **claude.ai subscription login**, with the model/effort
 from each config's `claude_code` block (default `claude-opus-5-5`, effort `medium`;
@@ -368,6 +370,10 @@ uv run --locked python -m kitsune_benchmark smoke --execute
 uv run --locked python -m kitsune_benchmark coexistence
 uv run --locked python -m kitsune_benchmark coexistence --execute
 
+# Full-native track (docs/full-native.md): Kitsune only, KITSUNE_CAPS=core vs all + KITSUNE_PUBLISH=core.
+uv run --locked python -m kitsune_benchmark full-native
+uv run --locked python -m kitsune_benchmark full-native --unit pb-longpage-01 --execute
+
 # External track: MiniWoB source fetch only (network/download, no model), plan, then execute.
 uv run --locked python -m kitsune_benchmark external --fetch
 uv run --locked python -m kitsune_benchmark external
@@ -427,6 +433,7 @@ The CLI prints the summary. Raw evidence is private and gitignored:
 | Gallery | `artifacts/gallery/<pair-id>/` | `gallery-summary.json`; `suite-summary.json` in the first attempted pair |
 | Coexistence | `artifacts/coexistence/<pair-id>/` | `coexistence-summary.json`; `suite-summary.json` in the first attempted pair |
 | External | `artifacts/external/<pair-id>/` | `external-summary.json`; `suite-summary.json` in the first attempted pair (historical pilot: `artifacts/miniwob/`) |
+| Full native | `artifacts/full-native/<pair-id>/` | `full-native-summary.json` per run; `suite-summary.json` (with `analysis`) in the first run |
 | Smoke | `artifacts/smoke/<pair-id>/` | `pair-summary.json` |
 
 Per-run `summary.json` retains execution audit and `usage`; external tracks add

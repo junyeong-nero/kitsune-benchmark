@@ -23,6 +23,7 @@ allowlist, and grades them from outside the agent. Pick the guide that matches w
 | [Component gallery](gallery.md) | 21 tasks (custom widgets, shadow DOM, iframes, media puzzles, one hand-off), three variants, on a crowded page and one at a time | 42/42 both; input 0.625 crowded, 0.962 isolated |
 | [Coexistence](coexistence.md) (frozen `coexistence-local-v2`) | The 28 personal tasks with tabs the user opened, a Kitsune arm with user tabs writable, and `co-typing-01`; 25 more tasks specified only | User's view moved: Playwright 26/28, Kitsune 0/28. Typing user's input kept: 0/3 vs 3/3 |
 | [External](external.md) (`external-v1`) | 7 MiniWoB++ tasks graded by their own reward, 3 live sites recorded but not graded | MiniWoB++ 7/7 both; live tasks completed by both |
+| [Full native](full-native.md) (`kitsune-full-native-v1`, Kitsune only) | 14 existing units (personal research, research → draft, long pages; gallery `ui-table` on both layouts) × `KITSUNE_CAPS=core` vs `KITSUNE_CAPS=all` + `KITSUNE_PUBLISH=core`, no allowlist; reported apart from the head-to-head | Not run yet |
 | [Hostile UI](hostile.md) (draft, no model) | 26 real-web components that resist automation × scripted tool strategies | Kitsune v0.7.1: Playwright 23/26, Kitsune 20/26 |
 | [Personal state](personal-state.md) (specification only) | Tasks that need a personal profile's history, bookmarks or logins | Not implemented |
 
