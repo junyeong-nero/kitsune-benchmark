@@ -13,8 +13,11 @@ each group's ratio is split by units whose Kitsune run held a call and units who
 Kitsune with read-only user tabs (kitsune#395) holds nothing; it refuses writes and `select` on the user's tabs with
 `user_tab_read_only`, and the agent then opens a copy of the user's tab (a `tabs new` with a starting tab's URL) to read
 or write in. Refusals are counted from the agents' tool results, copies from the starting tabs the user opened (session
-evidence `seeding`), per entry and per group (#101); each group's ratio is also split by units whose Kitsune run had a
-refusal or a copy and units whose run had neither, and --compare shows how often runs had them then and now.
+evidence `seeding`), per entry and per group (#101). A copy is a copy to write when the agent writes in it (`click`,
+`type`, ...) before its next `tabs new` or `tabs select`, else a copy to read (#113): since kitsune#450 any tab can be
+read, so copies to write are the normal write path and copies to read are reopening. Each group's ratio is also split
+by units whose Kitsune run had a refusal or a copy to read and units whose run had neither, and --compare shows how
+often runs had refusals, copies to write and copies to read then and now.
 
 A Kitsune-only coexistence arm (coexistence-local-v2's unprotected arm, with user tabs writable, or v1's protect arm)
 is compared with default Kitsune on the user-seeded entry, task by task: what protection costs the agent (refusals,
@@ -47,6 +50,8 @@ OBSERVATIONS = ("snapshot", "find", "wait_for", "take_screenshot")
 HOLDS_SINCE = ((0, 7, 1), 10)
 NAVIGATIONS = tuple(name.replace("browser_", "") for name in BROWSER_NAVIGATIONS)
 WRITES = ("click", "type", "fill_form", "select_option", "press_key", "drag") + NAVIGATIONS
+# Calls that make a copy of a user tab a copy to write (#113).
+COPY_WRITES = ("click", "type", "fill_form", "select_option", "press_key", "drag", "drop", "file_upload")
 # Session evidence `seeding` of runs whose starting tabs the user opened: personal (#70) and coexistence.
 USER_SEEDINGS = ("user_channel", "user_bidi")
 # Kitsune-only coexistence arms, compared with default Kitsune on the user-seeded entry: coexistence-local-v2's
@@ -397,35 +402,53 @@ def run_holds(run: dict) -> dict | None:
     return hold_metrics(evidence) if evidence is not None else None
 
 
+def writes_in_copy(after: list[tuple[str, dict, str, bool]]) -> bool:
+    """Whether the calls after a copy write (COPY_WRITES) before the agent leaves the copy (its next `tabs new` or
+    `tabs select`) or the run ends."""
+    for call in after:
+        if tabs_action(call) in ("new", "select"):
+            return False
+        if call[0] in COPY_WRITES:
+            return True
+    return False
+
+
 def run_read_only(run: dict) -> dict:
     """A Kitsune run's `user_tab_read_only` refusals, by call (`tabs select`, `type`, ...), and its copies of the user's
-    starting tabs: `tabs new` calls whose URL is a starting tab's. Copies are None when the session evidence does not
-    say the user opened the starting tabs (seeding user_channel or user_bidi)."""
+    starting tabs (`tabs new` calls whose URL is a starting tab's), split into copies to write and copies to read
+    (writes_in_copy). Copies are None when the session evidence does not say the user opened the starting tabs (seeding
+    user_channel or user_bidi)."""
     calls = tool_calls(run)
     refused = collections.Counter(" ".join(filter(None, (name, tabs_action((name, args, text, error)))))
                                   for name, args, text, error in calls
                                   if result_fields(text).get("code") == "user_tab_read_only")
     evidence = session_evidence(run) or {}
-    copies = None
+    copies_to_write = copies_to_read = None
     if evidence.get("seeding") in USER_SEEDINGS:
         starting = {tab.get("url") for tab in evidence.get("initial_tabs") or []}
-        copies = sum(tabs_action(call) == "new" and call[1].get("url") in starting for call in calls)
-    return {"refusals": sum(refused.values()), "refused_calls": dict(refused), "copies": copies}
+        copies = [i for i, call in enumerate(calls) if tabs_action(call) == "new" and call[1].get("url") in starting]
+        copies_to_write = sum(writes_in_copy(calls[i + 1:]) for i in copies)
+        copies_to_read = len(copies) - copies_to_write
+    return {"refusals": sum(refused.values()), "refused_calls": dict(refused), "copies_to_write": copies_to_write,
+            "copies_to_read": copies_to_read}
 
 
 def read_only_totals(rows: list[dict]) -> dict:
     refused = collections.Counter()
     for row in rows:
         refused.update(row["refused_calls"])
-    seeded = [row for row in rows if row["copies"] is not None]
+    seeded = [row for row in rows if row["copies_to_write"] is not None]
     return {"runs": len(rows), "runs_with_refusal": sum(bool(row["refusals"]) for row in rows),
             "refusals": sum(row["refusals"] for row in rows), "refused_calls": dict(refused.most_common()),
-            "user_seeded_runs": len(seeded), "runs_with_copy": sum(bool(row["copies"]) for row in seeded),
-            "copies": sum(row["copies"] for row in seeded)}
+            "user_seeded_runs": len(seeded),
+            "runs_with_copy_to_write": sum(bool(row["copies_to_write"]) for row in seeded),
+            "copies_to_write": sum(row["copies_to_write"] for row in seeded),
+            "runs_with_copy_to_read": sum(bool(row["copies_to_read"]) for row in seeded),
+            "copies_to_read": sum(row["copies_to_read"] for row in seeded)}
 
 
 def read_only(units: dict, by=lambda entry: entry, keys=None) -> dict:
-    """Kitsune refusals and copies per entry (or per `by(entry)`, such as group_of), over `keys` when given."""
+    """Kitsune refusals and copies to write and to read per entry (or per `by(entry)`, such as group_of), over `keys` when given."""
     rows = collections.defaultdict(list)
     for key, runs in units.items():
         name = by(key[0])
@@ -435,21 +458,21 @@ def read_only(units: dict, by=lambda entry: entry, keys=None) -> dict:
 
 
 def read_only_split(units: dict) -> dict:
-    """Per group, Kitsune/Playwright input on joint successes whose Kitsune run had a refusal or a copy and on those
-    whose run had neither; groups with neither in any joint success are left out."""
+    """Per group, Kitsune/Playwright input on joint successes whose Kitsune run had a refusal or a copy to read and on
+    those whose run had neither; groups with neither in any joint success are left out."""
     split = collections.defaultdict(lambda: {"with": [], "without": []})
     for (entry, _), runs in units.items():
         group = group_of(entry)
         if not group or not all(solved(runs.get(t)) for t in TARGETS):
             continue
         row = run_read_only(runs["kitsune"])
-        split[group]["with" if row["refusals"] or row["copies"] else "without"].append(runs)
+        split[group]["with" if row["refusals"] or row["copies_to_read"] else "without"].append(runs)
 
     def side(joint):
         pw = sum(input_tokens(runs["playwright"]) for runs in joint)
         return {"units": len(joint),
                 "input": round(sum(input_tokens(runs["kitsune"]) for runs in joint) / pw, 3) if pw else None}
-    return {group: {"with_refusal_or_copy": side(row["with"]), "without": side(row["without"])}
+    return {group: {"with_refusal_or_copy_to_read": side(row["with"]), "without": side(row["without"])}
             for group, row in split.items() if row["with"]}
 
 
@@ -491,8 +514,8 @@ def moved_view(run: dict) -> bool:
 
 def kitsune_arms(units: dict) -> dict:
     """Each Kitsune-only coexistence arm against default Kitsune on the user-seeded entry, task by task: successes,
-    `v3_user_view`, runs that moved the user's view, runs with a read-only refusal or a copy of a user tab, and the
-    arm's input and agent calls over default Kitsune's on units both solved."""
+    `v3_user_view`, runs that moved the user's view, runs with a read-only refusal, a copy of a user tab to write or a
+    copy to read, and the arm's input and agent calls over default Kitsune's on units both solved."""
     default = {task: runs["kitsune"] for (entry, task), runs in units.items()
                if entry == "coexistence-user-seeded" and "kitsune" in runs}
     out = {}
@@ -510,7 +533,8 @@ def kitsune_arms(units: dict) -> dict:
                                         .get("task_success") is True for run in runs),
                     "runs_moved_view": sum(moved_view(run) for run in runs),
                     "runs_with_refusal": sum(bool(row["refusals"]) for row in rows),
-                    "runs_with_copy": sum(bool(row["copies"]) for row in rows)}
+                    "runs_with_copy_to_write": sum(bool(row["copies_to_write"]) for row in rows),
+                    "runs_with_copy_to_read": sum(bool(row["copies_to_read"]) for row in rows)}
         joint = [pair for pair in pairs if solved(pair[0]) and solved(pair[1])]
 
         def ratio(field):
@@ -580,13 +604,16 @@ def markdown(report: dict, threshold: float) -> str:
             then = c["ratios_then"].get(group, {})
             lines.append(f"| {group} | {then.get('input')} | {now['input']} | {then.get('mcp_calls')} | {now['mcp_calls']} |")
         lines += ["", "Kitsune runs on the shared units with a `user_tab_read_only` refusal, and with a copy of a user's "
-                  "starting tab (of the runs whose starting tabs the user opened):", "",
-                  "| Group | Runs with a refusal then | Now | Runs with a copy then | Now |", "| --- | ---: | ---: | ---: | ---: |"]
+                  "starting tab to write or to read (of the runs whose starting tabs the user opened):", "",
+                  "| Group | Runs with a refusal then | Now | Runs with a copy to write then | Now | "
+                  "Runs with a copy to read then | Now |", "| --- | ---: | ---: | ---: | ---: | ---: | ---: |"]
         for group, now in c["read_only_now"].items():
             then = c["read_only_then"].get(group)
             refusal = lambda r: f"{r['runs_with_refusal']}/{r['runs']}" if r else "—"
-            copy = lambda r: f"{r['runs_with_copy']}/{r['user_seeded_runs']}" if r and r["user_seeded_runs"] else "—"
-            lines.append(f"| {group} | {refusal(then)} | {refusal(now)} | {copy(then)} | {copy(now)} |")
+            copy = lambda r, kind: (f"{r['runs_with_copy_' + kind]}/{r['user_seeded_runs']}"
+                                    if r and r["user_seeded_runs"] else "—")
+            lines.append(f"| {group} | {refusal(then)} | {refusal(now)} | {copy(then, 'to_write')} | "
+                         f"{copy(now, 'to_write')} | {copy(then, 'to_read')} | {copy(now, 'to_read')} |")
     lines += ["", f"## Units where Kitsune input exceeds {threshold}× Playwright", "",
               "| Unit | Ratio | Input PW / K | Calls PW / K | Kitsune calls |", "| --- | ---: | --- | --- | --- |"]
     for o in report["outliers"]:
@@ -640,17 +667,23 @@ def markdown(report: dict, threshold: float) -> str:
         lines += ["", f"{no_record} joint successes have no readable Kitsune session evidence and are left out of the split."]
     lines += ["", "## Kitsune on read-only user tabs", "",
               "Refusals are `user_tab_read_only` results; a copy is a `tabs new` with the URL of a starting tab the user "
-              "opened (counted only for runs whose session evidence says so).", "",
-              "| Entry | Runs | Runs with a refusal | Refusals | Refused calls | User-seeded runs | Runs with a copy | Copies |",
-              "| --- | ---: | ---: | ---: | --- | ---: | ---: | ---: |"]
+              "opened (counted only for runs whose session evidence says so). A copy to write is one the agent writes in "
+              "(" + ", ".join(f"`{name}`" for name in COPY_WRITES) + ") before its next `tabs new` or `tabs select`; "
+              "any other copy is a copy to read.", "",
+              "| Entry | Runs | Runs with a refusal | Refusals | Refused calls | User-seeded runs | "
+              "Runs with a copy to write | Copies to write | Runs with a copy to read | Copies to read |",
+              "| --- | ---: | ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: |"]
     for entry, r in report["read_only"].items():
         calls = ", ".join(f"{n}× {call}" for call, n in r["refused_calls"].items()) or "none"
         lines.append(f"| {entry} | {r['runs']} | {r['runs_with_refusal']} | {r['refusals']} | {calls} | "
-                     f"{r['user_seeded_runs']} | {r['runs_with_copy']} | {r['copies']} |")
-    lines += ["", "## Kitsune / Playwright input on joint successes, by refusal or copy", "",
-              "| Group | Units with a refusal or copy | Input | Units with neither | Input |", "| --- | ---: | ---: | ---: | ---: |"]
+                     f"{r['user_seeded_runs']} | {r['runs_with_copy_to_write']} | {r['copies_to_write']} | "
+                     f"{r['runs_with_copy_to_read']} | {r['copies_to_read']} |")
+    lines += ["", "## Kitsune / Playwright input on joint successes, by refusal or copy to read", "",
+              "| Group | Units with a refusal or copy to read | Input | Units with neither | Input |",
+              "| --- | ---: | ---: | ---: | ---: |"]
     for group, s in report["read_only_split"].items():
-        lines.append(f"| {group} | {s['with_refusal_or_copy']['units']} | {s['with_refusal_or_copy']['input']} | "
+        refusal_or_read = s["with_refusal_or_copy_to_read"]
+        lines.append(f"| {group} | {refusal_or_read['units']} | {refusal_or_read['input']} | "
                      f"{s['without']['units']} | {s['without']['input']} |")
     for arm, a in report["kitsune_arms"].items():
         d, x = a["default"], a["arm"]
@@ -659,7 +692,8 @@ def markdown(report: dict, threshold: float) -> str:
         for key, label in (("successes", "Successes (primary)"), ("v3_user_view", "`v3_user_view`"),
                            ("runs_moved_view", "Runs that moved the user's view"),
                            ("runs_with_refusal", "Runs with a `user_tab_read_only` refusal"),
-                           ("runs_with_copy", "Runs with a copy of a user tab")):
+                           ("runs_with_copy_to_write", "Runs with a copy of a user tab to write"),
+                           ("runs_with_copy_to_read", "Runs with a copy of a user tab to read")):
             lines.append(f"| {label} | {d[key]} | {x[key]} |")
         lines += ["", f"On the {a['joint']} units both solved, the arm's input is {a['input']}× and its agent calls "
                   f"{a['mcp_calls']}× default Kitsune's."]
