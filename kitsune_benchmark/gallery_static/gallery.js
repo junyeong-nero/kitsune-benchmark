@@ -50,12 +50,12 @@
         timer = setTimeout(async () => {
           const q = input.value.trim();
           list.replaceChildren();
-          if (!q) { list.hidden = true; return; }
+          if (!q) { list.hidden = true; input.setAttribute('aria-expanded', 'false'); return; }
           const response = await fetch(BASE + '/api/cities?q=' + encodeURIComponent(q), {credentials: 'same-origin'});
           const cities = await response.json();
           cities.forEach(city => {
             const li = el('li', {role: 'option'}, city);
-            li.addEventListener('click', () => { input.value = city; list.hidden = true; picked = true; report(root.dataset.component, city); });
+            li.addEventListener('click', () => { input.value = city; list.hidden = true; input.setAttribute('aria-expanded', 'false'); picked = true; report(root.dataset.component, city); });
             list.append(li);
           });
           list.hidden = cities.length === 0;
