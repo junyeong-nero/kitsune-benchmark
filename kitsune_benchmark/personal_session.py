@@ -613,6 +613,18 @@ class NativeSession:
             self.process.stdout.close()
 
 
+def error_detail(error: BaseException) -> str:
+    """Evidence error_detail (#120): the setup exception's type and message, then those of its __cause__ (else
+    __context__) chain, e.g. "ValueError: User channel setup failed. <- BidiError: Timed out waiting for ..."."""
+    parts, seen = [], set()
+    while error is not None and id(error) not in seen:
+        seen.add(id(error))
+        message = str(error)
+        parts.append(f"{type(error).__name__}: {message}" if message else type(error).__name__)
+        error = error.__cause__ or (None if error.__suppress_context__ else error.__context__)
+    return " <- ".join(parts)
+
+
 def main() -> int:
     config = json.loads(Path(sys.argv[1]).read_text())
     session = NativeSession(config)
@@ -626,8 +638,9 @@ def main() -> int:
             if line.strip():
                 session.forward(json.loads(line), emit)
         return 0
-    except (OSError, ValueError, KeyError, TypeError):
+    except (OSError, ValueError, KeyError, TypeError) as error:
         session.evidence["error"] = "native_session_setup_or_inventory_failed"
+        session.evidence["error_detail"] = error_detail(error)
         session.save()
         print("Personal fixture MCP setup/inventory failed; inspect private artifacts.", file=sys.stderr)
         session.hold_failed_setup()
