@@ -122,6 +122,9 @@ labels**.
 - `task_success` is always `null`, and `graded` is `false`.
 - `advisory_answer_match` checks a regex against the agent's final text, for two of the three tasks. It
   only helps spot obviously wrong answers. It is not a verdict, and a page change can break it.
+- The MDN pattern allows 80 non-digit characters between "Firefox" and "90" since `taskset-v3.5` (#122). Up to
+  `taskset-v3.4` it allowed 40 and missed correct answers such as "Firefox (desktop) first supported it in
+  **version 90**", so check earlier MDN advisory counts against the final text.
 
 Summaries report live tasks under `by_target.<target>.live`, separately from MiniWoB. Read live runs as
 qualitative evidence: transcripts, tool calls, elapsed time and token use. The Steam task, for example,
