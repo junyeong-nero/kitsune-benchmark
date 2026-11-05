@@ -322,19 +322,72 @@ class ReleaseReviewTests(unittest.TestCase):
             personal = report["read_only"]["personal-v0"]
             self.assertEqual(personal, {"runs": 2, "runs_with_refusal": 1, "refusals": 2,
                                         "refused_calls": {"tabs select": 1, "type": 1}, "user_seeded_runs": 2,
-                                        "runs_with_copy": 1, "copies": 1})
+                                        "runs_with_copy_to_write": 1, "copies_to_write": 1,
+                                        "runs_with_copy_to_read": 0, "copies_to_read": 0})
             # Gallery's starting tabs are the harness's, not the user's: a tab at their URL is not a copy.
             gallery = report["read_only"]["gallery-isolated-v0"]
-            self.assertEqual((gallery["user_seeded_runs"], gallery["copies"]), (0, 0))
-            self.assertEqual(report["read_only_split"], {"personal": {"with_refusal_or_copy": {"units": 1, "input": 1.5},
+            self.assertEqual((gallery["user_seeded_runs"], gallery["copies_to_write"], gallery["copies_to_read"]),
+                             (0, 0, 0))
+            self.assertEqual(report["read_only_split"], {"personal": {"with_refusal_or_copy_to_read": {"units": 1, "input": 1.5},
                                                                     "without": {"units": 1, "input": 0.8}}})
             text = release.markdown(report, 1.10)
-            self.assertIn("| personal-v0 | 2 | 1 | 2 | 1× tabs select, 1× type | 2 | 1 | 1 |", text)
+            self.assertIn("| personal-v0 | 2 | 1 | 2 | 1× tabs select, 1× type | 2 | 1 | 1 | 0 | 0 |", text)
             self.assertIn("| personal | 1 | 1.5 | 1 | 0.8 |", text)
             compared = release.review(folder, compare=folder)
-            self.assertEqual(compared["compare"]["read_only_now"]["personal"]["runs_with_copy"], 1)
-            self.assertIn("| personal | 1/2 | 1/2 | 1/2 | 1/2 |", release.markdown(compared, 1.10))
-            self.assertIn("| gallery-isolated | 0/1 | 0/1 | — | — |", release.markdown(compared, 1.10))
+            self.assertEqual(compared["compare"]["read_only_now"]["personal"]["runs_with_copy_to_write"], 1)
+            self.assertIn("| personal | 1/2 | 1/2 | 1/2 | 1/2 | 0/2 | 0/2 |", release.markdown(compared, 1.10))
+            self.assertIn("| gallery-isolated | 0/1 | 0/1 | — | — | — | — |", release.markdown(compared, 1.10))
+
+    def test_copies_to_write_and_copies_to_read(self):
+        # #113: a copy is a copy to write when the agent writes in it before its next `tabs new` or `tabs select`.
+        with tempfile.TemporaryDirectory() as folder:
+            memo, article = "http://l/t/memo", "http://l/t/article"
+            copy = ("tabs", {"action": "new", "url": memo}, '{"ok":true}', False)
+            other_tab = ("tabs", {"action": "new", "url": "http://l/t/source"}, '{"ok":true}', False)
+            select = ("tabs", {"action": "select", "index": 0}, '{"ok":true}', False)
+            snap = ("snapshot", {}, '{"snapshot":"x"}', False)
+            find = ("find", {"text": "code"}, '{"matches":[]}', False)
+            fill = ("fill_form", {"fields": []}, '{"ok":true}', False)
+            click = ("click", {"target": "e1"}, '{"ok":true}', False)
+            evidence = {"seeding": "user_channel", "initial_tabs": [{"id": 0, "active": True, "url": article},
+                                                                   {"id": 1, "active": False, "url": memo}]}
+            cases = {
+                "pb-write": [copy, snap, fill, click],
+                "pb-read": [copy, snap, find],
+                "pb-select": [copy, snap, select, click],
+                "pb-new": [copy, snap, other_tab, click],
+            }
+            pairs = []
+            for task, calls in cases.items():
+                path = Path(folder) / task
+                path.mkdir()
+                (path / "kitsune-session-evidence.json").write_text(json.dumps(evidence))
+                pairs.append({"personal_task": task, "pair_dir": str(path), "results": {
+                    "playwright": run(folder, task + "-p", True, 1000, [snap, click]),
+                    "kitsune": run(folder, task + "-k", True, 2000 if task == "pb-write" else 1500, calls)}})
+            summary = Path(folder) / "personal-v0.json"
+            summary.write_text(json.dumps({"pairs": pairs}))
+            (Path(folder) / "suite-log.jsonl").write_text(json.dumps({"name": "personal-v0",
+                                                                      "suite_summary_path": str(summary)}) + "\n")
+
+            units = release.load(folder)
+            rows = {task: release.run_read_only(units[("personal-v0", task)]["kitsune"]) for task in cases}
+            self.assertEqual({task: (row["copies_to_write"], row["copies_to_read"]) for task, row in rows.items()},
+                             {"pb-write": (1, 0), "pb-read": (0, 1), "pb-select": (0, 1), "pb-new": (0, 1)})
+            report = release.review(folder)
+            personal = report["read_only"]["personal-v0"]
+            self.assertEqual((personal["runs_with_copy_to_write"], personal["copies_to_write"],
+                              personal["runs_with_copy_to_read"], personal["copies_to_read"]), (1, 1, 3, 3))
+            # Only copies to read put a unit on the "refusal or copy to read" side.
+            self.assertEqual(report["read_only_split"]["personal"],
+                             {"with_refusal_or_copy_to_read": {"units": 3, "input": 1.5},
+                              "without": {"units": 1, "input": 2.0}})
+            text = release.markdown(report, 1.10)
+            self.assertIn("| personal-v0 | 4 | 0 | 0 | none | 4 | 1 | 1 | 3 | 3 |", text)
+            self.assertIn("## Kitsune / Playwright input on joint successes, by refusal or copy to read", text)
+            self.assertIn("| personal | 3 | 1.5 | 1 | 2.0 |", text)
+            compared = release.markdown(release.review(folder, compare=folder), 1.10)
+            self.assertIn("| personal | 0/4 | 0/4 | 1/4 | 1/4 | 3/4 | 3/4 |", compared)
 
     def test_kitsune_arm_against_default_kitsune(self):
         # coexistence-local-v2: the unprotected arm (user tabs writable) beside default Kitsune on the same user-seeded units.
@@ -369,9 +422,11 @@ class ReleaseReviewTests(unittest.TestCase):
             arm = report["kitsune_arms"]["coexistence-unprotected"]
             self.assertEqual((arm["units"], arm["joint"], arm["input"], arm["mcp_calls"]), (2, 1, 0.5, 0.5))
             self.assertEqual(arm["default"], {"successes": 1, "v3_user_view": 1, "runs_moved_view": 0,
-                                              "runs_with_refusal": 1, "runs_with_copy": 0})
+                                              "runs_with_refusal": 1, "runs_with_copy_to_write": 0,
+                                              "runs_with_copy_to_read": 0})
             self.assertEqual(arm["arm"], {"successes": 2, "v3_user_view": 1, "runs_moved_view": 1,
-                                          "runs_with_refusal": 0, "runs_with_copy": 0})
+                                          "runs_with_refusal": 0, "runs_with_copy_to_write": 0,
+                                          "runs_with_copy_to_read": 0})
             text = release.markdown(report, 1.10)
             self.assertIn("## Default Kitsune vs `coexistence-unprotected` on 2 user-seeded units", text)
             self.assertIn("| Runs that moved the user's view | 0 | 1 |", text)

@@ -405,7 +405,8 @@ ownership safety, the foreground view, and typing interference.
 Kitsune from the same cohort, on the same units. It is never pooled with default-Kitsune totals. Report:
 
 - primary and `v3_user_view` successes, and runs that moved the user's view;
-- runs with a `user_tab_read_only` refusal and runs with a copy of a user tab;
+- runs with a `user_tab_read_only` refusal, runs with a copy of a user tab to write in, and runs with a copy
+  only read (#113);
 - the arm's input and agent calls over default Kitsune's on units both solved. The difference is the
   cost of read-only user tabs; the view and `v3_user_view` columns are what they buy.
 
