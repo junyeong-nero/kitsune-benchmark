@@ -109,6 +109,18 @@ class GalleryTests(unittest.TestCase):
         again.page("/c/mm-label")
         self.assertEqual(next(iter(again.media_files.values()))[1], data)  # deterministic per variant
 
+    def test_modal_shows_saved_settings_outside_the_dialog(self):
+        # #115: the saved state is real text outside the hidden dialog, not only CSS ::after on the switches.
+        labels = {"email": "이메일 알림", "push": "푸시 알림", "sms": "문자 알림", "digest": "주간 요약"}
+        for variant in range(3):
+            for layout in LAYOUTS:
+                t = trial("ui-modal", variant, layout)
+                own = t.page(t.paths[0]).split('id="sec-notify-settings"')[1].split("</section>")[0]
+                line = " · ".join(f"{labels[k]} {'켜짐' if on else '꺼짐'}" for k, on in t.mine["initial"].items())
+                expected = f'<p class="saved-settings">저장된 설정: {line}</p>'
+                self.assertIn(expected, own, f"variant {variant}, {layout}")
+                self.assertLess(own.index(expected), own.index('class="dialog-backdrop"'), "line sits outside the dialog")
+
     def test_failure_classes_keep_refusal_wrong_answer_tool_and_invalid_apart(self):
         valid = dict(VALID, failed_mcp_calls=0)
         cases = [("refused", valid, None), ("wrong", valid, "WRONG123"), ("tool", dict(valid, failed_mcp_calls=2), None)]
