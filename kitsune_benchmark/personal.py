@@ -705,7 +705,7 @@ def run_personal(*, execute: bool = False, task_ids: list[str] | None = None, va
                 "harness": harness, "model": model, "targets": list(targets), "kitsune_tool_preset": kitsune_preset,
                 "elicitation": elicitation, "max_budget_usd_per_run": per_run, "suite_budget_usd": budget_usd,
                 "retry_setup_failures": retries,
-                "worst_case_usd": runs_per_pair * len(tasks) * per_run if per_run else None,
+                "worst_case_usd": (1 + retries) * runs_per_pair * len(tasks) * per_run if per_run else None,  # with retries (#121)
                 "variant": variant, "seeding": "user_channel", "selected_tasks": tasks,
                 "planned_model_runs": runs_per_pair * len(tasks),
                 "catalog_tasks": len(catalog()["tasks"]), "runnable_tasks": len(runnable_ids()),
@@ -805,9 +805,12 @@ def retry_count(retry_setup_failures: int) -> int:
 
 
 def setup_retry(pair: dict, targets: tuple[str, ...], task_id: str) -> dict | None:
-    """The setup_retries record for an incomplete pair whose only unscorable run is setup_failed with
-    model_request_observed false (#121): the model never saw the task, so rerunning the pair cannot select on
-    outcomes. None for any other pair, including a setup failure after a model request."""
+    """The setup_retries record for an incomplete pair whose only unscorable run is setup_failed, with
+    model_request_observed false and stopped_before_client_timeout true (#121): the client was stopped before it could
+    have given up on its tool list and started a model call without tools, so the model never saw the task and
+    rerunning the pair cannot select on outcomes. None for any other pair, including when either field is missing.
+
+    discarded_runs records the pair's other runs, which a rerun repeats: their run_dir, usage and list_price_cost_usd."""
     if pair_complete(pair, targets):
         return None
     failed = [(target, result) for target, result in pair["results"].items()
@@ -815,11 +818,17 @@ def setup_retry(pair: dict, targets: tuple[str, ...], task_id: str) -> dict | No
     if len(failed) != 1:
         return None
     target, result = failed[0]
-    if result.get("execution_status") != "setup_failed" or result.get("model_request_observed") is not False:
+    if (result.get("execution_status") != "setup_failed" or result.get("model_request_observed") is not False
+            or result.get("stopped_before_client_timeout") is not True):
         return None
     return {"task": task_id, "pair_dir": pair["pair_dir"], "target": target, "run_dir": result.get("run_dir"),
             "execution_status": "setup_failed", "model_request_observed": False,
-            "error_detail": result.get("error_detail")}
+            "client_stopped_sec": result.get("client_stopped_sec"),
+            "client_tool_list_timeout_sec": result.get("client_tool_list_timeout_sec"),
+            "error_detail": result.get("error_detail"),
+            "discarded_runs": {other: {"run_dir": run.get("run_dir"), "usage": run.get("usage"),
+                                       "list_price_cost_usd": run.get("list_price_cost_usd")}
+                               for other, run in pair["results"].items() if other != target}}
 
 
 def run_with_setup_retries(attempt: Callable[[list[dict]], dict], *, targets: tuple[str, ...], task_id: str,
@@ -836,6 +845,7 @@ def run_with_setup_retries(attempt: Callable[[list[dict]], dict], *, targets: tu
         if record is None or len(setup_retries) >= retries or not may_retry(pair):
             return pair
         setup_retries.append(record)
-        print(f"warning: {task_id} {record['target']} setup failed before any model request; rerunning the pair "
-              f"(setup retry {len(setup_retries)} of {retries})"
+        discarded = f", discarding its {', '.join(record['discarded_runs'])} run" if record["discarded_runs"] else ""
+        print(f"warning: {task_id} {record['target']} setup failed before any model request; rerunning the pair"
+              f"{discarded} (setup retry {len(setup_retries)} of {retries})"
               + (f": {record['error_detail']}" if record["error_detail"] else ""), file=sys.stderr)

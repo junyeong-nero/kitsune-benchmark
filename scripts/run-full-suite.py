@@ -19,9 +19,10 @@ personal, gallery and coexistence entry, and is recorded in suite-manifest.json.
 Suites run under different policies are not comparable.
 
 --retry-setup-failures N (default 0: no retry) passes the same option to every personal, gallery and coexistence entry:
-a pair whose run failed in session setup before any model request (setup_failed, model_request_observed false) is
-rerun in place with a fresh profile and ports, up to N times. Each retry is in the pair summary and the entry's
-suite-log line as setup_retries, with the failed run's error_detail. Any other failure still stops the suite.
+a pair whose run failed in session setup while its client was provably still waiting for its tool list (setup_failed,
+model_request_observed false, stopped_before_client_timeout true) is rerun whole, in place, with a fresh profile and
+ports, up to N times. Each retry is in the pair summary and the entry's suite-log line as setup_retries, with the failed
+run's error_detail and the discarded runs of the pair's other target. Any other failure still stops the suite.
 
 The default harness is `claude`: Claude Code on the claude.ai subscription login, which spends no API
 credit and has no dollar cap. API-key harnesses (`claude-api`, `claude-api-full`) bill ANTHROPIC_API_KEY
@@ -129,7 +130,8 @@ def main() -> int:
                              "entries; recorded in suite-manifest.json")
     parser.add_argument("--retry-setup-failures", type=int, default=0, metavar="N",
                         help="Rerun a personal, gallery or coexistence pair in place up to N times while its run failed "
-                             "in setup before any model request; recorded as setup_retries (default 0: no retry)")
+                             "in setup before its client could give up on its tool list; recorded as setup_retries "
+                             "(default 0: no retry)")
     parser.add_argument("--from", dest="from_entry", metavar="ENTRY",
                         help="Start the plan at this entry, resuming --previous-suite; recorded as resumed_from")
     parser.add_argument("--previous-suite", metavar="DIR",

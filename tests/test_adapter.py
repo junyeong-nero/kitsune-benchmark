@@ -286,6 +286,10 @@ pathlib.Path(args[args.index('--output-last-message') + 1]).write_text('Test ans
                     self.assertEqual(result["usage"], {})
                     self.assertIs(result["model_request_observed"], False)
                     self.assertLess(result["elapsed_sec"], 20)
+                    # Stopped within the shorter of startup_timeout_sec and the 60 s MCP request default (#121).
+                    self.assertEqual(result["client_tool_list_timeout_sec"], min(SERVER.startup_timeout_sec, 60))
+                    self.assertLess(result["client_stopped_sec"], result["client_tool_list_timeout_sec"])
+                    self.assertIs(result["stopped_before_client_timeout"], True)
                     self.assertEqual(evidence["error"], "native_session_setup_or_inventory_failed")
                 else:
                     listed = json.loads((self.root / "model.json").read_text())
@@ -311,6 +315,23 @@ pathlib.Path(args[args.index('--output-last-message') + 1]).write_text('Test ans
         self.assertIs(result["model_request_observed"], True)
         self.assertEqual(result["usage"]["input_tokens"], 20)
         self.assertIn("already made a model request", stderr.getvalue())
+
+    def test_failed_session_setup_stopped_after_the_client_timeout_is_recorded_as_late(self):
+        # #121: a client still running when it could have given up on tools/list is not known to have sent nothing.
+        (self.root / "native.py").write_text(FAKE_NATIVE)
+        config = self.root / "session.json"
+        config.write_text(json.dumps({
+            "target": "playwright", "upstream": [sys.executable, str(self.root / "native.py"), "fail", str(self.root / "native.pid")],
+            "bootstrap_url": "http://local/t/start", "urls": ["http://local/t/article"], "active_index": 0,
+            "evidence_path": str(self.root / "evidence.json"), "origin": "http://local"}))
+        path = self.fake_mcp_client([sys.executable, str(ROOT / "kitsune_benchmark/personal_session.py"), str(config)])
+        with patch("kitsune_benchmark.adapter.MCP_REQUEST_TIMEOUT_SEC", 0):
+            result = self.execute(path, timeout=30, session_setup=lambda: session_setup(self.root / "evidence.json"))
+        self.assertEqual(result["execution_status"], "setup_failed")
+        self.assertIs(result["model_request_observed"], False)
+        self.assertEqual(result["client_tool_list_timeout_sec"], 0)
+        self.assertGreater(result["client_stopped_sec"], 0)
+        self.assertIs(result["stopped_before_client_timeout"], False)
 
     def test_model_request_observed_reads_both_harness_audits(self):
         self.assertFalse(model_request_observed({"usage": {}, "mcp_calls": 0, "num_turns": None,

@@ -319,7 +319,7 @@ def run_coexistence(*, execute: bool = False, task_ids: list[str] | None = None,
                 "elicitation": elicitation, "retry_setup_failures": retries,
                 "unprotected_user_tabs": unprotected_user_tabs,
                 "selected_tasks": [t["id"] for t in tasks], "planned_model_runs": len(targets) * len(tasks),
-                "worst_case_usd": len(targets) * len(tasks) * per_run if per_run else None,
+                "worst_case_usd": (1 + retries) * len(targets) * len(tasks) * per_run if per_run else None,  # with retries (#121)
                 "catalog_tasks": len(coexist["tasks"]), "runnable_coexistence_tasks": runnable_ids(),
                 "personal_tasks_runnable_user_seeded": len(personal_runnable_ids()),
                 "ui_tools": UI_TOOLS, "integrity": INTEGRITY,

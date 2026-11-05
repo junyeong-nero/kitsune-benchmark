@@ -841,7 +841,8 @@ def run_gallery(*, execute: bool = False, task_ids: list[str] | None = None, cat
                 "retry_setup_failures": retries,
                 "tasks": [{"id": t.id, "category": t.category, "title": t.title} for t in tasks],
                 "planned_model_runs": len(tasks) * len(targets),
-                "worst_case_usd": len(tasks) * len(targets) * per_run if per_run else None, "integrity": INTEGRITY}
+                "worst_case_usd": (1 + retries) * len(tasks) * len(targets) * per_run if per_run else None,  # with retries (#121)
+                "integrity": INTEGRITY}
     media.font(12)  # fail early on broken font setup
     project = Path(kitsune_project).expanduser().resolve() if kitsune_project else ROOT.parent / "kitsune"
     source = source_revision(project)

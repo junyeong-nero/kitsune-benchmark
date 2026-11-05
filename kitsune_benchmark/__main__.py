@@ -125,9 +125,10 @@ def main(argv: list[str] | None = None) -> int:
                                 "(default) or accept; browser_ask_user prompts are always declined. Results under "
                                 "different policies are not comparable")
         child.add_argument("--retry-setup-failures", type=int, default=0, metavar="N",
-                           help="Rerun a pair in place, with a fresh profile and ports, up to N times while its run "
-                                "failed in session setup before any model request (setup_failed, "
-                                "model_request_observed false); recorded as setup_retries. Default 0: no retry. "
+                           help="Rerun a whole pair in place, with a fresh profile and ports, up to N times while its "
+                                "run failed in session setup and its client was stopped before it could give up on its "
+                                "tool list (setup_failed, model_request_observed false, stopped_before_client_timeout "
+                                "true); recorded as setup_retries with the discarded runs. Default 0: no retry. "
                                 "Any other failure still stops the track")
     for child in (smoke, benchmark, personal, gallery, coexistence):
         child.add_argument("--harness", choices=HARNESSES, default="claude",
