@@ -40,7 +40,7 @@ git tags of this repository:
 | `taskset-v3.1.2` (`80a5c74`) | Harness only, for Kitsune main with holds (kitsune#364 … #390). The relay answers Kitsune's approval prompts with a recorded elicitation policy (#55, #61); the gallery task runs in a harness-opened tab (#54); the agent is stopped before its model request when relay setup fails (#64); holds are counted from session evidence (#63); setup reads the current tab that #390 no longer lists while the user views it (#68). Catalogs, pages and graders are those of `taskset-v3.1.1`; the hostile-UI catalog (not part of the suite) gains Kitsune-only strategies (#62) | Kitsune main `514b5b7` lite suite (2026-11-01, on `869551c`, the same code); the `dea1ad4` cohorts ran on earlier commits between v3.1.1 and v3.1.2 |
 | `taskset-v3.2` | Personal track seeding (#70): the user opens the starting tabs through the [user channel](../coexistence.md#the-user-channel) (WebDriver BiDi), so Kitsune lists them, including the protected note, as the user's and applies its user-tab rules (kitsune#393, kitsune#394). Before, they were opened with the MCP server's own `browser_tabs new` and listed as agent-owned. Setup is unscorable if Kitsune lists a starting tab as owned. Tasks, pages and graders are unchanged and the ID stays `personal-browsing-local-v3`, but **Kitsune personal results are not comparable with earlier tags**; Playwright has no tab ownership. Other experiments that reuse the personal fixtures still seed through the MCP server. Also carries `run-full-suite.py --from` and `merge-suites.py` (#69) and the new `analyze-release.py` signals (#71, #73) | Kitsune main `514b5b7` lite suite (2026-11-01, on `taskset-v3.2-4`); Kitsune v0.7.2 release cohort (2026-11-04, on `taskset-v3.2` + #91, #92) |
 | `taskset-v3.3` | For Kitsune with read-only user tabs (v0.7.2). (1) Grader, #94: `pb-tabs-03` ("go back to the order tab") is graded on the tab the user sees. Kitsune inventories record `shown` (Kitsune's `active`) beside `active` (the agent's current tab, still used for custody), and the check uses `shown`. Before, a Kitsune that may not make a user tab current failed it although the order tab never left the front. Playwright's grading is unchanged, and the catalog's success line says "the tab the user sees". **Kitsune `pb-tabs-03` results, personal and coexistence, are not comparable with earlier tags.** (2) Harness: setup on read-only user tabs (#91); no unseen `unchanged_since` after the gallery setup's navigate (#92). Both Kitsune arms set `KITSUNE_USER_TABS` beside the deprecated aliases (#100). The coexistence catalog's protect-arm text names both settings; the condition is unchanged. (3) Analysis: `user_tab_refusals` counts `user_tab_read_only`, and `analyze-release.py` reports refusals and copies of user tabs (#101). (4) Tests: the native Kitsune personal test seeds through the user channel (#95). Other tasks, pages and graders are unchanged | None |
-| **`taskset-v3.4`** (current) | Coexistence is frozen as `coexistence-local-v2`. The Kitsune `unprotected-user-tabs` arm (user tabs writable, #100's settings) replaces the `protect-user-tabs` arm in the run plan. On Kitsune after v0.7.1 the protect arm equals the default; the new arm measures what read-only user tabs cost and buy against default Kitsune on the same units. Suite entry `coexistence-unprotected` (28 Kitsune runs, as before); `analyze-release.py` compares it with default Kitsune. The user-seeded condition, `co-typing-01`, personal, gallery and external are those of `taskset-v3.3`, so they stay comparable. The protect arm remains runnable (`--protect-user-tabs`) to reproduce v1 cohorts | None yet |
+| **`taskset-v3.4`** (current) | Coexistence is frozen as `coexistence-local-v2`. The Kitsune `unprotected-user-tabs` arm (user tabs writable, #100's settings) replaces the `protect-user-tabs` arm in the run plan. On Kitsune after v0.7.1 the protect arm equals the default; the new arm measures what read-only user tabs cost and buy against default Kitsune on the same units. Suite entry `coexistence-unprotected` (28 Kitsune runs, as before); `analyze-release.py` compares it with default Kitsune. The user-seeded condition, `co-typing-01`, personal, gallery and external are those of `taskset-v3.3`, so they stay comparable. The protect arm remains runnable (`--protect-user-tabs`) to reproduce v1 cohorts | Kitsune main `286cfe5` lite cohort (2026-11-05, on `taskset-v3.4-13`: + #113's analysis split and the untagged #114/#115 gallery page fixes) |
 
 Earlier reports predate the tags and ran on earlier task/grader code. Scores on
 v1 and v1.1 are not compared directly: the two personal tasks changed their
@@ -109,6 +109,25 @@ These are observations; a release-improvement claim still goes through a
 (`coexistence-v0-draft`); from `taskset-v3.1` the frozen
 [coexistence track](../coexistence.md) is part of the full suite. The taskset-v2
 user-seeded tab custody contract is retained unchanged.
+
+## v0.7.2 → main `286cfe5` (pre-release main)
+
+`286cfe5a24464e5f43507505327bee632dcedb90` (`v0.7.2-39-g286cfe5`). The changes this benchmark measured
+since v0.7.2:
+
+- every tab is readable: core `select` makes any tab current, only writes are gated (#449, #451); the deprecated
+  user-tab aliases are removed (#446);
+- `unchanged_since` answers only the caller that saw the action result (#442);
+- after main `3a287f5`: a small page's text in core `tabs new` and `navigate_back` results (#448), removed or hidden
+  elements named in action results (#457), similar siblings collapsed only when at least 3 are hidden (#458),
+  `stale_ref` `other_document` naming the same element (#459), no 400 ms settle floor for plain field writes (#460),
+  a user's focused draft released after 10 s idle or a handoff (#456).
+
+Runs on `taskset-v3.4` plus the #114/#115 gallery page fixes.
+
+| Date | Report | Model / harness | Kitsune revision | Notes |
+| --- | --- | --- | --- | --- |
+| 2026-11-05 | [Lite cohort](2026-11-05-main-286cfe5.md) | `claude-opus-5-5`, Claude Code subscription | `286cfe5` | 306 scorable runs, resumed after a setup failure before any model request. Kitsune solves every unit; Playwright misses `co-typing-01` v0. No `user_tab_read_only` refusals (v0.7.2: 75). K/PW input (v0.7.2 → `286cfe5`): personal 0.985 → 0.829, crowded 0.625 → 0.591, isolated 0.962 → 0.751, coexistence 0.936 → 0.839, external 0.936 → 0.901. Unprotected arm 0.997× default. Regression: #457's removal lines make `ui-table` page-click results 52–107% larger (#471). A same-day cohort on `3a287f5` (no report) is used as a repeat |
 
 ## v0.7.2
 
