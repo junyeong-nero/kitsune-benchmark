@@ -150,6 +150,28 @@ class FullSuiteTests(unittest.TestCase):
         with redirect_stdout(io.StringIO()), self.assertRaises(SystemExit):
             self.invoke([], extra=("--elicitation", "approve"))
 
+    def test_setup_retries_reach_relay_tracks_and_the_suite_log(self):
+        # #121: the track reran a pair that failed in setup before any model request; the suite log records it.
+        retry = {"task": "pb-handoff-01", "pair_dir": "artifacts/personal/failed", "target": "kitsune",
+                 "run_dir": "artifacts/personal/failed/runs/r", "execution_status": "setup_failed",
+                 "model_request_observed": False, "error_detail": "ValueError: User channel setup failed."}
+        retried = {"requested_pairs": 28, "completed_pairs": 28, "setup_retries": [retry]}
+        ok = {"requested_pairs": 1, "completed_pairs": 1, "setup_retries": []}
+        tracks = [("personal-v1", ["personal"]), ("external", ["external"])]
+        code, launched, _, entries = self.invoke([(0, retried), (0, ok)], sequential=True, tracks=tracks,
+                                                 extra=("--retry-setup-failures", "1"))
+        self.assertEqual(code, 0)
+        self.assertEqual(self.manifest["retry_setup_failures"], 1)
+        self.assertEqual(launched[0][launched[0].index("--retry-setup-failures") + 1], "1")
+        self.assertNotIn("--retry-setup-failures", launched[1])  # external has no session relay
+        self.assertEqual([entry["setup_retries"] for entry in entries], [[retry], []])
+        # The default, 0, passes nothing and keeps the track commands as before.
+        code, launched, _, _ = self.invoke([(0, ok)] * 2, sequential=True, tracks=tracks)
+        self.assertEqual(self.manifest["retry_setup_failures"], 0)
+        self.assertFalse(any("--retry-setup-failures" in command for command in launched))
+        with patch.object(suite.sys, "stderr", io.StringIO()), self.assertRaises(SystemExit):
+            self.invoke([], extra=("--retry-setup-failures", "-1"))
+
     def test_lite_plan_keeps_every_task_with_fewer_variants(self):
         lite = suite.commands("lite")
         names = [name for name, _ in lite]

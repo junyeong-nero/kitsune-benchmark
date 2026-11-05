@@ -151,7 +151,9 @@ bridge or browser. `scripts/analyze-per-tool.py <out>` compares the two targets
 tool by tool (calls, errors, latency, response size, grouped error texts).
 The full-suite driver exits **3** after an invalid/incomplete track (nonzero exit,
 stopped reason, malformed summary, or incomplete coverage), once its active
-target processes have settled. It does not start later tracks or retry. Ordinary
+target processes have settled. It does not start later tracks or retry, except the
+setup retries that `--retry-setup-failures N` passes to the personal, gallery and
+coexistence entries ([Quota and stopping](#quota-and-stopping)). Ordinary
 scorable task failures still allow the suite to continue. Use a fresh output
 directory for each suite invocation; nonempty output directories are rejected.
 
@@ -392,7 +394,20 @@ Read [individual-run inputs](codex-harness.md#individual-run-inputs) first.
   (gallery 240, external live tasks 300).
   **There is no token-budget stop.** A timeout is not a fixed token allowance.
 - Setup/execution/unscorable failures stop further targets/tasks. Ordinary
-  scorable task failures do not. No automatic retry or model substitution occurs.
+  scorable task failures do not. No model substitution occurs, and by default no
+  retry. `--retry-setup-failures N` (personal, gallery, coexistence and
+  `scripts/run-full-suite.py`; default 0) retries one case only: a run recorded
+  as `execution_status: setup_failed` with `model_request_observed: false`. The
+  model never saw that task, so a rerun cannot select on outcomes (#121). The
+  pair is rerun in place, before the next task, with a fresh fixture, profile and
+  ports, up to N times, and only while the budget still covers a pair's worst
+  case and the Kitsune revision is unchanged. Only the last attempt is scored.
+  Each retry is recorded as `setup_retries` (task, failed pair and run
+  directories, target and the failed run's `error_detail`) in the scored pair's
+  summary, the track summary and the entry's `suite-log.jsonl` line. It never
+  retries a setup failure after a model request, a timeout, a session limit, a
+  harness error, an invalid trace or an unscorable evaluation. These, and a setup
+  failure once the retries run out, stop the track as before.
   The track's `stopped_reason` is `unscorable_pair`, or `session_limit` when a
   Claude Code run hit the subscription's session limit (its run summary records
   `api_error: usage_limit_reached`); that track is rerun after the reset (#69).

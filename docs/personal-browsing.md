@@ -309,7 +309,8 @@ reported only if Codex emits it. Interrupted runs can lack usage.
 
 A harness/setup/unscorable evaluation stops further target/task execution; a
 valid, ordinary unsuccessful task does not. There is no automatic model
-substitution or retry. Current order is Playwright first, then Kitsune; the
+substitution or retry; `--retry-setup-failures N` reruns only a pair whose setup
+failed before any model request ([running guide](running.md#quota-and-stopping)). Current order is Playwright first, then Kitsune; the
 three data variants do not counterbalance order. Publication-quality evaluation
 still needs order counterbalancing, repeated trials and paired analysis.
 

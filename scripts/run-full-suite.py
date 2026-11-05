@@ -18,6 +18,11 @@ entries always run paired in one process (the user channel was validated that wa
 personal, gallery and coexistence entry, and is recorded in suite-manifest.json. External does not use the relay.
 Suites run under different policies are not comparable.
 
+--retry-setup-failures N (default 0: no retry) passes the same option to every personal, gallery and coexistence entry:
+a pair whose run failed in session setup before any model request (setup_failed, model_request_observed false) is
+rerun in place with a fresh profile and ports, up to N times. Each retry is in the pair summary and the entry's
+suite-log line as setup_retries, with the failed run's error_detail. Any other failure still stops the suite.
+
 The default harness is `claude`: Claude Code on the claude.ai subscription login, which spends no API
 credit and has no dollar cap. API-key harnesses (`claude-api`, `claude-api-full`) bill ANTHROPIC_API_KEY
 credit and need --allow-api-billing plus --budget-usd and --max-budget-usd-per-run.
@@ -49,7 +54,7 @@ from pathlib import Path
 PLANS = {"full": {"personal": (0, 1, 2), "gallery": (0, 1, 2)},
          "lite": {"personal": (0, 1), "gallery": (0,)}}
 ELICITATION_POLICIES = ("decline", "accept")  # kitsune_benchmark/personal_session.py
-RELAY_TRACKS = ("personal", "gallery", "coexistence")  # track commands that take --elicitation
+RELAY_TRACKS = ("personal", "gallery", "coexistence")  # track commands that take --elicitation, --retry-setup-failures
 
 
 def commands(plan: str = "full") -> list[tuple[str, list[str]]]:
@@ -122,6 +127,9 @@ def main() -> int:
     parser.add_argument("--elicitation", choices=ELICITATION_POLICIES, default="decline",
                         help="How the relay answers Kitsune's approval prompts on personal, gallery and coexistence "
                              "entries; recorded in suite-manifest.json")
+    parser.add_argument("--retry-setup-failures", type=int, default=0, metavar="N",
+                        help="Rerun a personal, gallery or coexistence pair in place up to N times while its run failed "
+                             "in setup before any model request; recorded as setup_retries (default 0: no retry)")
     parser.add_argument("--from", dest="from_entry", metavar="ENTRY",
                         help="Start the plan at this entry, resuming --previous-suite; recorded as resumed_from")
     parser.add_argument("--previous-suite", metavar="DIR",
@@ -131,6 +139,8 @@ def main() -> int:
         plan = attempt_plan(args.attempts, args.order, args.sequential)
     except ValueError as exc:
         parser.error(str(exc))
+    if args.retry_setup_failures < 0:
+        parser.error("--retry-setup-failures must be 0 or more.")
     planned = commands(args.plan)
     if (args.from_entry is None) != (args.previous_suite is None):
         parser.error("--from and --previous-suite go together.")
@@ -179,6 +189,7 @@ def main() -> int:
                 "started": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
                 "targets_in_parallel": not args.sequential, "attempts": args.attempts,
                 "order_policy": args.order, "attempt_plan": plan, "elicitation": args.elicitation,
+                "retry_setup_failures": args.retry_setup_failures,
                 "order_key": {"a": "playwright", "b": "kitsune"}, "plan": args.plan, "commands": [name for name, _ in planned],
                 "resumed_from": args.from_entry,
                 "previous_suite": str(Path(args.previous_suite).resolve()) if args.previous_suite else None}
@@ -198,6 +209,8 @@ def main() -> int:
                         *(["--claude-model", args.model] if args.harness != "codex" else ["--codex-model", args.model]),
                         *(["--max-budget-usd-per-run", str(args.max_budget_usd_per_run), "--allow-api-billing"] if api else []),
                         *(["--elicitation", args.elicitation] if argv[0] in RELAY_TRACKS else []),
+                        *(["--retry-setup-failures", str(args.retry_setup_failures)]
+                          if argv[0] in RELAY_TRACKS and args.retry_setup_failures else []),
                         "--kitsune-project", args.kitsune_project, "--execute"]
                 parallel = not args.sequential and not always_sequential(name)
                 fixed_targets = "--targets" in argv
@@ -241,6 +254,7 @@ def main() -> int:
                                     "requested_pairs": result.get("requested_pairs"),
                                     "completed_pairs": result.get("completed_pairs"),
                                     "stopped_reason": result.get("stopped_reason"),
+                                    "setup_retries": result.get("setup_retries"),
                                     "suite_summary_path": result.get("suite_summary_path"),
                                     "by_target": result.get("by_target", result.get("results")),
                                     "output_path": str(attempt_dir / f"{label}.json")})

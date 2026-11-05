@@ -1359,3 +1359,105 @@ class NativeBrowserTests(unittest.TestCase):
                         self.assertTrue(evaluation["task_success"], evaluation)
                     finally:
                         session.close()
+
+
+SETUP_OK = {"execution_status": "completed_unscored", "usage": {},
+            "benchmark_evaluation": {"scorable": True, "task_success": True}}
+SETUP_DETAIL = "ValueError: User channel setup failed. <- BidiError: Timed out waiting for the user's new tab."
+SETUP_FAILED_BEFORE_MODEL = {"execution_status": "setup_failed", "harness_error": True, "model_request_observed": False,
+                             "error_detail": SETUP_DETAIL, "benchmark_evaluation": {"scorable": False}}
+
+
+class SetupRetryTests(unittest.TestCase):
+    """#121 --retry-setup-failures with a fake run_pair: no browser, harness or model runs."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+
+    def run_track(self, kitsune_runs, retries, *, track="personal", task_ids=("pb-current-01", "pb-safe-01"), **kwargs):
+        """Run a track whose Kitsune runs follow kitsune_runs (then SETUP_OK); returns (summary, run_pair calls, stderr)."""
+        from kitsune_benchmark.coexistence import run_coexistence
+        from kitsune_benchmark.gallery import run_gallery
+        module, run_track = {"personal": ("kitsune_benchmark.personal", run_personal),
+                             "gallery": ("kitsune_benchmark.smoke", run_gallery),
+                             "coexistence": ("kitsune_benchmark.coexistence", run_coexistence)}[track]
+        script = iter(kitsune_runs)
+        calls = []
+
+        def fake_pair(**pair_kwargs):
+            calls.append(pair_kwargs)
+            folder = tempfile.mkdtemp(dir=self.tmp.name)
+            kitsune = dict(next(script, SETUP_OK), run_dir=folder + "/runs/kitsune")
+            return {"pair_dir": folder, "results": {"playwright": dict(SETUP_OK, run_dir=folder + "/runs/playwright"),
+                                                     "kitsune": kitsune}}
+        with ExitStack() as stack:
+            stack.enter_context(patch(module + ".run_pair", side_effect=fake_pair))
+            stack.enter_context(patch(module + ".source_revision", return_value={"revision": "a", "dirty": False}))
+            if track == "coexistence":  # its aggregate reads per-contract evaluations the fake runs do not have
+                stack.enter_context(patch("kitsune_benchmark.coexistence.aggregate_coexistence", return_value={}))
+            stderr = stack.enter_context(redirect_stderr(io.StringIO()))
+            summary = run_track(execute=True, task_ids=list(task_ids), retry_setup_failures=retries,
+                                **{"harness": "claude", **kwargs})
+        return summary, calls, stderr.getvalue()
+
+    def test_setup_failure_before_a_model_request_is_rerun_in_place_and_scored_once(self):
+        summary, calls, stderr = self.run_track([SETUP_FAILED_BEFORE_MODEL], 1)
+        self.assertEqual(len(calls), 3)  # pb-current-01 twice, then pb-safe-01
+        self.assertEqual((summary["attempted_pairs"], summary["completed_pairs"], summary["stopped_reason"]), (2, 2, None))
+        self.assertEqual([p["personal_task"] for p in summary["pairs"]], ["pb-current-01", "pb-safe-01"])
+        self.assertEqual(summary["by_target"]["kitsune"]["attempted"], 2)
+        # Each attempt gets a fresh fixture; run_pair itself gives each pair a fresh directory, profile and ports.
+        self.assertIsNot(calls[0]["task_for_target"].__self__, calls[1]["task_for_target"].__self__)
+        failed_dir = summary["pairs"][0]["setup_retries"][0]["pair_dir"]
+        record = {"task": "pb-current-01", "pair_dir": failed_dir, "target": "kitsune",
+                  "run_dir": failed_dir + "/runs/kitsune", "execution_status": "setup_failed",
+                  "model_request_observed": False, "error_detail": SETUP_DETAIL}
+        self.assertEqual(summary["pairs"][0]["setup_retries"], [record])
+        self.assertEqual(summary["pairs"][1]["setup_retries"], [])
+        self.assertEqual((summary["retry_setup_failures"], summary["setup_retries"]), (1, [record]))
+        self.assertNotEqual(failed_dir, summary["pairs"][0]["pair_dir"])
+        on_disk = json.loads((Path(summary["pairs"][0]["pair_dir"]) / "personal-summary.json").read_text())
+        self.assertEqual(on_disk["setup_retries"], [record])
+        self.assertEqual(json.loads((Path(failed_dir) / "personal-summary.json").read_text())["setup_retries"], [])
+        self.assertIn("setup retry 1 of 1", stderr)
+        self.assertIn("BidiError", stderr)
+
+    def test_failure_after_a_model_request_still_stops_the_track(self):
+        for kitsune in (dict(SETUP_FAILED_BEFORE_MODEL, model_request_observed=True),
+                        {"execution_status": "timeout", "benchmark_evaluation": {"scorable": False}},
+                        {"execution_status": "harness_error", "api_error": "usage_limit_reached",
+                         "benchmark_evaluation": {"scorable": False}}):
+            with self.subTest(status=kitsune["execution_status"]):
+                summary, calls, _ = self.run_track([kitsune], 1)
+                self.assertEqual(len(calls), 1)
+                self.assertEqual(summary["attempted_pairs"], 1)
+                self.assertIn(summary["stopped_reason"], ("unscorable_pair", "session_limit"))
+                self.assertEqual(summary["setup_retries"], [])
+
+    def test_retries_run_out_or_default_zero_stop_as_before(self):
+        summary, calls, _ = self.run_track([SETUP_FAILED_BEFORE_MODEL] * 2, 1)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual((summary["attempted_pairs"], summary["completed_pairs"]), (1, 0))
+        self.assertEqual(summary["stopped_reason"], "unscorable_pair")
+        self.assertEqual(summary["pairs"][0]["results"]["kitsune"]["execution_status"], "setup_failed")
+        self.assertEqual(len(summary["pairs"][0]["setup_retries"]), 1)
+        summary, calls, stderr = self.run_track([SETUP_FAILED_BEFORE_MODEL], 0)
+        self.assertEqual((len(calls), summary["stopped_reason"], summary["setup_retries"]), (1, "unscorable_pair", []))
+        self.assertNotIn("setup retry", stderr)
+        # An API budget that cannot cover another pair's worst case (2 x $1) does not retry either.
+        summary, calls, _ = self.run_track([SETUP_FAILED_BEFORE_MODEL], 1, harness="claude-api", budget_usd=2.5)
+        self.assertEqual((len(calls), summary["stopped_reason"]), (1, "unscorable_pair"))
+        with self.assertRaisesRegex(ValueError, "retry-setup-failures"):
+            run_personal(task_ids=["pb-current-01"], retry_setup_failures=-1)
+        with redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(main(["personal", "--task", "pb-current-01", "--retry-setup-failures", "2"]), 0)
+        self.assertEqual(json.loads(out.getvalue())["retry_setup_failures"], 2)
+
+    def test_gallery_and_coexistence_retry_the_same_way(self):
+        for track, task in (("gallery", "ui-table"), ("coexistence", "pb-current-01")):
+            with self.subTest(track=track):
+                summary, calls, _ = self.run_track([SETUP_FAILED_BEFORE_MODEL], 1, track=track, task_ids=(task,))
+                self.assertEqual(len(calls), 2)
+                self.assertEqual((summary["completed_pairs"], summary["stopped_reason"]), (1, None))
+                self.assertEqual([(r["task"], r["error_detail"]) for r in summary["setup_retries"]], [(task, SETUP_DETAIL)])
