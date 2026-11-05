@@ -179,7 +179,10 @@ def t_modal():
     def html(trial, d):
         switches = "".join(f'<button type="button" role="switch" data-key="{k}" aria-checked="{str(d["initial"][k]).lower()}">{escape(label)}</button>'
                            for k, label in SETTINGS)
+        # Real text outside the dialog (#115): the switches' on/off labels are CSS-only and hidden with the dialog.
+        saved = " · ".join(f'{escape(label)} {"켜짐" if d["initial"][k] else "꺼짐"}' for k, label in SETTINGS)
         return ('<button type="button" class="open-dialog">알림 설정 열기</button>'
+                f'<p class="saved-settings">저장된 설정: {saved}</p>'
                 f'<div class="dialog-backdrop" hidden><div class="dialog" role="dialog" aria-modal="true" aria-label="알림 설정">'
                 f'<h3>알림 설정</h3>{switches}<button type="button" class="dialog-cancel">취소</button> '
                 '<button type="button" class="dialog-save">저장</button></div></div>')

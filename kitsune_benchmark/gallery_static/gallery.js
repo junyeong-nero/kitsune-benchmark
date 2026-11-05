@@ -130,15 +130,16 @@
       track.addEventListener('pointermove', e => { if (e.buttons) fromPointer(e); });
       set(value, true);
     },
-    // 6. Modal dialog with switches; only "저장" commits.
+    // 6. Modal dialog with switches; only "저장" commits and updates the saved-settings line.
     modal(root) {
-      const dialog = $(root, '.dialog-backdrop'), open = $(root, '.open-dialog');
+      const dialog = $(root, '.dialog-backdrop'), open = $(root, '.open-dialog'), saved = $(root, '.saved-settings');
       const switches = () => $$(dialog, '[role=switch]');
       open.addEventListener('click', () => { dialog.hidden = false; $(dialog, '[role=switch]').focus(); });
       switches().forEach(s => s.addEventListener('click', () => s.setAttribute('aria-checked', String(s.getAttribute('aria-checked') !== 'true'))));
       $(dialog, '.dialog-cancel').addEventListener('click', () => { dialog.hidden = true; });
       $(dialog, '.dialog-save').addEventListener('click', () => {
         const value = Object.fromEntries(switches().map(s => [s.dataset.key, s.getAttribute('aria-checked') === 'true']));
+        saved.textContent = '저장된 설정: ' + switches().map(s => s.textContent + (value[s.dataset.key] ? ' 켜짐' : ' 꺼짐')).join(' · ');
         dialog.hidden = true; report(root.dataset.component, value);
       });
     },
