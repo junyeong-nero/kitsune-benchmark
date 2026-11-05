@@ -147,7 +147,11 @@ class MiniwobTests(unittest.TestCase):
                     ("Firefox desktop first supported `Array.prototype.at()` in **version 90**.", True),
                     ("Version 90 is the first desktop release of Firefox to support it.", True),
                     ("Firefox first supported it in version 89.", False),
-                    ("Firefox " + "x" * 81 + " 90", False)):
+                    # Boundary: the gap is the two spaces plus the x run, so 78 x's make exactly 80.
+                    ("Firefox " + "x" * 78 + " 90", True),
+                    ("Firefox " + "x" * 79 + " 90", False),
+                    ("90 " + "x" * 78 + " Firefox", True),
+                    ("90 " + "x" * 79 + " Firefox", False)):
                 with self.subTest(text=text):
                     (Path(folder) / "final.txt").write_text(text)
                     result = fixture.evaluate("kitsune", {"execution_status": "completed_unscored", "run_dir": folder})
