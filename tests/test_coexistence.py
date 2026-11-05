@@ -18,7 +18,8 @@ from unittest.mock import Mock, patch
 from kitsune_benchmark.__main__ import main
 from kitsune_benchmark.bidi import Bidi, BidiError
 from kitsune_benchmark.coexistence import (CoexistenceServer, aggregate_coexistence, catalog, input_metrics,
-                                           run_coexistence, runnable_ids, selected_tasks, view_metrics)
+                                           run_coexistence, runnable_ids, selected_tasks, view_metrics,
+                                           wait_session_closed)
 from kitsune_benchmark.coexistence import config as coexistence_config
 from kitsune_benchmark.coexistence_fixtures import JOURNAL_TEXT
 from kitsune_benchmark.coexistence_session import CoexistenceSession, owned_urls, user_tab_refusal
@@ -33,7 +34,8 @@ VALID = {"execution_status": "completed_unscored"}
 
 def initial_evidence(trial):
     tabs = [{"id": i, "url": trial.url(path), "active": i == trial.active_index} for i, path in enumerate(trial.paths)]
-    return {"setup_complete": True, "initial_tabs": tabs, "snapshots": [copy.deepcopy(tabs)]}
+    # A real relay writes session_closed on close; without it CoexistenceServer.evaluate waits out its deadline.
+    return {"setup_complete": True, "session_closed": True, "initial_tabs": tabs, "snapshots": [copy.deepcopy(tabs)]}
 
 
 def session(trial):
@@ -482,6 +484,36 @@ class EvaluationTests(unittest.TestCase):
         self.assertIsNone(owned_urls("playwright", listed))
         with self.assertRaises(ValueError):
             owned_urls("kitsune", {"content": [{"type": "text", "text": "not json"}]})
+
+
+class WaitSessionClosedTests(unittest.TestCase):
+    def waited(self, evidence, timeout):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "evidence.json"
+            path.write_text(json.dumps(evidence))
+            start = time.monotonic()
+            returned = wait_session_closed(path, timeout=timeout)
+            return returned, time.monotonic() - start
+
+    def test_returns_at_once_once_the_session_closed(self):
+        evidence = {"setup_complete": True, "session_closed": True}
+        returned, elapsed = self.waited(evidence, timeout=5)
+        self.assertEqual(returned, evidence)
+        self.assertLess(elapsed, 1)
+
+    def test_returns_at_once_for_a_session_that_never_completed_setup(self):
+        for evidence in ({}, {"setup_complete": False}):
+            with self.subTest(evidence=evidence):
+                returned, elapsed = self.waited(evidence, timeout=5)
+                self.assertEqual(returned, evidence)
+                self.assertLess(elapsed, 1)
+
+    def test_returns_the_evidence_as_it_is_after_the_deadline(self):
+        evidence = {"setup_complete": True, "snapshots": []}
+        returned, elapsed = self.waited(evidence, timeout=0.3)
+        self.assertEqual(returned, evidence)
+        self.assertGreaterEqual(elapsed, 0.3)
+        self.assertLess(elapsed, 3)
 
 
 # ---- Opt-in real-browser tests: no model calls ---------------------------------------------
