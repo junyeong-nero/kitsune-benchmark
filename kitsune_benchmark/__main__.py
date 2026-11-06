@@ -124,6 +124,12 @@ def main(argv: list[str] | None = None) -> int:
                            help="How the relay answers Kitsune's approval prompts during the agent's turn: decline "
                                 "(default) or accept; browser_ask_user prompts are always declined. Results under "
                                 "different policies are not comparable")
+        child.add_argument("--retry-setup-failures", type=int, default=0, metavar="N",
+                           help="Rerun a whole pair in place, with a fresh profile and ports, up to N times while its "
+                                "run failed in session setup and its client was stopped before it could give up on its "
+                                "tool list (setup_failed, model_request_observed false, stopped_before_client_timeout "
+                                "true); recorded as setup_retries with the discarded runs. Default 0: no retry. "
+                                "Any other failure still stops the track")
     for child in (smoke, benchmark, personal, gallery, coexistence):
         child.add_argument("--harness", choices=HARNESSES, default="claude",
                            help="Agent CLI. Default claude (Claude Code on the claude.ai subscription login; "
@@ -177,7 +183,8 @@ def main(argv: list[str] | None = None) -> int:
                                   executable=executable, kitsune_project=args.kitsune_project,
                                   harness=args.harness, budget_usd=args.budget_usd,
                                   kitsune_preset=args.kitsune_preset, targets=tuple(args.targets.split(",")),
-                                  elicitation=args.elicitation, **overrides)
+                                  elicitation=args.elicitation, retry_setup_failures=args.retry_setup_failures,
+                                  **overrides)
             print(json.dumps(result, indent=2, ensure_ascii=False))
             if not args.execute:
                 return 0
@@ -194,6 +201,7 @@ def main(argv: list[str] | None = None) -> int:
                                      protect_user_tabs=args.protect_user_tabs, elicitation=args.elicitation,
                                      unprotected_user_tabs=args.unprotected_user_tabs,
                                      tab_permissions=args.tab_permissions,
+                                     retry_setup_failures=args.retry_setup_failures,
                                      targets=tuple(args.targets.split(",")), **overrides)
             print(json.dumps(result, indent=2, ensure_ascii=False))
             if not args.execute:
@@ -213,7 +221,8 @@ def main(argv: list[str] | None = None) -> int:
             result = run_gallery(execute=args.execute, task_ids=args.task_ids, category=args.category, variant=args.variant,
                                  layout=args.layout, kitsune_project=args.kitsune_project, executable=executable,
                                  harness=args.harness, budget_usd=args.budget_usd, kitsune_preset=args.kitsune_preset,
-                                 targets=tuple(args.targets.split(",")), elicitation=args.elicitation, **overrides)
+                                 targets=tuple(args.targets.split(",")), elicitation=args.elicitation,
+                                 retry_setup_failures=args.retry_setup_failures, **overrides)
             print(json.dumps(result, indent=2, ensure_ascii=False))
             if not args.execute:
                 return 0

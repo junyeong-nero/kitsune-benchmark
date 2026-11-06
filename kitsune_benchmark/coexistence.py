@@ -28,8 +28,8 @@ from .adapter import claude_budget, harness_pins, with_claude_overrides, write_j
 from .coexistence_fixtures import COEXISTENCE_FIXTURES
 from .miniwob import UI_TOOLS
 from .personal import (USER_CHANNEL_PREFS, PersonalServer, PersonalTrial, aggregate_results, catalog as personal_catalog,
-                       config as personal_config, free_port, incomplete_stop, pair_complete,
-                       runnable_ids as personal_runnable_ids, user_channel_args, with_playwright_user_channel)
+                       config as personal_config, free_port, incomplete_stop, pair_complete, retry_count,
+                       run_with_setup_retries, runnable_ids as personal_runnable_ids, user_channel_args, with_playwright_user_channel)
 from .personal_session import ELICITATION_POLICIES
 from .smoke import ROOT, TARGETS, run_pair, source_revision
 from .specs import Server, Task
@@ -279,13 +279,14 @@ def run_coexistence(*, execute: bool = False, task_ids: list[str] | None = None,
                     budget_usd: float | None = None, protect_user_tabs: bool = False,
                     unprotected_user_tabs: bool = False, targets: tuple[str, ...] = TARGETS, claude_model: str | None = None,
                     max_budget_usd_per_run: float | None = None, codex_model: str | None = None,
-                    elicitation: str = "decline", tab_permissions: bool = False) -> dict:
+                    elicitation: str = "decline", tab_permissions: bool = False, retry_setup_failures: int = 0) -> dict:
     """tab_permissions: run the draft kitsune#393 scenarios (tab_permissions.py, benchmark
     coexistence-tab-permissions-v0-draft) instead of coexistence-local-v1 tasks; reported apart from it."""
     if type(variant) is not int or variant not in range(3):
         raise ValueError("Variant must be 0, 1 or 2.")
     if elicitation not in ELICITATION_POLICIES:
         raise ValueError("Unknown elicitation policy.")
+    retries = retry_count(retry_setup_failures)
     if tab_permissions and (protect_user_tabs or unprotected_user_tabs):
         raise ValueError("--tab-permissions runs default Kitsune; it takes neither user-tab arm.")
     if tab_permissions:
@@ -315,10 +316,10 @@ def run_coexistence(*, execute: bool = False, task_ids: list[str] | None = None,
         return {"mode": "coexistence_plan_only", "model_invoked": False, "harness": harness, "model": model,
                 "benchmark": spec["id"], "tab_permissions": tab_permissions,
                 "targets": list(targets), "variant": variant, "protect_user_tabs": protect_user_tabs,
-                "elicitation": elicitation,
+                "elicitation": elicitation, "retry_setup_failures": retries,
                 "unprotected_user_tabs": unprotected_user_tabs,
                 "selected_tasks": [t["id"] for t in tasks], "planned_model_runs": len(targets) * len(tasks),
-                "worst_case_usd": len(targets) * len(tasks) * per_run if per_run else None,
+                "worst_case_usd": (1 + retries) * len(targets) * len(tasks) * per_run if per_run else None,  # with retries (#121)
                 "catalog_tasks": len(coexist["tasks"]), "runnable_coexistence_tasks": runnable_ids(),
                 "personal_tasks_runnable_user_seeded": len(personal_runnable_ids()),
                 "ui_tools": UI_TOOLS, "integrity": INTEGRITY,
@@ -337,27 +338,35 @@ def run_coexistence(*, execute: bool = False, task_ids: list[str] | None = None,
                       "elicitation": elicitation,
                       "catalog_sha256": hashlib.sha256(catalog_path.read_bytes()).hexdigest(),
                       "personal_catalog_sha256": hashlib.sha256((ROOT / personal_config()["catalog"]).read_bytes()).hexdigest()}
-        with server_class(task, variant, protect_user_tabs=protect_user_tabs,
-                          unprotected_user_tabs=unprotected_user_tabs, elicitation=elicitation) as fixture:
-            port = fixture.bidi_ports["kitsune"]
-            pair = run_pair(execute=True, kitsune_project=kitsune_project, executable=executable,
-                experiment_spec=experiment, artifact_scope="coexistence", task_for_target=fixture.begin,
-                prepare_server=fixture.prepare_server, evaluate=fixture.evaluate, enabled_tools=UI_TOOLS,
-                harness=harness, targets=targets,
-                kitsune_env=(PROTECTED_KITSUNE_ENV if protect_user_tabs
-                             else UNPROTECTED_KITSUNE_ENV if unprotected_user_tabs else None),
-                kitsune_firefox_args=user_channel_args(port),
-                kitsune_firefox_prefs=USER_CHANNEL_PREFS, viewport_reports=fixture.viewport_reports,
-                equalize_kitsune_viewport=True)
-        pair.update(coexistence_task=task["id"], variant=variant, protect_user_tabs=protect_user_tabs,
-                    tab_permissions=tab_permissions,
-                    unprotected_user_tabs=unprotected_user_tabs, elicitation=elicitation,
-                    kitsune_source_after=source_revision(project))
-        write_json(Path(pair["pair_dir"]) / "coexistence-summary.json", pair)
+
+        def attempt(setup_retries: list[dict]) -> dict:
+            nonlocal spent
+            with server_class(task, variant, protect_user_tabs=protect_user_tabs,
+                              unprotected_user_tabs=unprotected_user_tabs, elicitation=elicitation) as fixture:
+                port = fixture.bidi_ports["kitsune"]
+                pair = run_pair(execute=True, kitsune_project=kitsune_project, executable=executable,
+                    experiment_spec=experiment, artifact_scope="coexistence", task_for_target=fixture.begin,
+                    prepare_server=fixture.prepare_server, evaluate=fixture.evaluate, enabled_tools=UI_TOOLS,
+                    harness=harness, targets=targets,
+                    kitsune_env=(PROTECTED_KITSUNE_ENV if protect_user_tabs
+                                 else UNPROTECTED_KITSUNE_ENV if unprotected_user_tabs else None),
+                    kitsune_firefox_args=user_channel_args(port),
+                    kitsune_firefox_prefs=USER_CHANNEL_PREFS, viewport_reports=fixture.viewport_reports,
+                    equalize_kitsune_viewport=True)
+            pair.update(coexistence_task=task["id"], variant=variant, protect_user_tabs=protect_user_tabs,
+                        tab_permissions=tab_permissions,
+                        unprotected_user_tabs=unprotected_user_tabs, elicitation=elicitation,
+                        kitsune_source_after=source_revision(project), setup_retries=setup_retries)
+            write_json(Path(pair["pair_dir"]) / "coexistence-summary.json", pair)
+            if per_run is not None:
+                spent += sum(r.get("list_price_cost_usd") if isinstance(r.get("list_price_cost_usd"), (int, float))
+                             else per_run for r in pair["results"].values())
+            return pair
+
+        pair = run_with_setup_retries(attempt, targets=targets, task_id=task["id"], retries=retries,
+            may_retry=lambda failed: failed["kitsune_source_after"] == source and (
+                budget_usd is None or spent + len(targets) * per_run <= budget_usd))
         pairs.append(pair)
-        if per_run is not None:
-            spent += sum(r.get("list_price_cost_usd") if isinstance(r.get("list_price_cost_usd"), (int, float))
-                         else per_run for r in pair["results"].values())
         if pair["kitsune_source_after"] != source:
             stopped = "kitsune_revision_changed"
             break
@@ -374,8 +383,9 @@ def run_coexistence(*, execute: bool = False, task_ids: list[str] | None = None,
                "requested_pairs": len(tasks), "attempted_pairs": len(pairs), "stopped_reason": stopped,
                "estimated_cost_usd": round(spent, 6) if per_run is not None else None,
                "suite_budget_usd": budget_usd, "max_budget_usd_per_run": per_run,
-               "completed_pairs": sum(pair_complete(p, targets) for p in pairs), "pairs": pairs,
-               "by_target": aggregate(pairs), "suite_summary_path": str(summary_path),
+               "completed_pairs": sum(pair_complete(p, targets) for p in pairs),
+               "retry_setup_failures": retries, "setup_retries": [r for p in pairs for r in p["setup_retries"]],
+               "pairs": pairs, "by_target": aggregate(pairs), "suite_summary_path": str(summary_path),
                "integrity": INTEGRITY}
     write_json(summary_path, summary)
     return summary

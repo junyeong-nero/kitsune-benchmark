@@ -816,15 +816,16 @@ def run_gallery(*, execute: bool = False, task_ids: list[str] | None = None, cat
                 executable: str = "codex", harness: str = "codex", budget_usd: float | None = None,
                 kitsune_preset: str | None = None, targets: tuple[str, ...] = ("playwright", "kitsune"),
                 claude_model: str | None = None, max_budget_usd_per_run: float | None = None,
-                codex_model: str | None = None, elicitation: str = "decline") -> dict:
+                codex_model: str | None = None, elicitation: str = "decline", retry_setup_failures: int = 0) -> dict:
     from .adapter import claude_budget, harness_pins, with_claude_overrides
     from .miniwob import UI_TOOLS
-    from .personal import aggregate_results, incomplete_stop, pair_complete
+    from .personal import aggregate_results, incomplete_stop, pair_complete, retry_count, run_with_setup_retries
     from .smoke import TARGETS, run_pair, source_revision
     if layout not in LAYOUTS or type(variant) is not int or variant not in range(3):
         raise ValueError("layout must be crowded|isolated and variant 0, 1 or 2.")
     if elicitation not in ELICITATION_POLICIES:
         raise ValueError("Unknown elicitation policy.")
+    retries = retry_count(retry_setup_failures)
     tasks = select(task_ids, category)
     spec = with_claude_overrides(config(), claude_model, max_budget_usd_per_run, codex_model)
     model, _ = harness_pins(spec, harness)
@@ -837,9 +838,11 @@ def run_gallery(*, execute: bool = False, task_ids: list[str] | None = None, cat
     if not execute:
         return {"mode": "gallery_plan_only", "model_invoked": False, "harness": harness, "model": model,
                 "layout": layout, "variant": variant, "targets": list(targets), "elicitation": elicitation,
+                "retry_setup_failures": retries,
                 "tasks": [{"id": t.id, "category": t.category, "title": t.title} for t in tasks],
                 "planned_model_runs": len(tasks) * len(targets),
-                "worst_case_usd": len(tasks) * len(targets) * per_run if per_run else None, "integrity": INTEGRITY}
+                "worst_case_usd": (1 + retries) * len(tasks) * len(targets) * per_run if per_run else None,  # with retries (#121)
+                "integrity": INTEGRITY}
     media.font(12)  # fail early on broken font setup
     project = Path(kitsune_project).expanduser().resolve() if kitsune_project else ROOT.parent / "kitsune"
     source = source_revision(project)
@@ -853,20 +856,28 @@ def run_gallery(*, execute: bool = False, task_ids: list[str] | None = None, cat
             break
         experiment = {**spec, "selected_task": {"id": task.id, "category": task.category}, "variant": variant, "layout": layout,
                       "elicitation": elicitation}
-        with GalleryServer(task, variant, layout, elicitation) as fixture:
-            pair = run_pair(execute=True, kitsune_project=kitsune_project, executable=executable,
-                            experiment_spec=experiment, artifact_scope="gallery", task_for_target=fixture.begin,
-                            prepare_server=fixture.prepare_server, evaluate=fixture.evaluate, enabled_tools=UI_TOOLS,
-                            harness=harness, kitsune_preset=kitsune_preset, targets=targets,
-                            kitsune_firefox_args=user_channel_args(fixture.kitsune_bidi_port),
-                            kitsune_firefox_prefs=USER_CHANNEL_PREFS, equalize_kitsune_viewport=True)
-        pair.update(gallery_task=task.id, variant=variant, layout=layout, elicitation=elicitation,
-                    kitsune_source_after=source_revision(project))
-        write_json(Path(pair["pair_dir"]) / "gallery-summary.json", pair)
+
+        def attempt(setup_retries: list[dict]) -> dict:
+            nonlocal spent
+            with GalleryServer(task, variant, layout, elicitation) as fixture:
+                pair = run_pair(execute=True, kitsune_project=kitsune_project, executable=executable,
+                                experiment_spec=experiment, artifact_scope="gallery", task_for_target=fixture.begin,
+                                prepare_server=fixture.prepare_server, evaluate=fixture.evaluate, enabled_tools=UI_TOOLS,
+                                harness=harness, kitsune_preset=kitsune_preset, targets=targets,
+                                kitsune_firefox_args=user_channel_args(fixture.kitsune_bidi_port),
+                                kitsune_firefox_prefs=USER_CHANNEL_PREFS, equalize_kitsune_viewport=True)
+            pair.update(gallery_task=task.id, variant=variant, layout=layout, elicitation=elicitation,
+                        kitsune_source_after=source_revision(project), setup_retries=setup_retries)
+            write_json(Path(pair["pair_dir"]) / "gallery-summary.json", pair)
+            if per_run is not None:
+                spent += sum(r.get("list_price_cost_usd") if isinstance(r.get("list_price_cost_usd"), (int, float))
+                             else per_run for r in pair["results"].values())
+            return pair
+
+        pair = run_with_setup_retries(attempt, targets=targets, task_id=task.id, retries=retries,
+            may_retry=lambda failed: failed["kitsune_source_after"] == source and (
+                budget_usd is None or spent + len(targets) * per_run <= budget_usd))
         pairs.append(pair)
-        if per_run is not None:
-            spent += sum(r.get("list_price_cost_usd") if isinstance(r.get("list_price_cost_usd"), (int, float)) else per_run
-                         for r in pair["results"].values())
         if pair["kitsune_source_after"] != source:
             stopped = "kitsune_revision_changed"
             break
@@ -884,6 +895,7 @@ def run_gallery(*, execute: bool = False, task_ids: list[str] | None = None, cat
                "kitsune_source": source,
                "requested_pairs": len(tasks), "attempted_pairs": len(pairs), "stopped_reason": stopped,
                "completed_pairs": sum(pair_complete(p, targets) for p in pairs),
+               "retry_setup_failures": retries, "setup_retries": [r for p in pairs for r in p["setup_retries"]],
                "estimated_cost_usd": round(spent, 6) if per_run is not None else None,
                "outcomes": per_task("outcome"), "failure_classes": per_task("failure_class"), "pairs": pairs,
                "by_target": aggregate_results(pairs),

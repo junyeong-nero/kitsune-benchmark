@@ -151,7 +151,9 @@ bridge or browser. `scripts/analyze-per-tool.py <out>` compares the two targets
 tool by tool (calls, errors, latency, response size, grouped error texts).
 The full-suite driver exits **3** after an invalid/incomplete track (nonzero exit,
 stopped reason, malformed summary, or incomplete coverage), once its active
-target processes have settled. It does not start later tracks or retry. Ordinary
+target processes have settled. It does not start later tracks or retry, except the
+setup retries that `--retry-setup-failures N` passes to the personal, gallery and
+coexistence entries ([Quota and stopping](#quota-and-stopping)). Ordinary
 scorable task failures still allow the suite to continue. Use a fresh output
 directory for each suite invocation; nonempty output directories are rejected.
 
@@ -396,7 +398,36 @@ Read [individual-run inputs](codex-harness.md#individual-run-inputs) first.
   (gallery 240, external live tasks 300).
   **There is no token-budget stop.** A timeout is not a fixed token allowance.
 - Setup/execution/unscorable failures stop further targets/tasks. Ordinary
-  scorable task failures do not. No automatic retry or model substitution occurs.
+  scorable task failures do not. No model substitution occurs, and by default no
+  retry. `--retry-setup-failures N` (personal, gallery, coexistence and
+  `scripts/run-full-suite.py`; default 0) retries one case only: a run recorded
+  as `execution_status: setup_failed` with `model_request_observed: false` and
+  `stopped_before_client_timeout: true`. The second field says the harness had
+  stopped the agent's client (`client_stopped_sec` after its launch) within
+  `client_tool_list_timeout_sec`, the shorter of the server's
+  `startup_timeout_sec` and the 60 s MCP request default. Its startup clock
+  cannot start before its launch, so it was stopped while it still waited for
+  its tool list, which it awaits before its first model request (the Claude
+  harness forces blocking MCP startup). That run therefore sent the model
+  nothing, so it has no outcome a rerun could select on (#121).
+  `model_request_observed: false` alone is not enough: a client that gave up on
+  `tools/list` may have started a model call without tools whose events were
+  not written yet. A later stop, or a run missing either field, is not retried.
+  The pair is rerun in place, before the next task, with a fresh
+  fixture, profile and ports, up to N times, and only while the budget still
+  covers a pair's worst case and the Kitsune revision is unchanged. The rerun
+  repeats the whole pair: a target that already completed in it (Playwright,
+  when Kitsune's setup failed in a sequential pair) is run again, and its earlier
+  run is discarded. Only the last attempt is scored. Each retry is recorded as
+  `setup_retries` (task, failed pair and run directories, target, the client
+  timing fields, the failed run's `error_detail`, and `discarded_runs`: each
+  rerun target's `run_dir`, `usage` and `list_price_cost_usd`) in the scored
+  pair's summary, the track summary and the entry's `suite-log.jsonl` line.
+  Discarded runs count toward `estimated_cost_usd` and `--budget-usd`, and the
+  plan's `worst_case_usd` counts every pair run 1 + N times. It never
+  retries a setup failure after a model request, a timeout, a session limit, a
+  harness error, an invalid trace or an unscorable evaluation. These, and a setup
+  failure once the retries run out, stop the track as before.
   The track's `stopped_reason` is `unscorable_pair`, or `session_limit` when a
   Claude Code run hit the subscription's session limit (its run summary records
   `api_error: usage_limit_reached`); that track is rerun after the reset (#69).
@@ -418,7 +449,9 @@ Read [individual-run inputs](codex-harness.md#individual-run-inputs) first.
   relay crashed without recording the failure. `model_request_observed` in the
   run summary says whether the events show a model request (usage, an assistant
   message, a turn or a tool call); when it is true the runner warns, and the
-  usage that was spent is reported as usual.
+  usage that was spent is reported as usual. `client_stopped_sec`,
+  `client_tool_list_timeout_sec` and `stopped_before_client_timeout` say whether
+  the client was stopped before it could have given up (#121).
   Successful runs are unchanged: setup still runs inside the agent run, so
   `elapsed_sec`, `timing.relay_setup_sec` and `elapsed_minus_relay_setup_sec`
   keep their meaning.
