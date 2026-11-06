@@ -31,7 +31,7 @@ to answer: the report says "no holds then (Kitsune < #364)" instead of warning.
 
 Cost beyond tokens (#108), per group and target on joint successes: Kitsune's cold-start setup and warm-ready time, CPU
 and sampled peak RSS (the pair's owner-filtered `setup` and `ready` phases, as in cost_metrics.pair_lifecycle), task
-CPU and time-weighted RSS (resources_task), and non-cached input next to total input. The caveats of
+CPU and time-weighted RSS (resources_task), and input excluding cache reads next to total input. The caveats of
 docs/resources.md apply: summed RSS is not unique memory, and concurrent targets share load.
 """
 from __future__ import annotations
@@ -259,10 +259,12 @@ def input_tokens(run: dict) -> int:
     return (run.get("usage") or {}).get("input_tokens") or 0
 
 
-def noncached_input_tokens(run: dict) -> int | None:
-    """Input not read from cache: total input minus cache reads. Codex's `uncached_input_tokens` (total minus cached);
-    for Claude, `uncached_input_tokens` (input after the last cache breakpoint, a few tokens) plus
-    `cache_creation_input_tokens` (cache writes). None when the run reported neither."""
+def input_excl_cache_read_tokens(run: dict) -> int | None:
+    """Input excluding cache reads: total input minus cache reads, so Claude's cache writes count. Codex's
+    `uncached_input_tokens` (total minus cached); for Claude, `uncached_input_tokens` (input after the last cache
+    breakpoint, a few tokens) plus `cache_creation_input_tokens` (cache writes). Not `uncached_input_tokens` itself
+    (personal_analysis's `noncached_input_tokens`), which leaves out Claude's cache writes. None when the run reported
+    neither."""
     usage = normalized_usage(run)
     if usage.get("uncached_input_tokens") is None:
         return None
@@ -332,7 +334,7 @@ def ratios(units: dict, keys=None) -> dict:
 def costs(units: dict) -> dict:
     """Per group and target, on joint successes: Kitsune's cold-start setup time and its pair's `setup` and `ready`
     phase resources (pair_lifecycle; Playwright starts its browser inside the task window and has neither), the task
-    window's resources (resources_task), and total and non-cached input, with coverage."""
+    window's resources (resources_task), and total input and input excluding cache reads, with coverage."""
     groups = collections.defaultdict(list)
     for key, runs in units.items():
         group = group_of(key[0])
@@ -351,7 +353,7 @@ def costs(units: dict) -> dict:
                 "ready": resource_cost([phases.get("ready") for phases in lifecycle]),
                 "resources_task": resource_cost([(run.get("resources") or {}).get("task") for run in runs]),
                 "input_tokens": total([(run.get("usage") or {}).get("input_tokens") for run in runs]),
-                "noncached_input_tokens": total([noncached_input_tokens(run) for run in runs])}
+                "input_excl_cache_read_tokens": total([input_excl_cache_read_tokens(run) for run in runs])}
     return out
 
 
@@ -669,10 +671,12 @@ def cost_lines(costs: dict) -> list[str]:
              "already running. Their CPU and sampled peak RSS are the pair's `setup` and `ready` phases filtered to the "
              "target's processes. Playwright starts its browser inside the task window and has no such phases (—). Task "
              "CPU is user + system CPU per measured task; task RSS is the task windows' mean RSS weighted by their "
-             "duration. Non-cached input is input not read from cache (Codex `uncached_input_tokens`; Claude "
-             "`uncached_input_tokens` + `cache_creation_input_tokens`). (n/m): only n of m runs reported the value.", "",
+             "duration. Input excl. cache reads is total input minus cache reads, so cache writes count: Codex "
+             "`uncached_input_tokens`; Claude `uncached_input_tokens` + `cache_creation_input_tokens`. It is not "
+             "`uncached_input_tokens`, which for Claude leaves out cache writes. (n/m): only n of m runs reported the "
+             "value.", "",
              "| Group | Target | Joint | Cold-start setup s | Warm-ready s | Setup / ready CPU s | "
-             "Setup / ready peak RSS MiB | Task CPU s | Task RSS MiB | Input | Non-cached input |",
+             "Setup / ready peak RSS MiB | Task CPU s | Task RSS MiB | Input | Input excl. cache reads |",
              "| --- | --- | ---: | ---: | ---: | --- | --- | ---: | ---: | ---: | ---: |"]
     for group, by_target in costs.items():
         for target, c in by_target.items():
@@ -684,7 +688,8 @@ def cost_lines(costs: dict) -> list[str]:
                          f"{both(mean_cell(setup['observed_cpu_sec']), mean_cell(ready['observed_cpu_sec']))} | "
                          f"{both(peak(setup), peak(ready))} | {mean_cell(task['observed_cpu_sec'])} | "
                          f"{rss_cell(task['time_weighted_mean_rss_bytes'], task['runs_with_mean_rss'], task['attempted'])} | "
-                         f"{mean_cell(c['input_tokens'], digits=0)} | {mean_cell(c['noncached_input_tokens'], digits=0)} |")
+                         f"{mean_cell(c['input_tokens'], digits=0)} | "
+                         f"{mean_cell(c['input_excl_cache_read_tokens'], digits=0)} |")
     return lines + ["", "Caveats (docs/resources.md): RSS is summed over the target's processes and counts shared memory "
                     "more than once; it is not unique memory (PSS, USS or physical footprint). Peaks are sampled peaks, "
                     "the largest of the runs'. Personal, gallery and external run both targets concurrently, so CPU and "

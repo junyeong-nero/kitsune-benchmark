@@ -489,7 +489,7 @@ class ReleaseReviewTests(unittest.TestCase):
             self.assertIn("the arm's input is 0.5× and its agent calls 0.5× default Kitsune's.", text)
 
     def test_cost_beyond_tokens_on_joint_successes(self):
-        # #108: cold-start and warm-ready phases, task resources and non-cached input per group and target.
+        # #108: cold-start and warm-ready phases, task resources and input excluding cache reads per group and target.
         with tempfile.TemporaryDirectory() as folder:
             mib = 1024 * 1024
             snap = ("snapshot", {}, '{"snapshot":"x"}', False)
@@ -540,13 +540,14 @@ class ReleaseReviewTests(unittest.TestCase):
             self.assertEqual(kitsune["ready"]["duration_sec"]["total"], 2)
             self.assertEqual(kitsune["resources_task"]["observed_cpu_sec_per_measured_task"], 3)
             self.assertEqual(kitsune["resources_task"]["time_weighted_mean_rss_bytes"], 1000 * mib, "weighted by duration")
-            self.assertEqual((kitsune["input_tokens"]["total"], kitsune["noncached_input_tokens"]["total"]), (2000, 400),
-                             "Claude: uncached input plus cache writes")
-            self.assertEqual(playwright["noncached_input_tokens"]["total"], 800, "Codex: total minus cached input")
+            self.assertEqual((kitsune["input_tokens"]["total"], kitsune["input_excl_cache_read_tokens"]["total"]),
+                             (2000, 400), "Claude: uncached input plus cache writes")
+            self.assertEqual(playwright["input_excl_cache_read_tokens"]["total"], 800, "Codex: total minus cached input")
             self.assertIsNone(playwright["cold_start_setup_sec"]["total"])
             self.assertIsNone(playwright["setup"]["observed_cpu_sec"]["total"])
             text = release.markdown(report, 1.10)
             self.assertIn("## Cost beyond tokens on joint successes", text)
+            self.assertIn("| Input | Input excl. cache reads |", text)
             self.assertIn("| personal | playwright | 2 | — | — | — | — | 7.0 | 825 | 1,000 | 400 |", text)
             self.assertIn("| personal | kitsune | 2 | 4.0 (1/2) | 1.0 | 2.0 / 0.5 | 6 / 4 | 3.0 | 1,000 | 1,000 | 200 |", text)
             self.assertIn("counts shared memory more than once", text)
