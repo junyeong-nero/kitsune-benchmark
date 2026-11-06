@@ -18,6 +18,7 @@ from .gallery import run_gallery
 from .personal import config as personal_config, pair_complete, run_personal, runnable_ids
 from .personal_session import ELICITATION_POLICIES
 from .coexistence import run_coexistence
+from .full_native import run_full_native, units as full_native_units
 from .hostile import run_hostile
 
 
@@ -108,6 +109,18 @@ def main(argv: list[str] | None = None) -> int:
     coexistence.add_argument("--kitsune-project")
     coexistence.add_argument("--targets", default="playwright,kitsune")
     coexistence.add_argument("--budget-usd", type=float)
+    full_native = subparsers.add_parser("full-native", help="Full-native track (#109): Kitsune only, KITSUNE_CAPS=core vs "
+                                        "KITSUNE_CAPS=all + KITSUNE_PUBLISH=core on the same units, no allowlist; "
+                                        "reported apart from the head-to-head; plan by default")
+    full_native.add_argument("--execute", action="store_true", help="Run the selected units in both arms; consumes "
+                             "subscription quota or API credit")
+    full_native.add_argument("--unit", action="append", dest="unit_ids",
+                             help="Unit ID (a pb-* task, or ui-table/crowded, ui-table/isolated); repeatable; default all "
+                                  f"{len(full_native_units())}")
+    full_native.add_argument("--variant", type=int, choices=(0, 1, 2), default=0)
+    full_native.add_argument("--codex", default="codex")
+    full_native.add_argument("--kitsune-project")
+    full_native.add_argument("--budget-usd", type=float)
     hostile = subparsers.add_parser("hostile", help="Hostile-UI capability matrix: real-web components x tool strategies, "
                                     "no model calls; plan by default")
     hostile.add_argument("--execute", action="store_true", help="Start isolated browsers and run the matrix (no model)")
@@ -119,18 +132,19 @@ def main(argv: list[str] | None = None) -> int:
                          help="Also run OS-input strategies (browser_trusted_click, Kitsune only); needs --headed and "
                               "moves the real pointer")
     hostile.add_argument("--out", help="Output directory (default artifacts/hostile/runs/<UTC time>)")
-    for child in (personal, gallery, coexistence):
+    for child in (personal, gallery, coexistence, full_native):
         child.add_argument("--elicitation", choices=ELICITATION_POLICIES, default="decline",
                            help="How the relay answers Kitsune's approval prompts during the agent's turn: decline "
                                 "(default) or accept; browser_ask_user prompts are always declined. Results under "
                                 "different policies are not comparable")
+    for child in (personal, gallery, coexistence):
         child.add_argument("--retry-setup-failures", type=int, default=0, metavar="N",
                            help="Rerun a whole pair in place, with a fresh profile and ports, up to N times while its "
                                 "run failed in session setup and its client was stopped before it could give up on its "
                                 "tool list (setup_failed, model_request_observed false, stopped_before_client_timeout "
                                 "true); recorded as setup_retries with the discarded runs. Default 0: no retry. "
                                 "Any other failure still stops the track")
-    for child in (smoke, benchmark, personal, gallery, coexistence):
+    for child in (smoke, benchmark, personal, gallery, coexistence, full_native):
         child.add_argument("--harness", choices=HARNESSES, default="claude",
                            help="Agent CLI. Default claude (Claude Code on the claude.ai subscription login; "
                                 "no API credit). codex (ChatGPT login). claude-api (Claude Code --bare, "
@@ -207,6 +221,15 @@ def main(argv: list[str] | None = None) -> int:
             if not args.execute:
                 return 0
             return 0 if result["completed_pairs"] == result["requested_pairs"] else 3
+        if args.command == "full-native":
+            result = run_full_native(execute=args.execute, unit_ids=args.unit_ids, variant=args.variant,
+                                     kitsune_project=args.kitsune_project, executable=executable,
+                                     harness=args.harness, budget_usd=args.budget_usd,
+                                     elicitation=args.elicitation, **overrides)
+            print(json.dumps(result, indent=2, ensure_ascii=False))
+            if not args.execute:
+                return 0
+            return 0 if result["completed_runs"] == result["requested_runs"] else 3
         if args.command == "hostile":
             result = run_hostile(execute=args.execute, component_ids=args.component_ids,
                                  targets=tuple(args.targets.split(",")), kitsune_project=args.kitsune_project,
