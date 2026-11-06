@@ -407,7 +407,12 @@ Read [individual-run inputs](codex-harness.md#individual-run-inputs) first.
   that request unanswered; the harness reads the failure from the relay's
   evidence file (`{target}-session-evidence.json`) and stops the client. The run
   is recorded as `execution_status: setup_failed` with `harness_error: true`, and
-  the track stops as `unscorable_pair`. The guarantee does not hold if the client
+  the track stops as `unscorable_pair`. Next to its generic `error` code, the
+  evidence records `error_detail`: the exception's type and message, then those
+  of its cause chain (for example `ValueError: User channel setup failed. <-
+  BidiError: Timed out waiting for the user's new tab.`). The runner copies it
+  into the run summary after `execution_status` and prints it in the track's
+  warning (#120). The guarantee does not hold if the client
   gave up on `tools/list` first (MCP clients time requests out, typically after
   about 60 s, while each native setup request may take up to 60 s) or if the
   relay crashed without recording the failure. `model_request_observed` in the

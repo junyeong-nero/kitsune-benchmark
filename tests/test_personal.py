@@ -9,7 +9,7 @@ import sys
 import tempfile
 import time
 import unittest
-from contextlib import ExitStack, contextmanager, redirect_stdout
+from contextlib import ExitStack, contextmanager, redirect_stderr, redirect_stdout
 from unittest.mock import Mock, patch
 from urllib.error import HTTPError
 from urllib.parse import urlencode
@@ -20,9 +20,11 @@ from kitsune_benchmark.personal import (PROTECTED_NOTE, USER_CHANNEL_PREFS, Pers
                                        config, incomplete_stop, run_personal, seeded_tab_custody, selected_tasks,
                                        user_channel_args)
 from kitsune_benchmark.bidi import BidiError
+from kitsune_benchmark import personal_session
 from kitsune_benchmark.personal_session import NativeSession, result_json, tabs_from_result
-from kitsune_benchmark.smoke import ROOT, await_bridge, copy_extension, private_ports, session_setup
-from kitsune_benchmark.adapter import resolve, terminate_group
+from kitsune_benchmark.smoke import (ROOT, await_bridge, copy_extension, private_ports, record_setup_failure,
+                                    session_setup)
+from kitsune_benchmark.adapter import resolve, terminate_group, write_json
 from kitsune_benchmark.runtime import codex_environment
 from kitsune_benchmark.specs import Server
 
@@ -1000,6 +1002,65 @@ for line in sys.stdin:
             for sensitive in ("private", "password", "credentials", "https://", "sk-"):
                 self.assertNotIn(sensitive, json.dumps(evidence))
 
+    def test_user_channel_timeout_error_detail_reaches_evidence_and_run_summary(self):
+        # #120: the relay keeps the generic code and adds the exception chain (error_detail); the runner copies it into
+        # the run summary next to execution_status and warns with it.
+        fake = '''import json, sys
+for line in sys.stdin:
+    message = json.loads(line)
+    tabs = {"tabs": [{"id": 0, "url": "about:blank", "active": True}]}
+    result = {"content": [{"type": "text", "text": json.dumps(tabs)}]}
+    print(json.dumps({"jsonrpc": "2.0", "id": message["id"], "result": result}), flush=True)
+'''
+        # The user's browser never shows the navigated page, and each clock reading is a second later, so the
+        # driver's 15 s wait runs out at once.
+        bidi = Mock()
+        bidi.command.return_value = {"contexts": [{"context": "chrome"}]}
+        bidi.evaluate.return_value = [{"focused": True, "tabs": [{"url": "about:blank", "selected": True,
+                                                                  "container": 0, "loading": False}]}]
+        clock = Mock()
+        clock.monotonic.side_effect = iter(range(10 ** 6))
+        expected = "ValueError: User channel setup failed. <- BidiError: Timed out waiting for the user's navigation."
+        with tempfile.TemporaryDirectory() as folder, tempfile.TemporaryFile("w+") as stderr:
+            root = Path(folder)
+            (root / "native.py").write_text(fake)
+            (root / "config.json").write_text(json.dumps({
+                "target": "kitsune", "upstream": [sys.executable, str(root / "native.py")],
+                "bootstrap_url": "http://local/t/start", "urls": ["http://local/t/article"], "active_index": 0,
+                "evidence_path": str(root / "evidence.json"), "seeding": "user_channel",
+                "user_driver": {"bidi_url": "ws://127.0.0.1:9"}}))
+            with patch("kitsune_benchmark.user_driver.Bidi", return_value=bidi), \
+                    patch("kitsune_benchmark.user_driver.time", clock), \
+                    patch.object(sys, "argv", ["personal_session.py", str(root / "config.json")]), \
+                    patch.object(sys, "stdin", io.StringIO(json.dumps({"id": 1, "method": "tools/list"}) + "\n")), \
+                    patch.object(sys, "stderr", stderr):  # a real file: the native server inherits it
+                self.assertEqual(personal_session.main(), 2)
+            evidence = json.loads((root / "evidence.json").read_text())
+            self.assertFalse(evidence["setup_complete"])
+            self.assertEqual(evidence["error"], "native_session_setup_or_inventory_failed")
+            self.assertEqual(evidence["error_detail"], expected)
+            run_dir = root / "runs" / "kitsune"
+            run_dir.mkdir(parents=True)
+            summary = {"schema_version": 1, "run_dir": str(run_dir), "execution_status": "setup_failed",
+                       "returncode": -15, "harness_error": True, "model_request_observed": False}
+            write_json(run_dir / "summary.json", summary)
+            warning = io.StringIO()
+            with redirect_stderr(warning):
+                result = record_setup_failure("kitsune", summary, root / "evidence.json")
+            saved = json.loads((run_dir / "summary.json").read_text())
+            for record in (result, saved):
+                self.assertEqual(record["error_detail"], expected)
+                keys = list(record)
+                self.assertEqual(keys[keys.index("execution_status") + 1], "error_detail")
+                self.assertEqual(record["execution_status"], "setup_failed")
+            self.assertIn("warning: kitsune session setup failed", warning.getvalue())
+            self.assertIn("BidiError: Timed out waiting for the user's navigation.", warning.getvalue())
+            # Without a recorded detail the warning and summaries are as before.
+            warning = io.StringIO()
+            with redirect_stderr(warning):
+                self.assertNotIn("error_detail", record_setup_failure("kitsune", summary, root / "absent.json"))
+            self.assertTrue(warning.getvalue().endswith("(model_request_observed: False)\n"))
+
     def test_relays_hold_the_tool_list_after_a_failed_setup_until_the_client_exits(self):
         # #56: the client must not get a tool list (and start the agent) after a failed setup; the harness stops it.
         fake = '''import json, sys
@@ -1045,7 +1106,9 @@ for line in sys.stdin:
                     relay.stdin.close()
                     self.assertEqual(relay.wait(timeout=10), 2)
                     self.assertEqual(relay.stdout.read(), "")
-                    self.assertEqual(json.loads((root / "evidence.json").read_text())["error"], error)
+                    evidence = json.loads((root / "evidence.json").read_text())
+                    self.assertEqual(evidence["error"], error)
+                    self.assertRegex(evidence["error_detail"], r"^ValueError: \S")  # the cause behind the code (#120)
                 finally:
                     if relay.poll() is None:
                         relay.kill()

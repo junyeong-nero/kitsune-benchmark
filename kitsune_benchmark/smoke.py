@@ -123,6 +123,31 @@ def session_setup(evidence_path: Path) -> bool | None:
     return False if evidence.get("error") else None
 
 
+def with_error_detail(summary: dict, detail: str) -> dict:
+    """The run summary with error_detail right after its execution_status."""
+    items = list(summary.items())
+    after = list(summary).index("execution_status") + 1
+    return dict(items[:after] + [("error_detail", detail)] + items[after:])
+
+
+def record_setup_failure(target: str, result: dict, evidence_path: Path | None) -> dict:
+    """A setup_failed run (#56): copy the relay's evidence error_detail (#120: the setup exception and its cause chain)
+    into the run summary (the result and the run's summary.json) and warn with it. Returns the updated result."""
+    try:
+        detail = json.loads(evidence_path.read_text()).get("error_detail") if evidence_path is not None else None
+    except (OSError, ValueError, AttributeError):
+        detail = None
+    detail = detail if isinstance(detail, str) else None
+    if detail is not None:
+        result = with_error_detail(result, detail)
+        run_summary = Path(result["run_dir"]) / "summary.json"
+        rewrite_json(run_summary, with_error_detail(json.loads(run_summary.read_text()), detail))
+    print(f"warning: {target} session setup failed; the harness was stopped "
+          f"(model_request_observed: {result.get('model_request_observed')})"
+          + (f": {detail}" if detail is not None else ""), file=sys.stderr)
+    return result
+
+
 def relay_evidence_path(server: Server) -> Path:
     """The evidence file a session relay records its setup in, from the relay config prepare_server wrote (#56)."""
     try:
@@ -331,8 +356,7 @@ def run_pair(*, execute: bool = False, kitsune_project: str | None = None,
                              harness=harness, effort=effort, max_budget_usd=max_budget_usd,
                              session_setup=partial(session_setup, evidence) if evidence is not None else None)
                 if result["execution_status"] == "setup_failed":
-                    print(f"warning: {target} session setup failed; the harness was stopped "
-                          f"(model_request_observed: {result.get('model_request_observed')})", file=sys.stderr)
+                    result = record_setup_failure(target, result, evidence)
                 result["viewport"] = observed_viewport(viewports[target],
                                                        viewport_reports(target) if viewport_reports else None)
                 run_manifest = Path(result["run_dir"]) / "manifest.json"
