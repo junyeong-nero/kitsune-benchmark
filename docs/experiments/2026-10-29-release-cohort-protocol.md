@@ -90,7 +90,7 @@ orders" section adds, per group:
   only when Kitsune's successes minus Playwright's are on the same side of 0 in both orders. Otherwise it says
   "no claim";
 - per-unit spread: the units whose success changed between attempts, and each unit's Kitsune/Playwright input ratio
-  in attempt 1 and 2, with the median and largest difference.
+  in attempt 1 and 2 where both targets succeeded, with the median and largest difference.
 
 Resource measures from a sequential cohort are not comparable with those of a concurrent one. A difference between
 releases is still an observation (see the rules below).

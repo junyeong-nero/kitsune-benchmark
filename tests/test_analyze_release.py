@@ -551,6 +551,9 @@ class ReleaseReviewTests(unittest.TestCase):
             self.assertIn("| personal | playwright | 2 | — | — | — | — | 7.0 | 825 | 1,000 | 400 |", text)
             self.assertIn("| personal | kitsune | 2 | 4.0 (1/2) | 1.0 | 2.0 / 0.5 | 6 / 4 | 3.0 | 1,000 | 1,000 | 200 |", text)
             self.assertIn("counts shared memory more than once", text)
+            self.assertIn("personal ran both targets concurrently, so CPU and time are measured under shared load.",
+                          text)
+            self.assertNotIn("one after the other", text)
 
     def test_counterbalanced_attempts_spread_order_ratios_and_claims(self):
         # #107: --attempts 2 --order abba --sequential; attempt 1 runs ab (Playwright first), attempt 2 ba.
@@ -604,12 +607,18 @@ class ReleaseReviewTests(unittest.TestCase):
                              {"units": 2, "success_changed": {"playwright": 0, "kitsune": 1},
                               "median_input_ratio_spread": 0.1, "max_input_ratio_spread": 0.1})
             pb_b = next(u for u in spread["units"] if u["task"] == "pb-b")
-            self.assertEqual((pb_b["orders"], pb_b["input_ratio"], pb_b["success"]["kitsune"]),
-                             (["ab", "ba"], [0.7, 0.6], [False, True]))
+            # Kitsune failed pb-b in attempt 1: no input ratio there, so no spread.
+            self.assertEqual((pb_b["orders"], pb_b["input_ratio"], pb_b["input_ratio_spread"]),
+                             (["ab", "ba"], [None, 0.6], None))
+            self.assertEqual(pb_b["success"]["kitsune"], [False, True])
             self.assertEqual(spread["groups"]["gallery-crowded"]["max_input_ratio_spread"], 0.4)
 
             text = release.markdown(report, 1.10)
-            self.assertIn("- Attempts: 2. The audit covers every attempt; the other sections read attempt 1 only", text)
+            self.assertIn("## Audit (all attempts)", text)
+            self.assertIn("- Attempts: 2. This audit pools every attempt; the other sections read attempt 1 only", text)
+            self.assertIn("personal (ab), gallery-crowded (ab) ran the targets one after the other in the given order, "
+                          "without shared load", text)
+            self.assertNotIn("concurrently", text)
             self.assertIn("## Attempts and execution orders", text)
             self.assertIn("Attempts: 1 ab; 2 ba.", text)
             self.assertIn("| personal | ab | 2 | 2 / 1 | 1 | 0.8 | 0.8 | 1.0 | 1.0 |", text)
@@ -617,7 +626,7 @@ class ReleaseReviewTests(unittest.TestCase):
             self.assertIn("| gallery-crowded | no claim | no claim | no claim | no claim | no claim |", text)
             self.assertIn("| personal | 2 | 0 / 1 | 0.1 | 0.1 |", text)
             self.assertIn("| ui-a (gallery-crowded-v0) | ab / ba | 0.9 / 1.3 | 0.4 | yes / yes | yes / yes |", text)
-            self.assertIn("| pb-b (personal-v0) | ab / ba | 0.7 / 0.6 | 0.1 | yes / yes | no / yes |", text)
+            self.assertIn("| pb-b (personal-v0) | ab / ba | — / 0.6 | — | yes / yes | no / yes |", text)
 
     def test_single_attempt_suite_has_no_attempts_section(self):
         with tempfile.TemporaryDirectory() as folder:

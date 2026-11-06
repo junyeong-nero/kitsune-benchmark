@@ -38,7 +38,8 @@ A suite of several attempts (run-full-suite.py --attempts 2 --order abba --seque
 attempt and the other sections read the first. "Attempts and execution orders" then gives, per group, successes and
 ratios in each execution order (ab: Playwright first, ba: Kitsune first) and over all attempts, and a claim only when
 ab and ba agree (ratios on the same side of 1, Kitsune's successes minus Playwright's on the same side of 0), plus each
-unit's spread between attempts: whether its success changed and its Kitsune/Playwright input ratio in each attempt.
+unit's spread between attempts: whether its success changed and its Kitsune/Playwright input ratio in each attempt where
+both targets succeeded.
 """
 from __future__ import annotations
 
@@ -358,7 +359,8 @@ def ratios(units: dict, keys=None) -> dict:
 def costs(units: dict) -> dict:
     """Per group and target, on joint successes: Kitsune's cold-start setup time and its pair's `setup` and `ready`
     phase resources (pair_lifecycle; Playwright starts its browser inside the task window and has neither), the task
-    window's resources (resources_task), and total input and input excluding cache reads, with coverage."""
+    window's resources (resources_task), total input and input excluding cache reads, with coverage, and the
+    execution orders the runs came from (ab, ba, or parallel for targets run concurrently)."""
     groups = collections.defaultdict(list)
     for key, runs in units.items():
         group = group_of(key[0])
@@ -377,7 +379,8 @@ def costs(units: dict) -> dict:
                 "ready": resource_cost([phases.get("ready") for phases in lifecycle]),
                 "resources_task": resource_cost([(run.get("resources") or {}).get("task") for run in runs]),
                 "input_tokens": total([(run.get("usage") or {}).get("input_tokens") for run in runs]),
-                "input_excl_cache_read_tokens": total([input_excl_cache_read_tokens(run) for run in runs])}
+                "input_excl_cache_read_tokens": total([input_excl_cache_read_tokens(run) for run in runs]),
+                "orders": sorted({run.get("order") or "parallel" for run in runs})}
     return out
 
 
@@ -704,9 +707,9 @@ def orders(pooled: dict) -> dict:
 
 
 def spread(pooled: dict) -> dict:
-    """Per unit run in more than one attempt: each target's success and the Kitsune/Playwright input ratio in each
-    attempt, and the ratio's spread (largest minus smallest). Per group: those units, the units whose success changed
-    between attempts, by target, and the median and largest spread."""
+    """Per unit run in more than one attempt: each target's success, the Kitsune/Playwright input ratio in each
+    attempt where both targets succeeded (None otherwise), and the ratio's spread (largest minus smallest). Per group:
+    those units, the units whose success changed between attempts, by target, and the median and largest spread."""
     by_unit: dict = collections.defaultdict(dict)
     for (entry, task, attempt), runs in pooled.items():
         by_unit[(entry, task)][attempt] = runs
@@ -717,7 +720,7 @@ def spread(pooled: dict) -> dict:
             continue
         ordered = [attempts[attempt] for attempt in sorted(attempts)]
         input_ratio = [round(input_tokens(runs["kitsune"]) / input_tokens(runs["playwright"]), 3)
-                       if all(t in runs for t in TARGETS) and input_tokens(runs["playwright"]) else None
+                       if all(solved(runs.get(t)) for t in TARGETS) and input_tokens(runs["playwright"]) else None
                        for runs in ordered]
         measured = [value for value in input_ratio if value is not None]
         row = {"entry": entry, "task": task, "attempts": sorted(attempts),
@@ -809,12 +812,21 @@ def cost_lines(costs: dict) -> list[str]:
                          f"{rss_cell(task['time_weighted_mean_rss_bytes'], task['runs_with_mean_rss'], task['attempted'])} | "
                          f"{mean_cell(c['input_tokens'], digits=0)} | "
                          f"{mean_cell(c['input_excl_cache_read_tokens'], digits=0)} |")
-    return lines + ["", "Caveats (docs/resources.md): RSS is summed over the target's processes and counts shared memory "
-                    "more than once; it is not unique memory (PSS, USS or physical footprint). Peaks are sampled peaks, "
-                    "the largest of the runs'. Personal, gallery and external run both targets concurrently, so CPU and "
-                    "time are measured under shared load. Kitsune's task window includes its already-running browser "
-                    "and bridge, Playwright's includes its browser launch: this is not a cold-versus-reused-session "
-                    "comparison. Remote model inference is not measured."]
+    orders = {group: sorted({order for c in by_target.values() for order in c["orders"]})
+              for group, by_target in costs.items()}
+    concurrent = [group for group, seen in orders.items() if "parallel" in seen]
+    ordered = [f"{group} ({' / '.join(o for o in seen if o != 'parallel')})"
+               for group, seen in orders.items() if any(o != "parallel" for o in seen)]
+    layout = ([f"{', '.join(concurrent)} ran both targets concurrently, so CPU and time are measured under shared "
+               "load."] if concurrent else []) + ([
+        f"{', '.join(ordered)} ran the targets one after the other in the given order, without shared load, so "
+        "their CPU and time are not comparable with concurrent runs'."] if ordered else [])
+    return lines + ["", " ".join([
+        "Caveats (docs/resources.md): RSS is summed over the target's processes and counts shared memory more than "
+        "once; it is not unique memory (PSS, USS or physical footprint). Peaks are sampled peaks, the largest of the "
+        "runs'.", *layout, "Kitsune's task window includes its already-running browser and bridge, Playwright's "
+        "includes its browser launch: this is not a cold-versus-reused-session comparison. Remote model inference is "
+        "not measured."])]
 
 
 def attempt_lines(attempts: dict) -> list[str]:
@@ -838,8 +850,8 @@ def attempt_lines(attempts: dict) -> list[str]:
         lines.append(f"| {group} | " + " | ".join(row["claims"][key] or "no claim" for key in ("successes", *ORDER_METRICS))
                      + " |")
     s = attempts["spread"]
-    lines += ["", "Per-unit spread between attempts: the Kitsune/Playwright input ratio of each attempt, largest minus "
-              "smallest.", "",
+    lines += ["", "Per-unit spread between attempts: the Kitsune/Playwright input ratio of each attempt where both "
+              "targets succeeded, largest minus smallest; — where one of them failed.", "",
               "| Group | Units in more than one attempt | Success changed PW / K | Median input-ratio spread | Largest |",
               "| --- | ---: | --- | ---: | ---: |"]
     for group, g in s["groups"].items():
@@ -855,7 +867,8 @@ def attempt_lines(attempts: dict) -> list[str]:
     for u in shown:
         yes = lambda values: " / ".join("yes" if value else "no" for value in values)
         lines.append(f"| {u['task']} ({u['entry']}) | {' / '.join(o or 'parallel' for o in u['orders'])} | "
-                     f"{' / '.join(str(v) for v in u['input_ratio'])} | {u['input_ratio_spread']} | "
+                     f"{' / '.join('—' if v is None else str(v) for v in u['input_ratio'])} | "
+                     f"{'—' if u['input_ratio_spread'] is None else u['input_ratio_spread']} | "
                      f"{yes(u['success']['playwright'])} | {yes(u['success']['kitsune'])} |")
     return lines
 
@@ -867,7 +880,7 @@ def markdown(report: dict, threshold: float) -> str:
              "(assistant message id): one sent in the same request as the call before it had not seen that call's result "
              "and cost no request; one in the next request cost a request. Reviews before #124 counted both together and "
              "did not count `tabs new` with a URL as navigating, so their numbers are not comparable with these.", "",
-             "## Audit", "",
+             "## Audit" + (" (all attempts)" if "attempts" in report else ""), "",
              f"- Elicitation policy: {policy_label(report['elicitation'], report['elicitation_source'])}",
              f"- Runs: {a.get('runs', 0)}; scorable {a.get('scorable', 0)}; "
              + ", ".join(f"{k.split(':', 1)[1]} {v}" for k, v in a.items() if k.startswith("status:")),
@@ -875,7 +888,7 @@ def markdown(report: dict, threshold: float) -> str:
              f"allowlisted tools {a.get('missing_allowlisted_tools', 0)} (none published "
              f"{a.get('no_allowlisted_tools', 0)}); models {a['models']}",
              f"- Personal content viewport asserted: {a.get('personal_viewport_asserted', 0)}/{a.get('personal_runs', 0)}",
-             *([f"- Attempts: {len(report['attempts']['orders'])}. The audit covers every attempt; the other sections "
+             *([f"- Attempts: {len(report['attempts']['orders'])}. This audit pools every attempt; the other sections "
                 f"read attempt {next(iter(report['attempts']['orders']))} only, except \"Attempts and execution "
                 "orders\", which reads them all."] if "attempts" in report else []),
              "", "## Outcomes", "", "| Group | Units | Playwright | Kitsune | Misses |", "| --- | ---: | ---: | ---: | --- |"]
