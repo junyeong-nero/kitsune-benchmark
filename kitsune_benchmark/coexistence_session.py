@@ -36,7 +36,7 @@ import time
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from kitsune_benchmark.bidi import BidiError  # noqa: E402
-from kitsune_benchmark.personal_session import NativeSession, result_json  # noqa: E402
+from kitsune_benchmark.personal_session import NativeSession, error_detail, result_json  # noqa: E402
 from kitsune_benchmark.user_driver import LinkOpeningUser, TypingUser, UserDriver, ViewSampler  # noqa: E402
 
 # kitsune#393: a write on a user tab, and a write on an agent tab the user is typing in.
@@ -281,8 +281,9 @@ def main() -> int:
             if line.strip():
                 session.forward(json.loads(line), emit)
         return 0
-    except (OSError, ValueError, KeyError, TypeError):
+    except (OSError, ValueError, KeyError, TypeError) as error:
         session.evidence["error"] = "coexistence_session_setup_or_inventory_failed"
+        session.evidence["error_detail"] = error_detail(error)
         session.save()
         print("Coexistence fixture MCP setup/inventory failed; inspect private artifacts.", file=sys.stderr)
         session.hold_failed_setup()

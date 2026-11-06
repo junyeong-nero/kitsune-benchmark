@@ -5,6 +5,7 @@ The UI-only boundary is an experimental protocol, not an adversarial sandbox.
 """
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from html import escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -681,11 +682,13 @@ def run_personal(*, execute: bool = False, task_ids: list[str] | None = None, va
                  harness: str = "codex", budget_usd: float | None = None,
                  kitsune_preset: str | None = None, targets: tuple[str, ...] = TARGETS,
                  claude_model: str | None = None, max_budget_usd_per_run: float | None = None,
-                 codex_model: str | None = None, elicitation: str = "decline") -> dict:
+                 codex_model: str | None = None, elicitation: str = "decline",
+                 retry_setup_failures: int = 0) -> dict:
     if type(variant) is not int or variant not in range(3):
         raise ValueError("Variant must be 0, 1 or 2.")
     if elicitation not in ELICITATION_POLICIES:
         raise ValueError("Unknown elicitation policy.")
+    retries = retry_count(retry_setup_failures)
     tasks = selected_tasks(task_ids)
     spec = with_claude_overrides(config(), claude_model, max_budget_usd_per_run, codex_model)
     model, _ = harness_pins(spec, harness)
@@ -701,7 +704,8 @@ def run_personal(*, execute: bool = False, task_ids: list[str] | None = None, va
         return {"mode": "personal_plan_only", "model_invoked": False, "config": spec,
                 "harness": harness, "model": model, "targets": list(targets), "kitsune_tool_preset": kitsune_preset,
                 "elicitation": elicitation, "max_budget_usd_per_run": per_run, "suite_budget_usd": budget_usd,
-                "worst_case_usd": runs_per_pair * len(tasks) * per_run if per_run else None,
+                "retry_setup_failures": retries,
+                "worst_case_usd": (1 + retries) * runs_per_pair * len(tasks) * per_run if per_run else None,  # with retries (#121)
                 "variant": variant, "seeding": "user_channel", "selected_tasks": tasks,
                 "planned_model_runs": runs_per_pair * len(tasks),
                 "catalog_tasks": len(catalog()["tasks"]), "runnable_tasks": len(runnable_ids()),
@@ -725,24 +729,33 @@ def run_personal(*, execute: bool = False, task_ids: list[str] | None = None, va
         experiment = {**spec, "selected_task": task, "variant": variant, "elicitation": elicitation,
                       "seeding": "user_channel",
                       "catalog_sha256": hashlib.sha256((ROOT / spec["catalog"]).read_bytes()).hexdigest()}
-        with PersonalServer(task, variant, report_viewport=True, elicitation=elicitation, user_channel=True) as fixture:
-            pair = run_pair(execute=True, kitsune_project=kitsune_project, executable=executable,
-                experiment_spec=experiment, artifact_scope="personal", task_for_target=fixture.begin,
-                prepare_server=fixture.prepare_server, evaluate=fixture.evaluate, enabled_tools=UI_TOOLS,
-                harness=harness, kitsune_preset=kitsune_preset, targets=targets,
-                kitsune_firefox_args=user_channel_args(fixture.bidi_ports["kitsune"]),
-                kitsune_firefox_prefs=USER_CHANNEL_PREFS,
-                viewport_reports=fixture.viewport_reports, equalize_kitsune_viewport=True)
-        pair["personal_task"] = task["id"]
-        pair["variant"] = variant
-        pair["elicitation"] = elicitation
-        pair["kitsune_source_after"] = source_revision(project)
-        write_json(Path(pair["pair_dir"]) / "personal-summary.json", pair)
+
+        def attempt(setup_retries: list[dict]) -> dict:
+            nonlocal spent
+            with PersonalServer(task, variant, report_viewport=True, elicitation=elicitation, user_channel=True) as fixture:
+                pair = run_pair(execute=True, kitsune_project=kitsune_project, executable=executable,
+                    experiment_spec=experiment, artifact_scope="personal", task_for_target=fixture.begin,
+                    prepare_server=fixture.prepare_server, evaluate=fixture.evaluate, enabled_tools=UI_TOOLS,
+                    harness=harness, kitsune_preset=kitsune_preset, targets=targets,
+                    kitsune_firefox_args=user_channel_args(fixture.bidi_ports["kitsune"]),
+                    kitsune_firefox_prefs=USER_CHANNEL_PREFS,
+                    viewport_reports=fixture.viewport_reports, equalize_kitsune_viewport=True)
+            pair["personal_task"] = task["id"]
+            pair["variant"] = variant
+            pair["elicitation"] = elicitation
+            pair["kitsune_source_after"] = source_revision(project)
+            pair["setup_retries"] = setup_retries
+            write_json(Path(pair["pair_dir"]) / "personal-summary.json", pair)
+            if per_run is not None:
+                # Missing cost reports count as the full cap, so the running total never undercounts.
+                spent += sum(r.get("list_price_cost_usd") if isinstance(r.get("list_price_cost_usd"), (int, float))
+                             else per_run for r in pair["results"].values())
+            return pair
+
+        pair = run_with_setup_retries(attempt, targets=targets, task_id=task["id"], retries=retries,
+            may_retry=lambda failed: failed["kitsune_source_after"] == source and (
+                budget_usd is None or spent + runs_per_pair * per_run <= budget_usd))
         pairs.append(pair)
-        if per_run is not None:
-            # Missing cost reports count as the full cap, so the running total never undercounts.
-            spent += sum(r.get("list_price_cost_usd") if isinstance(r.get("list_price_cost_usd"), (int, float))
-                         else per_run for r in pair["results"].values())
         if pair["kitsune_source_after"] != source:
             stopped = "kitsune_revision_changed"
             break
@@ -760,6 +773,7 @@ def run_personal(*, execute: bool = False, task_ids: list[str] | None = None, va
                "estimated_cost_usd": round(spent, 6) if per_run is not None else None,
                "suite_budget_usd": budget_usd, "max_budget_usd_per_run": per_run,
                "completed_pairs": sum(pair_complete(p, targets) for p in pairs),
+               "retry_setup_failures": retries, "setup_retries": [r for p in pairs for r in p["setup_retries"]],
                "pairs": pairs,
                "by_target": aggregate_results(pairs),
                "by_category": {category: aggregate_results([p for p in pairs if
@@ -781,3 +795,57 @@ def incomplete_stop(pair: dict) -> str:
 def pair_complete(pair: dict, targets: tuple[str, ...] = TARGETS) -> bool:
     return set(pair["results"]) == set(targets) and all(
         r.get("benchmark_evaluation", {}).get("scorable") for r in pair["results"].values())
+
+
+def retry_count(retry_setup_failures: int) -> int:
+    """--retry-setup-failures N: a non-negative int (0, the default, never retries)."""
+    if type(retry_setup_failures) is not int or retry_setup_failures < 0:
+        raise ValueError("--retry-setup-failures must be a non-negative integer.")
+    return retry_setup_failures
+
+
+def setup_retry(pair: dict, targets: tuple[str, ...], task_id: str) -> dict | None:
+    """The setup_retries record for an incomplete pair whose only unscorable run is setup_failed, with
+    model_request_observed false and stopped_before_client_timeout true (#121): the client was stopped before it could
+    have given up on its tool list and started a model call without tools, so the model never saw the task and
+    rerunning the pair cannot select on outcomes. None for any other pair, including when either field is missing.
+
+    discarded_runs records the pair's other runs, which a rerun repeats: their run_dir, usage and list_price_cost_usd."""
+    if pair_complete(pair, targets):
+        return None
+    failed = [(target, result) for target, result in pair["results"].items()
+              if not result.get("benchmark_evaluation", {}).get("scorable")]
+    if len(failed) != 1:
+        return None
+    target, result = failed[0]
+    if (result.get("execution_status") != "setup_failed" or result.get("model_request_observed") is not False
+            or result.get("stopped_before_client_timeout") is not True):
+        return None
+    return {"task": task_id, "pair_dir": pair["pair_dir"], "target": target, "run_dir": result.get("run_dir"),
+            "execution_status": "setup_failed", "model_request_observed": False,
+            "client_stopped_sec": result.get("client_stopped_sec"),
+            "client_tool_list_timeout_sec": result.get("client_tool_list_timeout_sec"),
+            "error_detail": result.get("error_detail"),
+            "discarded_runs": {other: {"run_dir": run.get("run_dir"), "usage": run.get("usage"),
+                                       "list_price_cost_usd": run.get("list_price_cost_usd")}
+                               for other, run in pair["results"].items() if other != target}}
+
+
+def run_with_setup_retries(attempt: Callable[[list[dict]], dict], *, targets: tuple[str, ...], task_id: str,
+                           retries: int, may_retry: Callable[[dict], bool]) -> dict:
+    """One track pair, rerun in place up to `retries` times while setup_retry accepts it (#121).
+
+    attempt(setup_retries) runs the pair with a fresh fixture, profile and ports, records the earlier failed attempts
+    as its setup_retries and writes its pair summary. may_retry(pair) says whether the budget and the Kitsune revision
+    still allow another attempt. The last attempt is returned; once retries run out it is the failed pair, as today."""
+    setup_retries: list[dict] = []
+    while True:
+        pair = attempt(list(setup_retries))
+        record = setup_retry(pair, targets, task_id)
+        if record is None or len(setup_retries) >= retries or not may_retry(pair):
+            return pair
+        setup_retries.append(record)
+        discarded = f", discarding its {', '.join(record['discarded_runs'])} run" if record["discarded_runs"] else ""
+        print(f"warning: {task_id} {record['target']} setup failed before any model request; rerunning the pair"
+              f"{discarded} (setup retry {len(setup_retries)} of {retries})"
+              + (f": {record['error_detail']}" if record["error_detail"] else ""), file=sys.stderr)

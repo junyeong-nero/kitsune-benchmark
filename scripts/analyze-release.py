@@ -28,6 +28,18 @@ suite-manifest.json, else from what its pairs recorded (summary, pair manifest, 
 different policies, or against a suite that recorded none, are not comparable: --compare still computes them and the
 report warns. An earlier suite that recorded none and ran a Kitsune from before its holds (kitsune#364) had no prompt
 to answer: the report says "no holds then (Kitsune < #364)" instead of warning.
+
+Cost beyond tokens (#108), per group and target on joint successes: Kitsune's cold-start setup and warm-ready time, CPU
+and sampled peak RSS (the pair's owner-filtered `setup` and `ready` phases, as in cost_metrics.pair_lifecycle), task
+CPU and time-weighted RSS (resources_task), and input excluding cache reads next to total input. The caveats of
+docs/resources.md apply: summed RSS is not unique memory, and concurrent targets share load.
+
+A suite of several attempts (run-full-suite.py --attempts 2 --order abba --sequential, #107): the audit covers every
+attempt and the other sections read the first. "Attempts and execution orders" then gives, per group, successes and
+ratios in each execution order (ab: Playwright first, ba: Kitsune first) and over all attempts, and a claim only when
+ab and ba agree (ratios on the same side of 1, Kitsune's successes minus Playwright's on the same side of 0), plus each
+unit's spread between attempts: whether its success changed and its Kitsune/Playwright input ratio in each attempt where
+both targets succeeded.
 """
 from __future__ import annotations
 
@@ -40,6 +52,8 @@ import statistics
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from kitsune_benchmark.cost_metrics import (load_pair_resource_phases, normalized_usage, resource_cost,  # noqa: E402
+                                            total)
 from kitsune_benchmark.holds import DECISIONS, DETAILS, aggregate_holds, hold_metrics  # noqa: E402
 from kitsune_benchmark.holds import NAVIGATIONS as BROWSER_NAVIGATIONS  # noqa: E402
 
@@ -57,7 +71,11 @@ USER_SEEDINGS = ("user_channel", "user_bidi")
 # Kitsune-only coexistence arms, compared with default Kitsune on the user-seeded entry: coexistence-local-v2's
 # unprotected arm (user tabs writable) and coexistence-local-v1's protect arm.
 KITSUNE_ARMS = ("coexistence-unprotected", "coexistence-protect")
-SIGNAL_COUNTS = ("runs", "runs_second_call_tabs_select", "runs_own_tab_before_first_write", "snapshots_after_navigation",
+MIB = 1024 * 1024
+# Kitsune/Playwright ratios compared across execution orders (#107).
+ORDER_METRICS = ("input", "output", "mcp_calls", "elapsed")
+SIGNAL_COUNTS = ("runs", "runs_second_call_tabs_select", "runs_own_tab_before_first_write",
+                 "snapshots_after_navigation_same_request", "snapshots_after_navigation_next_request",
                  "snapshot_after_navigation_chars", "unchanged_since", "wait_for_text", "wait_for_text_under_50ms",
                  "wait_for_with_delta", "wait_for_without_delta")
 
@@ -73,21 +91,49 @@ def group_of(entry: str) -> str | None:
     return entry
 
 
-def load(suite_dir: str | Path) -> dict:
-    """{(entry, task): {target: run}} from suite-log.jsonl and the per-track suite summaries."""
+def suite_attempts(suite_dir: str | Path) -> dict:
+    """{attempt: execution orders} from suite-log.jsonl. Entries before #16 have no attempt and are attempt 1; an
+    entry's order is ab (Playwright first), ba (Kitsune first) or None (targets in parallel)."""
+    attempts: dict = {}
+    for line in (Path(suite_dir) / "suite-log.jsonl").read_text().splitlines():
+        entry = json.loads(line)
+        orders = attempts.setdefault(entry.get("attempt") or 1, [])
+        if entry.get("order") not in orders:
+            orders.append(entry.get("order"))
+    return dict(sorted(attempts.items()))
+
+
+def load(suite_dir: str | Path, attempt: int | None = None) -> dict:
+    """{(entry, task): {target: run}} from suite-log.jsonl and the per-track suite summaries, over one attempt when
+    given. Each run records its entry's attempt and execution order."""
     units: dict = collections.defaultdict(dict)
     for line in (Path(suite_dir) / "suite-log.jsonl").read_text().splitlines():
         entry = json.loads(line)
         path = entry.get("suite_summary_path")
-        if not path:
+        if not path or (attempt is not None and (entry.get("attempt") or 1) != attempt):
             continue
         summary = json.loads(Path(path).read_text())
         for pair in summary.get("pairs", []):
             task = (pair.get("personal_task") or pair.get("gallery_task") or pair.get("coexistence_task")
                     or pair.get("external_task") or "?")
             for target, run in pair["results"].items():
-                units[(entry["name"], task)][target] = {**run, "pair_dir": pair.get("pair_dir")}
+                units[(entry["name"], task)][target] = {**run, "pair_dir": pair.get("pair_dir"),
+                                                        "pair_lifecycle": pair_lifecycle(pair, target),
+                                                        "attempt": entry.get("attempt") or 1,
+                                                        "order": entry.get("order")}
     return units
+
+
+def pair_lifecycle(pair: dict, target: str) -> dict:
+    """A target's share of its pair's lifecycle, as in cost_metrics.pair_lifecycle: Kitsune's cold-start setup wall time
+    (`timing.kitsune_cold_start_setup_sec`) and the owner-filtered `setup` and `ready` phase resources. Old pairs
+    without inline phases are read from their resource-summary.json; absent files and fields stay None."""
+    try:
+        phases = (load_pair_resource_phases(pair).get("resource_phases") or {}).get(target) or {}
+    except (OSError, ValueError):
+        phases = {}
+    cold_start = (pair.get("timing") or {}).get("kitsune_cold_start_setup_sec") if target == "kitsune" else None
+    return {"cold_start_setup_sec": cold_start, "setup": phases.get("setup"), "ready": phases.get("ready")}
 
 
 def pair_policy(pair: dict) -> str | None:
@@ -167,27 +213,36 @@ def policy_label(policy: str | None, source: str | None) -> str:
     return "none recorded" if policy is None else policy if source == "suite-manifest" else f"{policy} (from {source})"
 
 
-def tool_calls(run: dict) -> list[tuple[str, dict, str, bool]]:
-    """(tool, arguments, result text, is_error) in order, from the run's Claude Code stream."""
+def tool_calls(run: dict) -> list[tuple[str, dict, str, bool, str | None]]:
+    """(tool, arguments, result text, is_error, request) in order, from the run's Claude Code stream. The request is
+    the model request that sent the call: its assistant message id, as in analyze-model-rounds.py, or the event's line
+    for a message without an id."""
     events = Path(run.get("run_dir") or "") / "events.jsonl"
     if not events.is_file():
         return []
     pending, out = {}, []
-    for line in events.read_text(errors="ignore").splitlines():
+    for number, line in enumerate(events.read_text(errors="ignore").splitlines()):
         try:
             event = json.loads(line)
         except ValueError:
             continue
-        content = (event.get("message") or {}).get("content")
+        message = event.get("message") or {}
+        content = message.get("content")
         for block in content if isinstance(content, list) else []:
             if block.get("type") == "tool_use":
-                pending[block["id"]] = (block["name"].split("__")[-1].replace("browser_", ""), block.get("input") or {})
+                pending[block["id"]] = (block["name"].split("__")[-1].replace("browser_", ""), block.get("input") or {},
+                                        message.get("id") or f"line {number}")
             elif block.get("type") == "tool_result":
                 raw = block.get("content")
                 text = raw if isinstance(raw, str) else " ".join(i.get("text", "") for i in raw or [] if isinstance(i, dict))
-                name, args = pending.pop(block.get("tool_use_id"), ("?", {}))
-                out.append((name, args, text, bool(block.get("is_error"))))
+                name, args, request = pending.pop(block.get("tool_use_id"), ("?", {}, None))
+                out.append((name, args, text, bool(block.get("is_error")), request))
     return out
+
+
+def same_request(before: tuple, call: tuple) -> bool:
+    """Whether two calls went out in the same model request, so the second cannot have seen the first's result."""
+    return before[4] is not None and before[4] == call[4]
 
 
 def result_fields(text: str) -> dict:
@@ -199,8 +254,15 @@ def result_fields(text: str) -> dict:
     return value if isinstance(value, dict) else {}
 
 
-def tabs_action(call: tuple[str, dict, str, bool]) -> str | None:
+def tabs_action(call: tuple) -> str | None:
     return call[1].get("action") if call[0] == "tabs" else None
+
+
+def navigating(call: tuple) -> bool:
+    """Whether a call loads a page: a navigation, a `tabs new` with a URL, or a call whose Kitsune result has
+    `navigated` (a click that navigated; Playwright's results do not say)."""
+    return (call[0] in NAVIGATIONS or (tabs_action(call) == "new" and bool(call[1].get("url")))
+            or "navigated" in result_fields(call[2]))
 
 
 def evaluation(run: dict) -> dict:
@@ -221,10 +283,23 @@ def input_tokens(run: dict) -> int:
     return (run.get("usage") or {}).get("input_tokens") or 0
 
 
+def input_excl_cache_read_tokens(run: dict) -> int | None:
+    """Input excluding cache reads: total input minus cache reads, so Claude's cache writes count. Codex's
+    `uncached_input_tokens` (total minus cached); for Claude, `uncached_input_tokens` (input after the last cache
+    breakpoint, a few tokens) plus `cache_creation_input_tokens` (cache writes). Not `uncached_input_tokens` itself
+    (personal_analysis's `noncached_input_tokens`), which leaves out Claude's cache writes. None when the run reported
+    neither."""
+    usage = normalized_usage(run)
+    if usage.get("uncached_input_tokens") is None:
+        return None
+    return usage["uncached_input_tokens"] + (usage.get("cache_creation_input_tokens") or 0)
+
+
 def audit(units: dict) -> dict:
     counts = collections.Counter()
     models = collections.Counter()
-    for (entry, _), runs in units.items():
+    for key, runs in units.items():
+        entry = key[0]
         for run in runs.values():
             counts["runs"] += 1
             counts["status:" + str(run.get("execution_status"))] += 1
@@ -281,6 +356,34 @@ def ratios(units: dict, keys=None) -> dict:
     return out
 
 
+def costs(units: dict) -> dict:
+    """Per group and target, on joint successes: Kitsune's cold-start setup time and its pair's `setup` and `ready`
+    phase resources (pair_lifecycle; Playwright starts its browser inside the task window and has neither), the task
+    window's resources (resources_task), total input and input excluding cache reads, with coverage, and the
+    execution orders the runs came from (ab, ba, or parallel for targets run concurrently)."""
+    groups = collections.defaultdict(list)
+    for key, runs in units.items():
+        group = group_of(key[0])
+        if group and all(solved(runs.get(t)) for t in TARGETS):
+            groups[group].append(runs)
+    out = {}
+    for group, joint in groups.items():
+        out[group] = {}
+        for target in TARGETS:
+            runs = [unit[target] for unit in joint]
+            lifecycle = [run.get("pair_lifecycle") or {} for run in runs]
+            out[group][target] = {
+                "joint": len(runs),
+                "cold_start_setup_sec": total([phases.get("cold_start_setup_sec") for phases in lifecycle]),
+                "setup": resource_cost([phases.get("setup") for phases in lifecycle]),
+                "ready": resource_cost([phases.get("ready") for phases in lifecycle]),
+                "resources_task": resource_cost([(run.get("resources") or {}).get("task") for run in runs]),
+                "input_tokens": total([(run.get("usage") or {}).get("input_tokens") for run in runs]),
+                "input_excl_cache_read_tokens": total([input_excl_cache_read_tokens(run) for run in runs]),
+                "orders": sorted({run.get("order") or "parallel" for run in runs})}
+    return out
+
+
 def outliers(units: dict, threshold: float) -> list[dict]:
     rows = []
     for (entry, task), runs in units.items():
@@ -309,7 +412,7 @@ def behaviour(units: dict) -> dict:
             m["runs"] += 1
             if calls and calls[0][0] == "tabs" and calls[0][1].get("action") == "list":
                 m["runs_starting_with_tabs_list"] += 1
-            for i, (name, args, text, is_error) in enumerate(calls):
+            for i, (name, args, text, is_error, _) in enumerate(calls):
                 m["calls"] += 1
                 if is_error:
                     errors[target][f"{name}: {text[:90]}"] += 1
@@ -325,13 +428,17 @@ def behaviour(units: dict) -> dict:
                 if name in ACTIONS:
                     m["actions"] += 1
                     m["action_chars"] += len(text)
-                    following = calls[i + 1][0] if i + 1 < len(calls) else None
-                    m["actions_followed_by_observation"] += following in OBSERVATIONS
+                    following = calls[i + 1] if i + 1 < len(calls) else None
+                    observed = following is not None and following[0] in OBSERVATIONS
+                    together = observed and same_request(calls[i], following)
+                    m["actions_followed_by_observation_same_request"] += together
+                    m["actions_followed_by_observation_next_request"] += observed and not together
     summary = {}
     for target, m in out.items():
         summary[target] = {
             **dict(m),
-            "observation_after_action_rate": round(m["actions_followed_by_observation"] / m["actions"], 3) if m["actions"] else None,
+            **{f"observation_after_action_{when}_rate": round(m[f"actions_followed_by_observation_{when}"] / m["actions"], 3)
+               if m["actions"] else None for when in ("same_request", "next_request")},
             "mean_action_response_chars": round(m["action_chars"] / m["actions"]) if m["actions"] else None,
             "mean_find_chars": round(m["find_chars"] / m["find_calls"]) if m["find_calls"] else None,
             "mean_full_snapshot_chars": round(m["full_snapshot_chars"] / m["full_snapshots"]) if m["full_snapshots"] else None,
@@ -342,8 +449,9 @@ def behaviour(units: dict) -> dict:
 
 def signals(units: dict) -> dict:
     """Per group and target: runs whose 2nd call is `tabs select` (kitsune#399); runs that open a tab before their first
-    write (kitsune#393); bare snapshots right after a navigating call, their characters and `unchanged_since` answers
-    (kitsune#400, kitsune#401); `wait_for {text}` answered in under 50 ms and `wait_for` results with and without a
+    write (kitsune#393); bare snapshots right after a navigating call (navigating), sent in the same model request as
+    that call or in the next one (#124), and their characters and `unchanged_since` answers (kitsune#400,
+    kitsune#401); `wait_for {text}` answered in under 50 ms and `wait_for` results with and without a
     `snapshot_delta` (kitsune#402, kitsune#403); the median first request, the fixed prefix (kitsune#405). Navigations
     seen in results, `unchanged_since`, `elapsed` and `snapshot_delta` are Kitsune result fields."""
     counts = collections.defaultdict(lambda: {t: collections.Counter() for t in TARGETS})
@@ -362,13 +470,14 @@ def signals(units: dict) -> dict:
             first_write = next((i for i, call in enumerate(calls) if call[0] in WRITES), None)
             m["runs_own_tab_before_first_write"] += first_write is not None and any(
                 tabs_action(call) == "new" for call in calls[:first_write])
-            for (before, _, before_text, before_error), (name, args, text, _) in zip(calls, calls[1:]):
-                navigated = before in NAVIGATIONS or "navigated" in result_fields(before_text)
-                if name == "snapshot" and not args and navigated and not before_error:
-                    m["snapshots_after_navigation"] += 1
+            for before, call in zip(calls, calls[1:]):
+                name, args, text = call[:3]
+                if name == "snapshot" and not args and navigating(before) and not before[3]:
+                    m["snapshots_after_navigation_" + ("same_request" if same_request(before, call)
+                                                       else "next_request")] += 1
                     m["snapshot_after_navigation_chars"] += len(text)
                     m["unchanged_since"] += "unchanged_since" in result_fields(text)
-            for name, args, text, _ in calls:
+            for name, args, text, *_ in calls:
                 if name != "wait_for":
                     continue
                 fields = result_fields(text)
@@ -402,7 +511,7 @@ def run_holds(run: dict) -> dict | None:
     return hold_metrics(evidence) if evidence is not None else None
 
 
-def writes_in_copy(after: list[tuple[str, dict, str, bool]]) -> bool:
+def writes_in_copy(after: list[tuple]) -> bool:
     """Whether the calls after a copy write (COPY_WRITES) before the agent leaves the copy (its next `tabs new` or
     `tabs select`) or the run ends."""
     for call in after:
@@ -419,9 +528,8 @@ def run_read_only(run: dict) -> dict:
     (writes_in_copy). Copies are None when the session evidence does not say the user opened the starting tabs (seeding
     user_channel or user_bidi)."""
     calls = tool_calls(run)
-    refused = collections.Counter(" ".join(filter(None, (name, tabs_action((name, args, text, error)))))
-                                  for name, args, text, error in calls
-                                  if result_fields(text).get("code") == "user_tab_read_only")
+    refused = collections.Counter(" ".join(filter(None, (call[0], tabs_action(call))))
+                                  for call in calls if result_fields(call[2]).get("code") == "user_tab_read_only")
     evidence = session_evidence(run) or {}
     copies_to_write = copies_to_read = None
     if evidence.get("seeding") in USER_SEEDINGS:
@@ -545,17 +653,112 @@ def kitsune_arms(units: dict) -> dict:
     return out
 
 
+def successes(units: dict) -> dict:
+    """Per group, the units and each target's successes; a unit missing a target counts as that target's miss."""
+    out = {}
+    for key, runs in units.items():
+        group = group_of(key[0])
+        if not group:
+            continue
+        row = out.setdefault(group, {"units": 0, **{t: 0 for t in TARGETS}})
+        row["units"] += 1
+        for target in TARGETS:
+            row[target] += solved(runs.get(target))
+    return out
+
+
+def agreement(ab: float | None, ba: float | None, pivot: float, below: str, above: str) -> str | None:
+    """The side of `pivot` both orders' values are on; None when they disagree, one sits on it or one is missing."""
+    if ab is None or ba is None:
+        return None
+    if ab < pivot and ba < pivot:
+        return below
+    if ab > pivot and ba > pivot:
+        return above
+    return None
+
+
+def orders(pooled: dict) -> dict:
+    """Per group, successes and Kitsune/Playwright ratios on joint successes in each execution order (ab: Playwright
+    first, ba: Kitsune first, parallel: targets at once) and over all attempts, and the claims both orders agree on:
+    the ab and ba ratios on the same side of 1, or Kitsune's successes minus Playwright's on the same side of 0. A claim
+    is None when the orders disagree or one of them did not run."""
+    by_order: dict = collections.defaultdict(dict)
+    for key, runs in pooled.items():
+        by_order[next(iter(runs.values()))["order"] or "parallel"][key] = runs
+    tables = {order: (successes(units), ratios(units)) for order, units in sorted(by_order.items())}
+    tables["all attempts"] = (successes(pooled), ratios(pooled))
+    out = {}
+    for group in tables["all attempts"][0]:
+        rows = {order: {**counts[group], "ratios": joint.get(group)}
+                for order, (counts, joint) in tables.items() if group in counts}
+        ab, ba = rows.get("ab"), rows.get("ba")
+
+        def difference(row):
+            return row["kitsune"] - row["playwright"] if row else None
+
+        def ratio(row, metric):
+            return (row["ratios"] or {}).get(metric) if row else None
+        claims = {"successes": agreement(difference(ab), difference(ba), 0, "kitsune fewer", "kitsune more"),
+                  **{metric: agreement(ratio(ab, metric), ratio(ba, metric), 1, "kitsune lower", "kitsune higher")
+                     for metric in ORDER_METRICS}}
+        out[group] = {"by_order": rows, "claims": claims}
+    return out
+
+
+def spread(pooled: dict) -> dict:
+    """Per unit run in more than one attempt: each target's success, the Kitsune/Playwright input ratio in each
+    attempt where both targets succeeded (None otherwise), and the ratio's spread (largest minus smallest). Per group:
+    those units, the units whose success changed between attempts, by target, and the median and largest spread."""
+    by_unit: dict = collections.defaultdict(dict)
+    for (entry, task, attempt), runs in pooled.items():
+        by_unit[(entry, task)][attempt] = runs
+    units, groups = [], {}
+    for (entry, task), attempts in by_unit.items():
+        group = group_of(entry)
+        if not group or len(attempts) < 2:
+            continue
+        ordered = [attempts[attempt] for attempt in sorted(attempts)]
+        input_ratio = [round(input_tokens(runs["kitsune"]) / input_tokens(runs["playwright"]), 3)
+                       if all(solved(runs.get(t)) for t in TARGETS) and input_tokens(runs["playwright"]) else None
+                       for runs in ordered]
+        measured = [value for value in input_ratio if value is not None]
+        row = {"entry": entry, "task": task, "attempts": sorted(attempts),
+               "orders": [next(iter(runs.values()))["order"] for runs in ordered],
+               "success": {t: [solved(runs.get(t)) for runs in ordered] for t in TARGETS},
+               "input_ratio": input_ratio,
+               "input_ratio_spread": round(max(measured) - min(measured), 3) if len(measured) > 1 else None}
+        units.append(row)
+        summary = groups.setdefault(group, {"units": 0, "success_changed": {t: 0 for t in TARGETS}, "spreads": []})
+        summary["units"] += 1
+        for target in TARGETS:
+            summary["success_changed"][target] += len(set(row["success"][target])) > 1
+        if row["input_ratio_spread"] is not None:
+            summary["spreads"].append(row["input_ratio_spread"])
+    for summary in groups.values():
+        values = summary.pop("spreads")
+        summary["median_input_ratio_spread"] = round(statistics.median(values), 3) if values else None
+        summary["max_input_ratio_spread"] = max(values) if values else None
+    return {"groups": groups, "units": units}
+
+
 def review(suite_dir, compare=None, threshold=1.10) -> dict:
-    units = load(suite_dir)
+    attempts = suite_attempts(suite_dir)
+    units = load(suite_dir, next(iter(attempts), None))
     policy, source = elicitation_policy(suite_dir)
     report = {"suite": str(suite_dir), "elicitation": policy, "elicitation_source": source, "audit": audit(units),
-              "outcomes": outcomes(units), "ratios": ratios(units),
+              "outcomes": outcomes(units), "ratios": ratios(units), "costs": costs(units),
               "outliers": outliers(units, threshold), "behaviour": behaviour(units), "signals": signals(units),
               "holds": holds(units), "hold_split": hold_split(units),
               "read_only": read_only(units), "read_only_split": read_only_split(units),
               "kitsune_arms": kitsune_arms(units)}
+    if len(attempts) > 1:
+        # Every section but the audit reads the first attempt; this one reads them all.
+        pooled = {(*key, attempt): runs for attempt in attempts for key, runs in load(suite_dir, attempt).items()}
+        report["audit"] = audit(pooled)
+        report["attempts"] = {"orders": attempts, "groups": orders(pooled), "spread": spread(pooled)}
     if compare:
-        old = load(compare)
+        old = load(compare, next(iter(suite_attempts(compare)), None))
         shared = set(units) & set(old)
         then, then_source = elicitation_policy(compare)
         no_holds = then is None and before_holds(compare)
@@ -568,10 +771,116 @@ def review(suite_dir, compare=None, threshold=1.10) -> dict:
     return report
 
 
+def mean_cell(value: dict, digits: int = 1) -> str:
+    """A total's mean per reporting run, with its coverage when runs are missing; — when no run reported."""
+    if value["total"] is None:
+        return "—"
+    reported = value["reported_runs"]
+    cell = f"{value['total'] / reported:,.{digits}f}"
+    return cell if not value["missing_runs"] else f"{cell} ({reported}/{reported + value['missing_runs']})"
+
+
+def rss_cell(value: float | None, runs: int, attempted: int) -> str:
+    if value is None:
+        return "—"
+    return f"{value / MIB:,.0f}" + (f" ({runs}/{attempted})" if runs < attempted else "")
+
+
+def cost_lines(costs: dict) -> list[str]:
+    lines = ["", "## Cost beyond tokens on joint successes", "",
+             "Means per joint success. Cold-start setup is Kitsune's launch, bridge and browser readiness wall time; "
+             "warm-ready is the pair's `ready` phase, an idle wait of about one second with the browser and bridge "
+             "already running. Their CPU and sampled peak RSS are the pair's `setup` and `ready` phases filtered to the "
+             "target's processes. Playwright starts its browser inside the task window and has no such phases (—). Task "
+             "CPU is user + system CPU per measured task; task RSS is the task windows' mean RSS weighted by their "
+             "duration. Input excl. cache reads is total input minus cache reads, so cache writes count: Codex "
+             "`uncached_input_tokens`; Claude `uncached_input_tokens` + `cache_creation_input_tokens`. It is not "
+             "`uncached_input_tokens`, which for Claude leaves out cache writes. (n/m): only n of m runs reported the "
+             "value.", "",
+             "| Group | Target | Joint | Cold-start setup s | Warm-ready s | Setup / ready CPU s | "
+             "Setup / ready peak RSS MiB | Task CPU s | Task RSS MiB | Input | Input excl. cache reads |",
+             "| --- | --- | ---: | ---: | ---: | --- | --- | ---: | ---: | ---: | ---: |"]
+    for group, by_target in costs.items():
+        for target, c in by_target.items():
+            setup, ready, task = c["setup"], c["ready"], c["resources_task"]
+            both = lambda first, second: "—" if first == second == "—" else f"{first} / {second}"
+            peak = lambda phase: rss_cell(phase["sampled_peak_rss_bytes"], phase["runs_with_peak_rss"], phase["attempted"])
+            lines.append(f"| {group} | {target} | {c['joint']} | {mean_cell(c['cold_start_setup_sec'])} | "
+                         f"{mean_cell(ready['duration_sec'])} | "
+                         f"{both(mean_cell(setup['observed_cpu_sec']), mean_cell(ready['observed_cpu_sec']))} | "
+                         f"{both(peak(setup), peak(ready))} | {mean_cell(task['observed_cpu_sec'])} | "
+                         f"{rss_cell(task['time_weighted_mean_rss_bytes'], task['runs_with_mean_rss'], task['attempted'])} | "
+                         f"{mean_cell(c['input_tokens'], digits=0)} | "
+                         f"{mean_cell(c['input_excl_cache_read_tokens'], digits=0)} |")
+    orders = {group: sorted({order for c in by_target.values() for order in c["orders"]})
+              for group, by_target in costs.items()}
+    concurrent = [group for group, seen in orders.items() if "parallel" in seen]
+    ordered = [f"{group} ({' / '.join(o for o in seen if o != 'parallel')})"
+               for group, seen in orders.items() if any(o != "parallel" for o in seen)]
+    layout = ([f"{', '.join(concurrent)} ran both targets concurrently, so CPU and time are measured under shared "
+               "load."] if concurrent else []) + ([
+        f"{', '.join(ordered)} ran the targets one after the other in the given order, without shared load, so "
+        "their CPU and time are not comparable with concurrent runs'."] if ordered else [])
+    return lines + ["", " ".join([
+        "Caveats (docs/resources.md): RSS is summed over the target's processes and counts shared memory more than "
+        "once; it is not unique memory (PSS, USS or physical footprint). Peaks are sampled peaks, the largest of the "
+        "runs'.", *layout, "Kitsune's task window includes its already-running browser and bridge, Playwright's "
+        "includes its browser launch: this is not a cold-versus-reused-session comparison. Remote model inference is "
+        "not measured."])]
+
+
+def attempt_lines(attempts: dict) -> list[str]:
+    lines = ["", "## Attempts and execution orders", "",
+             "Attempts: " + "; ".join(f"{attempt} " + ", ".join(order or "parallel" for order in orders)
+                                     for attempt, orders in attempts["orders"].items())
+             + ". ab runs Playwright first, ba Kitsune first (coexistence always runs paired). Successes count every "
+             "unit of the order; ratios are Kitsune/Playwright on its joint successes. A claim is stated only when ab "
+             "and ba agree: both ratios on the same side of 1, or Kitsune's successes minus Playwright's on the same "
+             "side of 0 in both; otherwise there is no claim.", "",
+             "| Group | Order | Units | Successes PW / K | Joint | Input | Output | MCP calls | Elapsed |",
+             "| --- | --- | ---: | --- | ---: | ---: | ---: | ---: | ---: |"]
+    for group, row in attempts["groups"].items():
+        for order, o in row["by_order"].items():
+            r = o["ratios"] or {}
+            lines.append(f"| {group} | {order} | {o['units']} | {o['playwright']} / {o['kitsune']} | {r.get('joint', 0)} | "
+                         + " | ".join(str(r.get(metric)) for metric in ORDER_METRICS) + " |")
+    lines += ["", "Claims both orders agree on:", "", "| Group | Successes | Input | Output | MCP calls | Elapsed |",
+              "| --- | --- | --- | --- | --- | --- |"]
+    for group, row in attempts["groups"].items():
+        lines.append(f"| {group} | " + " | ".join(row["claims"][key] or "no claim" for key in ("successes", *ORDER_METRICS))
+                     + " |")
+    s = attempts["spread"]
+    lines += ["", "Per-unit spread between attempts: the Kitsune/Playwright input ratio of each attempt where both "
+              "targets succeeded, largest minus smallest; — where one of them failed.", "",
+              "| Group | Units in more than one attempt | Success changed PW / K | Median input-ratio spread | Largest |",
+              "| --- | ---: | --- | ---: | ---: |"]
+    for group, g in s["groups"].items():
+        changed = g["success_changed"]
+        lines.append(f"| {group} | {g['units']} | {changed['playwright']} / {changed['kitsune']} | "
+                     f"{g['median_input_ratio_spread']} | {g['max_input_ratio_spread']} |")
+    widest = sorted((u for u in s["units"] if u["input_ratio_spread"] is not None),
+                    key=lambda u: -u["input_ratio_spread"])[:10]
+    shown = widest + [u for u in s["units"] if u not in widest and any(len(set(v)) > 1 for v in u["success"].values())]
+    lines += ["", "The 10 units with the widest spread, and every unit whose success changed between attempts:", "",
+              "| Unit | Orders | Input ratio by attempt | Spread | Success PW | Success K |",
+              "| --- | --- | --- | ---: | --- | --- |"]
+    for u in shown:
+        yes = lambda values: " / ".join("yes" if value else "no" for value in values)
+        lines.append(f"| {u['task']} ({u['entry']}) | {' / '.join(o or 'parallel' for o in u['orders'])} | "
+                     f"{' / '.join('—' if v is None else str(v) for v in u['input_ratio'])} | "
+                     f"{'—' if u['input_ratio_spread'] is None else u['input_ratio_spread']} | "
+                     f"{yes(u['success']['playwright'])} | {yes(u['success']['kitsune'])} |")
+    return lines
+
+
 def markdown(report: dict, threshold: float) -> str:
     a = report["audit"]
     lines = [f"# Release review: `{report['suite']}`", "",
-             "## Audit", "",
+             "Observations right after an action and bare snapshots right after navigating are split by model request "
+             "(assistant message id): one sent in the same request as the call before it had not seen that call's result "
+             "and cost no request; one in the next request cost a request. Reviews before #124 counted both together and "
+             "did not count `tabs new` with a URL as navigating, so their numbers are not comparable with these.", "",
+             "## Audit" + (" (all attempts)" if "attempts" in report else ""), "",
              f"- Elicitation policy: {policy_label(report['elicitation'], report['elicitation_source'])}",
              f"- Runs: {a.get('runs', 0)}; scorable {a.get('scorable', 0)}; "
              + ", ".join(f"{k.split(':', 1)[1]} {v}" for k, v in a.items() if k.startswith("status:")),
@@ -579,6 +888,9 @@ def markdown(report: dict, threshold: float) -> str:
              f"allowlisted tools {a.get('missing_allowlisted_tools', 0)} (none published "
              f"{a.get('no_allowlisted_tools', 0)}); models {a['models']}",
              f"- Personal content viewport asserted: {a.get('personal_viewport_asserted', 0)}/{a.get('personal_runs', 0)}",
+             *([f"- Attempts: {len(report['attempts']['orders'])}. This audit pools every attempt; the other sections "
+                f"read attempt {next(iter(report['attempts']['orders']))} only, except \"Attempts and execution "
+                "orders\", which reads them all."] if "attempts" in report else []),
              "", "## Outcomes", "", "| Group | Units | Playwright | Kitsune | Misses |", "| --- | ---: | ---: | ---: | --- |"]
     for group, row in report["outcomes"].items():
         misses = "; ".join(f"{t[0].upper()} {m}" for t in TARGETS for m in row["misses"][t]) or "none"
@@ -590,6 +902,9 @@ def markdown(report: dict, threshold: float) -> str:
     for group, r in report["ratios"].items():
         lines.append(f"| {group} | {r['joint']} | {r['input']} | {r['paired_input_median']} | "
                      f"{r['units_less_kitsune_input']}/{r['joint']} | {r['output']} | {r['mcp_calls']} | {r['elapsed']} |")
+    lines += cost_lines(report["costs"])
+    if "attempts" in report:
+        lines += attempt_lines(report["attempts"])
     if "compare" in report:
         c = report["compare"]
         then_label = ("no holds then (Kitsune < #364)" if c["no_holds"]
@@ -621,7 +936,9 @@ def markdown(report: dict, threshold: float) -> str:
                      f"{o['mcp_calls']['playwright']} / {o['mcp_calls']['kitsune']} | {' '.join(o['kitsune_calls'])} |")
     lines += ["", "## Behaviour", "", "| Signal | Playwright | Kitsune |", "| --- | ---: | ---: |"]
     b = report["behaviour"]
-    for key, label in (("calls", "Tool calls"), ("observation_after_action_rate", "Observation right after an action"),
+    for key, label in (("calls", "Tool calls"),
+                       ("observation_after_action_same_request_rate", "Observation right after an action, same request"),
+                       ("observation_after_action_next_request_rate", "Observation right after an action, next request"),
                        ("mean_action_response_chars", "Mean action response (chars)"), ("blind_waits", "`wait_for {time}` only"),
                        ("runs_starting_with_tabs_list", "Runs starting with `tabs list`"),
                        ("mean_find_chars", "Mean `find` result (chars)"), ("mean_full_snapshot_chars", "Mean full snapshot (chars)"),
@@ -630,15 +947,18 @@ def markdown(report: dict, threshold: float) -> str:
     lines += ["", "Tool errors (Kitsune): " + (", ".join(f"{v}× {k}" for k, v in b["kitsune"]["tool_errors"].items()) or "none")]
     lines += ["", "## Tabs, snapshots after navigation, waits and first request by group", "",
               "| Group | Runs PW / K | 2nd call `tabs select` PW / K | Own tab before first write PW / K | "
-              "Median first request input PW / K | K bare snapshots right after navigating | K chars of those snapshots | "
-              "K `unchanged_since` | K `wait_for {text}` under 50 ms / all | K `wait_for` with / without delta |",
-              "| --- | --- | --- | --- | --- | ---: | ---: | ---: | --- | --- |"]
+              "Median first request input PW / K | Bare snapshots right after navigating, same request PW / K | "
+              "Next request PW / K | K chars of those snapshots, same + next request | "
+              "K `unchanged_since`, same + next request | K `wait_for {text}` under 50 ms / all | K `wait_for` with / without delta |",
+              "| --- | --- | --- | --- | --- | --- | --- | ---: | ---: | --- | --- |"]
     for group, s in report["signals"].items():
         pw, k = s["playwright"], s["kitsune"]
         both = lambda key: f"{pw[key]} / {k[key]}"
         lines.append(f"| {group} | {both('runs')} | {both('runs_second_call_tabs_select')} | "
                      f"{both('runs_own_tab_before_first_write')} | {both('median_first_request_input_tokens')} | "
-                     f"{k['snapshots_after_navigation']} | {k['snapshot_after_navigation_chars']} | {k['unchanged_since']} | "
+                     f"{both('snapshots_after_navigation_same_request')} | "
+                     f"{both('snapshots_after_navigation_next_request')} | "
+                     f"{k['snapshot_after_navigation_chars']} | {k['unchanged_since']} | "
                      f"{k['wait_for_text_under_50ms']} / {k['wait_for_text']} | "
                      f"{k['wait_for_with_delta']} / {k['wait_for_without_delta']} |")
     lines += ["", "## Kitsune holds", "",

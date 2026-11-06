@@ -56,7 +56,9 @@ def evidence_for(trial, *, calls=(), owned=None, after=None, transitions=None, a
     (call, tabs after it, owned flags after it) triple."""
     tabs = [{"id": i, "url": trial.url(p), "active": i == trial.active_index} for i, p in enumerate(trial.paths)]
     initial = trial.url(trial.paths[trial.active_index])
-    evidence = {"setup_complete": True, "initial_tabs": tabs, "snapshots": [copy.deepcopy(tabs)], "tab_calls": [],
+    # A real relay writes session_closed on close; without it CoexistenceServer.evaluate waits out its deadline.
+    evidence = {"setup_complete": True, "session_closed": True, "initial_tabs": tabs,
+                "snapshots": [copy.deepcopy(tabs)], "tab_calls": [],
                 "tab_ownership": [owned if owned is not None else [False] * len(tabs)], "seeding": "user_bidi",
                 "seeded_owned_by_agent": 0, "user_activity": activity, "permission_refusals": [],
                 "handoff_requests": [], "elicitations": [], "held_refusals": [],

@@ -11,9 +11,12 @@ SPEC.loader.exec_module(release)
 
 
 def events(path, calls):
+    """A Claude Code stream of (tool, arguments, result, is_error[, request]) calls; calls with the same request share
+    an assistant message id, and a call without one is sent in a message without an id."""
     lines = []
-    for i, (name, args, text, error) in enumerate(calls):
-        lines.append({"message": {"content": [{"type": "tool_use", "id": str(i), "name": "mcp__browser__browser_" + name, "input": args}]}})
+    for i, (name, args, text, error, *request) in enumerate(calls):
+        lines.append({"message": {**({"id": request[0]} if request else {}), "content": [
+            {"type": "tool_use", "id": str(i), "name": "mcp__browser__browser_" + name, "input": args}]}})
         lines.append({"message": {"content": [{"type": "tool_result", "tool_use_id": str(i), "content": text, "is_error": error}]}})
     path.mkdir(parents=True, exist_ok=True)
     (path / "events.jsonl").write_text("".join(json.dumps(l) + "\n" for l in lines))
@@ -79,7 +82,8 @@ class ReleaseReviewTests(unittest.TestCase):
             self.assertNotIn("coexistence-protect", report["ratios"])
             self.assertEqual([o["task"] for o in report["outliers"]], ["pb-a"])
             k = report["behaviour"]["kitsune"]
-            self.assertEqual((k["blind_waits"], k["actions"], k["actions_followed_by_observation"]), (1, 2, 1))
+            self.assertEqual((k["blind_waits"], k["actions"], k["actions_followed_by_observation_next_request"],
+                              k["actions_followed_by_observation_same_request"]), (1, 2, 1, 0))
             self.assertIn("fill_form: ", next(iter(k["tool_errors"])))
             text = release.markdown(report, 1.10)
             self.assertIn("| coexistence-protect | 1 | — | 1 |", text)
@@ -156,9 +160,11 @@ class ReleaseReviewTests(unittest.TestCase):
             # pb-own and pb-unrecorded open a tab before their first write; Playwright's pb-unrecorded writes nothing.
             self.assertEqual((k["runs_own_tab_before_first_write"], pw["runs_own_tab_before_first_write"]), (2, 0))
             # After navigate and after a navigated click; not a targeted snapshot, nor one after a failed navigate.
-            self.assertEqual((k["snapshots_after_navigation"], k["unchanged_since"]), (2, 1))
+            # Calls in messages without an id are each their own request.
+            self.assertEqual((k["snapshots_after_navigation_next_request"], k["snapshots_after_navigation_same_request"],
+                              k["unchanged_since"]), (2, 0, 1))
             self.assertEqual(k["snapshot_after_navigation_chars"], len(unchanged[2]) + len(snap[2]))
-            self.assertEqual((pw["snapshots_after_navigation"], pw["unchanged_since"]), (1, 0))
+            self.assertEqual((pw["snapshots_after_navigation_next_request"], pw["unchanged_since"]), (1, 0))
             self.assertEqual((k["median_first_request_input_tokens"], pw["median_first_request_input_tokens"]), (1020, 910))
             gallery = report["signals"]["gallery-isolated"]
             k, pw = gallery["kitsune"], gallery["playwright"]
@@ -171,11 +177,61 @@ class ReleaseReviewTests(unittest.TestCase):
                                                  "without_hold": {"units": 1, "input": 0.5}, "no_record": 1})
             self.assertNotIn("gallery-isolated", split, "no hold record in the group")
             text = release.markdown(report, 1.10)
-            self.assertIn("| personal | 3 / 3 | 1 / 1 | 0 / 2 | 910 / 1020 | 2 | "
+            self.assertIn("| personal | 3 / 3 | 1 / 1 | 0 / 2 | 910 / 1020 | 0 / 0 | 1 / 2 | "
                           f"{len(unchanged[2]) + len(snap[2])} | 1 | 0 / 0 | 0 / 0 |", text)
-            self.assertIn("| gallery-isolated | 1 / 1 | 0 / 0 | 0 / 0 | 800 / 1100 | 0 | 0 | 0 | 1 / 2 | 1 / 3 |", text)
+            self.assertIn("| gallery-isolated | 1 / 1 | 0 / 0 | 0 / 0 | 800 / 1100 | 0 / 0 | 0 / 0 | 0 | 0 | 1 / 2 | 1 / 3 |",
+                          text)
             self.assertIn("| personal | 1 | 3.0 | 1 | 0.5 |", text)
             self.assertIn("1 joint successes have no readable Kitsune session evidence", text)
+
+    def test_signals_split_by_model_request(self):
+        # #124: a call sent in the same model request (assistant message id) as the call before it had not seen its
+        # result; `tabs new` with a URL navigates.
+        with tempfile.TemporaryDirectory() as folder:
+            unchanged = '{"snapshot":"unchanged","unchanged_since":"browser_tabs"}'
+            after_click = '{"snapshot":"x"}'
+            kitsune = [("tabs", {"action": "new", "url": "http://l/a"}, '{"ok":true}', False, "k1"),
+                       ("snapshot", {}, unchanged, False, "k1"),
+                       ("click", {"target": "e2"}, '{"ok":true,"navigated":{"url":"http://l/b"}}', False, "k2"),
+                       ("snapshot", {}, after_click, False, "k3"),
+                       ("click", {"target": "e3"}, '{"ok":true}', False, "k4"),
+                       ("find", {"text": "code"}, '{"matches":[]}', False, "k4"),
+                       ("click", {"target": "e4"}, '{"ok":true}', False, "k5"),
+                       ("snapshot", {"target": "e5"}, '{"snapshot":"y"}', False, "k6"),
+                       ("tabs", {"action": "new"}, '{"ok":true}', False, "k7"),
+                       ("snapshot", {}, '{"snapshot":"about:blank"}', False, "k7")]
+            playwright = [("navigate", {"url": "http://l/a"}, "### Ran Playwright code", False, "p1"),
+                          ("snapshot", {}, "### Page state", False, "p1"),
+                          ("click", {"target": "e2"}, "### Ran Playwright code", False, "p2"),
+                          ("snapshot", {}, "### Page state", False, "p3")]
+            summary = Path(folder) / "personal-v0.json"
+            summary.write_text(json.dumps({"pairs": [{"personal_task": "pb-a", "results": {
+                "playwright": run(folder, "a-p", True, 1000, playwright),
+                "kitsune": run(folder, "a-k", True, 1000, kitsune)}}]}))
+            (Path(folder) / "suite-log.jsonl").write_text(json.dumps({"name": "personal-v0",
+                                                                      "suite_summary_path": str(summary)}) + "\n")
+
+            report = release.review(folder)
+            k, pw = report["signals"]["personal"]["kitsune"], report["signals"]["personal"]["playwright"]
+            # After `tabs new url` in its request and after a navigated click in the next; not after `tabs new` alone.
+            self.assertEqual((k["snapshots_after_navigation_same_request"], k["snapshots_after_navigation_next_request"],
+                              k["unchanged_since"]), (1, 1, 1))
+            # Playwright's click result does not say it navigated.
+            self.assertEqual((pw["snapshots_after_navigation_same_request"],
+                              pw["snapshots_after_navigation_next_request"]), (1, 0))
+            k, pw = report["behaviour"]["kitsune"], report["behaviour"]["playwright"]
+            self.assertEqual((k["actions"], k["actions_followed_by_observation_same_request"],
+                              k["actions_followed_by_observation_next_request"]), (3, 1, 2))
+            self.assertEqual((k["observation_after_action_same_request_rate"],
+                              k["observation_after_action_next_request_rate"]), (0.333, 0.667))
+            self.assertEqual((pw["actions_followed_by_observation_same_request"],
+                              pw["actions_followed_by_observation_next_request"]), (0, 1))
+            text = release.markdown(report, 1.10)
+            self.assertIn("Reviews before #124 counted both together", text.split("## Audit")[0])
+            self.assertIn("| Observation right after an action, same request | 0.0 | 0.333 |", text)
+            self.assertIn("| Observation right after an action, next request | 1.0 | 0.667 |", text)
+            self.assertIn("| personal | 1 / 1 | 0 / 0 | 0 / 1 | None / None | 1 / 1 | 0 / 1 | "
+                          f"{len(unchanged) + len(after_click)} | 1 | 0 / 0 | 0 / 0 |", text)
 
     def test_compare_warns_when_elicitation_policies_differ_or_are_not_recorded(self):
         # #59: a suite's policy comes from its suite-manifest.json; suites before #59 recorded none.
@@ -431,6 +487,152 @@ class ReleaseReviewTests(unittest.TestCase):
             self.assertIn("## Default Kitsune vs `coexistence-unprotected` on 2 user-seeded units", text)
             self.assertIn("| Runs that moved the user's view | 0 | 1 |", text)
             self.assertIn("the arm's input is 0.5× and its agent calls 0.5× default Kitsune's.", text)
+
+    def test_cost_beyond_tokens_on_joint_successes(self):
+        # #108: cold-start and warm-ready phases, task resources and input excluding cache reads per group and target.
+        with tempfile.TemporaryDirectory() as folder:
+            mib = 1024 * 1024
+            snap = ("snapshot", {}, '{"snapshot":"x"}', False)
+
+            def bucket(duration, cpu, peak, mean):
+                return {"duration_sec": duration, "observed_cpu_user_sec": cpu / 2, "observed_cpu_system_sec": cpu / 2,
+                        "sampled_peak_rss_bytes": peak * mib, "time_weighted_mean_rss_bytes": mean * mib}
+
+            def target_run(name, success, usage, task):
+                result = run(folder, name, success, usage["input_tokens"], [snap], resources={"task": task})
+                result["usage"] = usage
+                return result
+            # Claude: input includes cache reads (cached_input_tokens) and writes; Codex reports total and cached only.
+            claude = {"input_tokens": 1000, "cached_input_tokens": 800, "cache_creation_input_tokens": 150,
+                      "uncached_input_tokens": 50, "output_tokens": 10}
+            codex = {"input_tokens": 1000, "cached_input_tokens": 600, "output_tokens": 10}
+            # A pair from before inline phases: its setup and ready phases are read from its resource-summary.json.
+            old_summary = Path(folder) / "old-resource-summary.json"
+            old_summary.write_text(json.dumps({"metrics": {"phase/setup/owner/kitsune": bucket(2, 1, 6, 2),
+                                                           "phase/ready/owner/kitsune": bucket(1, 0.5, 4, 3)}}))
+            playwright_lifecycle = {"timing": {"kitsune_cold_start_setup_sec": None},
+                                    "resource_phases": {"playwright": {"setup": None, "ready": None}}}
+            pairs = [
+                {"personal_task": "pb-a", **playwright_lifecycle,
+                 "results": {"playwright": target_run("a-p", True, codex, bucket(10, 8, 900, 600))}},
+                {"personal_task": "pb-a", "timing": {"kitsune_cold_start_setup_sec": 4},
+                 "resource_phases": {"kitsune": {"setup": bucket(4, 3, 5, 2), "ready": bucket(1, 0.5, 3, 3)}},
+                 "results": {"kitsune": target_run("a-k", True, claude, bucket(10, 4, 1000, 700))}},
+                {"personal_task": "pb-b", **playwright_lifecycle,
+                 "results": {"playwright": target_run("b-p", True, codex, bucket(30, 6, 800, 900))}},
+                {"personal_task": "pb-b", "resource_summary_path": str(old_summary),
+                 "results": {"kitsune": target_run("b-k", True, claude, bucket(30, 2, 1200, 1100))}},
+                {"personal_task": "pb-c", **playwright_lifecycle,
+                 "results": {"playwright": target_run("c-p", True, codex, bucket(10, 99, 9000, 9000))}},
+                {"personal_task": "pb-c", "timing": {"kitsune_cold_start_setup_sec": 99},
+                 "resource_phases": {"kitsune": {"setup": bucket(99, 99, 9000, 9000), "ready": None}},
+                 "results": {"kitsune": target_run("c-k", False, claude, bucket(10, 99, 9000, 9000))}}]
+            path = Path(folder) / "personal-v0.json"
+            path.write_text(json.dumps({"pairs": pairs}))
+            (Path(folder) / "suite-log.jsonl").write_text(json.dumps({"name": "personal-v0", "suite_summary_path": str(path)}) + "\n")
+
+            report = release.review(folder)
+            kitsune, playwright = report["costs"]["personal"]["kitsune"], report["costs"]["personal"]["playwright"]
+            self.assertEqual(kitsune["joint"], 2, "pb-c is not a joint success")
+            self.assertEqual(kitsune["cold_start_setup_sec"], {"total": 4, "reported_runs": 1, "missing_runs": 1})
+            self.assertEqual((kitsune["setup"]["observed_cpu_sec"]["total"], kitsune["setup"]["sampled_peak_rss_bytes"]),
+                             (4, 6 * mib))
+            self.assertEqual(kitsune["ready"]["duration_sec"]["total"], 2)
+            self.assertEqual(kitsune["resources_task"]["observed_cpu_sec_per_measured_task"], 3)
+            self.assertEqual(kitsune["resources_task"]["time_weighted_mean_rss_bytes"], 1000 * mib, "weighted by duration")
+            self.assertEqual((kitsune["input_tokens"]["total"], kitsune["input_excl_cache_read_tokens"]["total"]),
+                             (2000, 400), "Claude: uncached input plus cache writes")
+            self.assertEqual(playwright["input_excl_cache_read_tokens"]["total"], 800, "Codex: total minus cached input")
+            self.assertIsNone(playwright["cold_start_setup_sec"]["total"])
+            self.assertIsNone(playwright["setup"]["observed_cpu_sec"]["total"])
+            text = release.markdown(report, 1.10)
+            self.assertIn("## Cost beyond tokens on joint successes", text)
+            self.assertIn("| Input | Input excl. cache reads |", text)
+            self.assertIn("| personal | playwright | 2 | — | — | — | — | 7.0 | 825 | 1,000 | 400 |", text)
+            self.assertIn("| personal | kitsune | 2 | 4.0 (1/2) | 1.0 | 2.0 / 0.5 | 6 / 4 | 3.0 | 1,000 | 1,000 | 200 |", text)
+            self.assertIn("counts shared memory more than once", text)
+            self.assertIn("personal ran both targets concurrently, so CPU and time are measured under shared load.",
+                          text)
+            self.assertNotIn("one after the other", text)
+
+    def test_counterbalanced_attempts_spread_order_ratios_and_claims(self):
+        # #107: --attempts 2 --order abba --sequential; attempt 1 runs ab (Playwright first), attempt 2 ba.
+        with tempfile.TemporaryDirectory() as folder:
+            snap = ("snapshot", {}, '{"snapshot":"x"}', False)
+            # (entry, task): per attempt (Playwright input, Kitsune input, Kitsune success).
+            plan = {("personal-v0", "pb-a"): ((1000, 800, True), (1000, 900, True)),
+                    ("personal-v0", "pb-b"): ((1000, 700, False), (1000, 600, True)),
+                    ("gallery-crowded-v0", "ui-a"): ((1000, 900, True), (1000, 1300, True))}
+            log = []
+            for attempt, order in ((1, "ab"), (2, "ba")):
+                for entry in ("personal-v0", "gallery-crowded-v0"):
+                    pairs = []
+                    for (name, task), attempts in plan.items():
+                        if name != entry:
+                            continue
+                        pw, k, success = attempts[attempt - 1]
+                        key = "personal_task" if entry.startswith("personal") else "gallery_task"
+                        pairs.append({key: task, "results": {
+                            "playwright": run(folder, f"{attempt}-{task}-p", True, pw, [snap]),
+                            "kitsune": run(folder, f"{attempt}-{task}-k", success, k, [snap])}})
+                    path = Path(folder) / f"attempt-{attempt:03d}-{entry}.json"
+                    path.write_text(json.dumps({"pairs": pairs}))
+                    log.append({"name": entry, "suite_summary_path": str(path), "attempt": attempt, "order": order})
+            (Path(folder) / "suite-log.jsonl").write_text("".join(json.dumps(e) + "\n" for e in log))
+
+            self.assertEqual(release.suite_attempts(folder), {1: ["ab"], 2: ["ba"]})
+            report = release.review(folder)
+            self.assertEqual(report["audit"]["runs"], 12, "the audit covers both attempts")
+            self.assertEqual(report["outcomes"]["personal"]["kitsune"], 1, "other sections read attempt 1")
+            self.assertEqual(report["ratios"]["personal"]["input"], 0.8)
+
+            groups = report["attempts"]["groups"]
+            personal = groups["personal"]["by_order"]
+            self.assertEqual({order: (row["units"], row["playwright"], row["kitsune"]) for order, row in personal.items()},
+                             {"ab": (2, 2, 1), "ba": (2, 2, 2), "all attempts": (4, 4, 3)})
+            self.assertEqual(personal["ab"]["ratios"]["input"], 0.8)
+            self.assertEqual(personal["ba"]["ratios"]["input"], 0.75)
+            self.assertEqual(personal["all attempts"]["ratios"]["input"], round(2300 / 3000, 3))
+            # Both orders put Kitsune's input below Playwright's; successes and calls do not agree on a side.
+            self.assertEqual(groups["personal"]["claims"],
+                             {"successes": None, "input": "kitsune lower", "output": "kitsune lower",
+                              "mcp_calls": None, "elapsed": None})
+            crowded = groups["gallery-crowded"]
+            self.assertEqual((crowded["by_order"]["ab"]["ratios"]["input"], crowded["by_order"]["ba"]["ratios"]["input"]),
+                             (0.9, 1.3))
+            self.assertIsNone(crowded["claims"]["input"], "the orders disagree")
+
+            spread = report["attempts"]["spread"]
+            self.assertEqual(spread["groups"]["personal"],
+                             {"units": 2, "success_changed": {"playwright": 0, "kitsune": 1},
+                              "median_input_ratio_spread": 0.1, "max_input_ratio_spread": 0.1})
+            pb_b = next(u for u in spread["units"] if u["task"] == "pb-b")
+            # Kitsune failed pb-b in attempt 1: no input ratio there, so no spread.
+            self.assertEqual((pb_b["orders"], pb_b["input_ratio"], pb_b["input_ratio_spread"]),
+                             (["ab", "ba"], [None, 0.6], None))
+            self.assertEqual(pb_b["success"]["kitsune"], [False, True])
+            self.assertEqual(spread["groups"]["gallery-crowded"]["max_input_ratio_spread"], 0.4)
+
+            text = release.markdown(report, 1.10)
+            self.assertIn("## Audit (all attempts)", text)
+            self.assertIn("- Attempts: 2. This audit pools every attempt; the other sections read attempt 1 only", text)
+            self.assertIn("personal (ab), gallery-crowded (ab) ran the targets one after the other in the given order, "
+                          "without shared load", text)
+            self.assertNotIn("concurrently", text)
+            self.assertIn("## Attempts and execution orders", text)
+            self.assertIn("Attempts: 1 ab; 2 ba.", text)
+            self.assertIn("| personal | ab | 2 | 2 / 1 | 1 | 0.8 | 0.8 | 1.0 | 1.0 |", text)
+            self.assertIn("| personal | no claim | kitsune lower | kitsune lower | no claim | no claim |", text)
+            self.assertIn("| gallery-crowded | no claim | no claim | no claim | no claim | no claim |", text)
+            self.assertIn("| personal | 2 | 0 / 1 | 0.1 | 0.1 |", text)
+            self.assertIn("| ui-a (gallery-crowded-v0) | ab / ba | 0.9 / 1.3 | 0.4 | yes / yes | yes / yes |", text)
+            self.assertIn("| pb-b (personal-v0) | ab / ba | — / 0.6 | — | yes / yes | no / yes |", text)
+
+    def test_single_attempt_suite_has_no_attempts_section(self):
+        with tempfile.TemporaryDirectory() as folder:
+            report = release.review(self.suite(folder))
+            self.assertNotIn("attempts", report)
+            self.assertNotIn("## Attempts and execution orders", release.markdown(report, 1.10))
 
 
 if __name__ == "__main__":

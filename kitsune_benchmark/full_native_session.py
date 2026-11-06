@@ -23,7 +23,7 @@ from urllib.parse import urlsplit
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from kitsune_benchmark.personal_session import NativeSession  # noqa: E402
+from kitsune_benchmark.personal_session import NativeSession, error_detail  # noqa: E402
 
 # Kitsune's gateway tool (KITSUNE_PUBLISH narrower than KITSUNE_CAPS): runs the tool it names with that tool's arguments.
 GATEWAY_CALL = "browser_tools_call"
@@ -137,8 +137,9 @@ def main() -> int:
             if line.strip():
                 session.forward(json.loads(line), emit)
         return 0
-    except (OSError, ValueError, KeyError, TypeError):
+    except (OSError, ValueError, KeyError, TypeError) as error:
         session.evidence["error"] = "native_session_setup_or_inventory_failed"
+        session.evidence["error_detail"] = error_detail(error)
         session.save()
         print("Full-native fixture MCP setup/inventory failed; inspect private artifacts.", file=sys.stderr)
         session.hold_failed_setup()

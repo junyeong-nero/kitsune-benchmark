@@ -150,6 +150,28 @@ class FullSuiteTests(unittest.TestCase):
         with redirect_stdout(io.StringIO()), self.assertRaises(SystemExit):
             self.invoke([], extra=("--elicitation", "approve"))
 
+    def test_setup_retries_reach_relay_tracks_and_the_suite_log(self):
+        # #121: the track reran a pair that failed in setup before any model request; the suite log records it.
+        retry = {"task": "pb-handoff-01", "pair_dir": "artifacts/personal/failed", "target": "kitsune",
+                 "run_dir": "artifacts/personal/failed/runs/r", "execution_status": "setup_failed",
+                 "model_request_observed": False, "error_detail": "ValueError: User channel setup failed."}
+        retried = {"requested_pairs": 28, "completed_pairs": 28, "setup_retries": [retry]}
+        ok = {"requested_pairs": 1, "completed_pairs": 1, "setup_retries": []}
+        tracks = [("personal-v1", ["personal"]), ("external", ["external"])]
+        code, launched, _, entries = self.invoke([(0, retried), (0, ok)], sequential=True, tracks=tracks,
+                                                 extra=("--retry-setup-failures", "1"))
+        self.assertEqual(code, 0)
+        self.assertEqual(self.manifest["retry_setup_failures"], 1)
+        self.assertEqual(launched[0][launched[0].index("--retry-setup-failures") + 1], "1")
+        self.assertNotIn("--retry-setup-failures", launched[1])  # external has no session relay
+        self.assertEqual([entry["setup_retries"] for entry in entries], [[retry], []])
+        # The default, 0, passes nothing and keeps the track commands as before.
+        code, launched, _, _ = self.invoke([(0, ok)] * 2, sequential=True, tracks=tracks)
+        self.assertEqual(self.manifest["retry_setup_failures"], 0)
+        self.assertFalse(any("--retry-setup-failures" in command for command in launched))
+        with patch.object(suite.sys, "stderr", io.StringIO()), self.assertRaises(SystemExit):
+            self.invoke([], extra=("--retry-setup-failures", "-1"))
+
     def test_lite_plan_keeps_every_task_with_fewer_variants(self):
         lite = suite.commands("lite")
         names = [name for name, _ in lite]
@@ -201,6 +223,38 @@ class FullSuiteTests(unittest.TestCase):
         self.assertEqual(self.summary["by_order"]["ba"], entries[2:])
         self.assertEqual(self.summary["by_attempt"]["1"], entries[:2])
         self.assertEqual(entries[-1]["by_target"], result["by_target"])
+
+    def test_lite_plan_counterbalanced_cohort_end_to_end(self):
+        # #107: --plan lite --attempts 2 --order abba --sequential runs every lite entry AB, then BA, one process each.
+        from kitsune_benchmark.__main__ import main as track_main
+        lite = suite.commands("lite")
+        ok = {"requested_pairs": 1, "completed_pairs": 1}
+        code, launched, _, entries = self.invoke([(0, ok)] * 2 * len(lite), tracks=lite, sequential=True,
+                                                 extra=("--plan", "lite", "--attempts", "2", "--order", "abba"))
+        self.assertEqual(code, 0)
+        self.assertEqual(len(launched), 2 * len(lite), "one paired process per entry and attempt")
+        targets = [command[command.index("--targets") + 1] for command in launched]
+        fixed = [name == "coexistence-unprotected" for name, _ in lite]
+        self.assertEqual(targets, ["kitsune" if arm else "playwright,kitsune" for arm in fixed]
+                         + ["kitsune" if arm else "kitsune,playwright" for arm in fixed])
+        self.assertTrue(all(command.count("--targets") == 1 for command in launched))
+        self.assertEqual([(e["attempt"], e["order"]) for e in entries],
+                         [(1, "ab")] * len(lite) + [(2, "ba")] * len(lite))
+        self.assertCountEqual(self.outputs, [f"attempt-{a:03d}/{name}.json" for a in (1, 2) for name, _ in lite]
+                              + ["suite-manifest.json", "suite-summary.json"])
+        self.assertEqual((self.manifest["plan"], self.manifest["targets_in_parallel"], self.manifest["order_policy"]),
+                         ("lite", False, "abba"))
+        # The track commands' own plan mode (no --execute: no browser or model) counts the agent runs: 2 x 306.
+        planned = []
+        for command in launched:
+            output = io.StringIO()
+            with redirect_stdout(output):
+                self.assertEqual(track_main([arg for arg in command[3:] if arg != "--execute"]), 0)
+            plan = json.loads(output.getvalue())
+            self.assertFalse(plan["model_invoked"])
+            planned.append(plan["planned_model_runs"])
+        self.assertEqual(sum(planned[:len(lite)]), 306)
+        self.assertEqual(sum(planned), 612)
 
     def test_repeated_attempts_stop_on_first_invalid_track(self):
         bad = {"requested_pairs": 28, "completed_pairs": 1, "stopped_reason": "unscorable_pair"}

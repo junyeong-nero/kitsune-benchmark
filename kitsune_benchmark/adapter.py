@@ -270,6 +270,9 @@ def terminate_group(process: subprocess.Popen) -> None:
 
 
 SETUP_POLL_SEC = 0.1
+# MCP clients time a request out after 60 s by default (the MCP TypeScript SDK's DEFAULT_REQUEST_TIMEOUT_MSEC), so a
+# client may stop waiting for its tool list after the shorter of this and the server's startup_timeout_sec (#121).
+MCP_REQUEST_TIMEOUT_SEC = 60
 
 
 def write_prompt(stream, prompt: bytes) -> None:
@@ -414,6 +417,7 @@ def run(
                     finally:
                         resources.set_phase("cleanup")
                         terminate_group(process)
+                        stopped = time.monotonic()
                     returncode = process.returncode
     if harness in CLAUDE_HARNESSES:
         audit = claude_harness.audit_events(
@@ -428,6 +432,11 @@ def run(
         audit["harness_error"] = True
         # The guarantee holds only while the client still waits for its tool list (#56); record what happened.
         audit["model_request_observed"] = model_request_observed(audit)
+        # The client's own startup clock cannot start before its launch, so a client whose whole process group was
+        # gone within the shorter of the two timeouts after launch had not given up on its tool list (#121).
+        audit["client_stopped_sec"] = round(stopped - started, 3)
+        audit["client_tool_list_timeout_sec"] = min(server.startup_timeout_sec, MCP_REQUEST_TIMEOUT_SEC)
+        audit["stopped_before_client_timeout"] = stopped - started < audit["client_tool_list_timeout_sec"]
         if audit["model_request_observed"]:
             print("warning: session setup failed, but the harness had already made a model request", file=sys.stderr)
     # Even stderr and successful final answers may contain private page contents.
