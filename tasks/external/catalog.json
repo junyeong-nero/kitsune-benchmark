@@ -25,6 +25,6 @@
      "advisory_answer_regex": "(?i)(9 November 2004|November 9,? 2004|2004-11-09)"},
     {"id": "live-mdn-array-at-firefox", "kind": "live", "task_file": "tasks/live/mdn-array-at-firefox.json",
      "site": "developer.mozilla.org", "skill": "Site search, then read a client-rendered compatibility table",
-     "advisory_answer_regex": "(?i)firefox\\D{0,40}\\b90\\b|\\b90\\b\\D{0,40}firefox"}
+     "advisory_answer_regex": "(?i)firefox\\D{0,80}\\b90\\b|\\b90\\b\\D{0,80}firefox"}
   ]
 }

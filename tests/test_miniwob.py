@@ -136,6 +136,27 @@ class MiniwobTests(unittest.TestCase):
                     self.assertEqual(result["scorable"], scorable)
                     self.assertEqual(result["advisory_answer_match"], match)
 
+    def test_mdn_advisory_pattern_allows_80_characters_between_firefox_and_90(self):
+        # #122: correct answers in artifacts/ put 42-61 characters between the two words; taskset-v3.4 allowed 40.
+        live = next(t for t in catalog()["tasks"] if t["id"] == "live-mdn-array-at-firefox")
+        fixture = LiveTask(live)
+        with tempfile.TemporaryDirectory() as folder:
+            for text, match in (
+                    ("**Firefox 90.** The table lists Firefox desktop as having full support.", True),
+                    ("Firefox (desktop) first supported it in **version 90**, with full support.", True),
+                    ("Firefox desktop first supported `Array.prototype.at()` in **version 90**.", True),
+                    ("Version 90 is the first desktop release of Firefox to support it.", True),
+                    ("Firefox first supported it in version 89.", False),
+                    # Boundary: the gap is the two spaces plus the x run, so 78 x's make exactly 80.
+                    ("Firefox " + "x" * 78 + " 90", True),
+                    ("Firefox " + "x" * 79 + " 90", False),
+                    ("90 " + "x" * 78 + " Firefox", True),
+                    ("90 " + "x" * 79 + " Firefox", False)):
+                with self.subTest(text=text):
+                    (Path(folder) / "final.txt").write_text(text)
+                    result = fixture.evaluate("kitsune", {"execution_status": "completed_unscored", "run_dir": folder})
+                    self.assertEqual(result["advisory_answer_match"], match)
+
     def test_aggregate_keeps_miniwob_and_live_apart(self):
         def run(evaluation):
             return {"benchmark_evaluation": evaluation, "mcp_calls": 3, "elapsed_sec": 1.0}
