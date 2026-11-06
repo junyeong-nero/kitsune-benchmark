@@ -11,9 +11,12 @@ SPEC.loader.exec_module(release)
 
 
 def events(path, calls):
+    """A Claude Code stream of (tool, arguments, result, is_error[, request]) calls; calls with the same request share
+    an assistant message id, and a call without one is sent in a message without an id."""
     lines = []
-    for i, (name, args, text, error) in enumerate(calls):
-        lines.append({"message": {"content": [{"type": "tool_use", "id": str(i), "name": "mcp__browser__browser_" + name, "input": args}]}})
+    for i, (name, args, text, error, *request) in enumerate(calls):
+        lines.append({"message": {**({"id": request[0]} if request else {}), "content": [
+            {"type": "tool_use", "id": str(i), "name": "mcp__browser__browser_" + name, "input": args}]}})
         lines.append({"message": {"content": [{"type": "tool_result", "tool_use_id": str(i), "content": text, "is_error": error}]}})
     path.mkdir(parents=True, exist_ok=True)
     (path / "events.jsonl").write_text("".join(json.dumps(l) + "\n" for l in lines))
@@ -79,7 +82,8 @@ class ReleaseReviewTests(unittest.TestCase):
             self.assertNotIn("coexistence-protect", report["ratios"])
             self.assertEqual([o["task"] for o in report["outliers"]], ["pb-a"])
             k = report["behaviour"]["kitsune"]
-            self.assertEqual((k["blind_waits"], k["actions"], k["actions_followed_by_observation"]), (1, 2, 1))
+            self.assertEqual((k["blind_waits"], k["actions"], k["actions_followed_by_observation_next_request"],
+                              k["actions_followed_by_observation_same_request"]), (1, 2, 1, 0))
             self.assertIn("fill_form: ", next(iter(k["tool_errors"])))
             text = release.markdown(report, 1.10)
             self.assertIn("| coexistence-protect | 1 | — | 1 |", text)
@@ -156,9 +160,11 @@ class ReleaseReviewTests(unittest.TestCase):
             # pb-own and pb-unrecorded open a tab before their first write; Playwright's pb-unrecorded writes nothing.
             self.assertEqual((k["runs_own_tab_before_first_write"], pw["runs_own_tab_before_first_write"]), (2, 0))
             # After navigate and after a navigated click; not a targeted snapshot, nor one after a failed navigate.
-            self.assertEqual((k["snapshots_after_navigation"], k["unchanged_since"]), (2, 1))
+            # Calls in messages without an id are each their own request.
+            self.assertEqual((k["snapshots_after_navigation_next_request"], k["snapshots_after_navigation_same_request"],
+                              k["unchanged_since"]), (2, 0, 1))
             self.assertEqual(k["snapshot_after_navigation_chars"], len(unchanged[2]) + len(snap[2]))
-            self.assertEqual((pw["snapshots_after_navigation"], pw["unchanged_since"]), (1, 0))
+            self.assertEqual((pw["snapshots_after_navigation_next_request"], pw["unchanged_since"]), (1, 0))
             self.assertEqual((k["median_first_request_input_tokens"], pw["median_first_request_input_tokens"]), (1020, 910))
             gallery = report["signals"]["gallery-isolated"]
             k, pw = gallery["kitsune"], gallery["playwright"]
@@ -171,11 +177,61 @@ class ReleaseReviewTests(unittest.TestCase):
                                                  "without_hold": {"units": 1, "input": 0.5}, "no_record": 1})
             self.assertNotIn("gallery-isolated", split, "no hold record in the group")
             text = release.markdown(report, 1.10)
-            self.assertIn("| personal | 3 / 3 | 1 / 1 | 0 / 2 | 910 / 1020 | 2 | "
+            self.assertIn("| personal | 3 / 3 | 1 / 1 | 0 / 2 | 910 / 1020 | 0 / 0 | 1 / 2 | "
                           f"{len(unchanged[2]) + len(snap[2])} | 1 | 0 / 0 | 0 / 0 |", text)
-            self.assertIn("| gallery-isolated | 1 / 1 | 0 / 0 | 0 / 0 | 800 / 1100 | 0 | 0 | 0 | 1 / 2 | 1 / 3 |", text)
+            self.assertIn("| gallery-isolated | 1 / 1 | 0 / 0 | 0 / 0 | 800 / 1100 | 0 / 0 | 0 / 0 | 0 | 0 | 1 / 2 | 1 / 3 |",
+                          text)
             self.assertIn("| personal | 1 | 3.0 | 1 | 0.5 |", text)
             self.assertIn("1 joint successes have no readable Kitsune session evidence", text)
+
+    def test_signals_split_by_model_request(self):
+        # #124: a call sent in the same model request (assistant message id) as the call before it had not seen its
+        # result; `tabs new` with a URL navigates.
+        with tempfile.TemporaryDirectory() as folder:
+            unchanged = '{"snapshot":"unchanged","unchanged_since":"browser_tabs"}'
+            after_click = '{"snapshot":"x"}'
+            kitsune = [("tabs", {"action": "new", "url": "http://l/a"}, '{"ok":true}', False, "k1"),
+                       ("snapshot", {}, unchanged, False, "k1"),
+                       ("click", {"target": "e2"}, '{"ok":true,"navigated":{"url":"http://l/b"}}', False, "k2"),
+                       ("snapshot", {}, after_click, False, "k3"),
+                       ("click", {"target": "e3"}, '{"ok":true}', False, "k4"),
+                       ("find", {"text": "code"}, '{"matches":[]}', False, "k4"),
+                       ("click", {"target": "e4"}, '{"ok":true}', False, "k5"),
+                       ("snapshot", {"target": "e5"}, '{"snapshot":"y"}', False, "k6"),
+                       ("tabs", {"action": "new"}, '{"ok":true}', False, "k7"),
+                       ("snapshot", {}, '{"snapshot":"about:blank"}', False, "k7")]
+            playwright = [("navigate", {"url": "http://l/a"}, "### Ran Playwright code", False, "p1"),
+                          ("snapshot", {}, "### Page state", False, "p1"),
+                          ("click", {"target": "e2"}, "### Ran Playwright code", False, "p2"),
+                          ("snapshot", {}, "### Page state", False, "p3")]
+            summary = Path(folder) / "personal-v0.json"
+            summary.write_text(json.dumps({"pairs": [{"personal_task": "pb-a", "results": {
+                "playwright": run(folder, "a-p", True, 1000, playwright),
+                "kitsune": run(folder, "a-k", True, 1000, kitsune)}}]}))
+            (Path(folder) / "suite-log.jsonl").write_text(json.dumps({"name": "personal-v0",
+                                                                      "suite_summary_path": str(summary)}) + "\n")
+
+            report = release.review(folder)
+            k, pw = report["signals"]["personal"]["kitsune"], report["signals"]["personal"]["playwright"]
+            # After `tabs new url` in its request and after a navigated click in the next; not after `tabs new` alone.
+            self.assertEqual((k["snapshots_after_navigation_same_request"], k["snapshots_after_navigation_next_request"],
+                              k["unchanged_since"]), (1, 1, 1))
+            # Playwright's click result does not say it navigated.
+            self.assertEqual((pw["snapshots_after_navigation_same_request"],
+                              pw["snapshots_after_navigation_next_request"]), (1, 0))
+            k, pw = report["behaviour"]["kitsune"], report["behaviour"]["playwright"]
+            self.assertEqual((k["actions"], k["actions_followed_by_observation_same_request"],
+                              k["actions_followed_by_observation_next_request"]), (3, 1, 2))
+            self.assertEqual((k["observation_after_action_same_request_rate"],
+                              k["observation_after_action_next_request_rate"]), (0.333, 0.667))
+            self.assertEqual((pw["actions_followed_by_observation_same_request"],
+                              pw["actions_followed_by_observation_next_request"]), (0, 1))
+            text = release.markdown(report, 1.10)
+            self.assertIn("Reviews before #124 counted both together", text.split("## Audit")[0])
+            self.assertIn("| Observation right after an action, same request | 0.0 | 0.333 |", text)
+            self.assertIn("| Observation right after an action, next request | 1.0 | 0.667 |", text)
+            self.assertIn("| personal | 1 / 1 | 0 / 0 | 0 / 1 | None / None | 1 / 1 | 0 / 1 | "
+                          f"{len(unchanged) + len(after_click)} | 1 | 0 / 0 | 0 / 0 |", text)
 
     def test_compare_warns_when_elicitation_policies_differ_or_are_not_recorded(self):
         # #59: a suite's policy comes from its suite-manifest.json; suites before #59 recorded none.

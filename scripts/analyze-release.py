@@ -57,7 +57,8 @@ USER_SEEDINGS = ("user_channel", "user_bidi")
 # Kitsune-only coexistence arms, compared with default Kitsune on the user-seeded entry: coexistence-local-v2's
 # unprotected arm (user tabs writable) and coexistence-local-v1's protect arm.
 KITSUNE_ARMS = ("coexistence-unprotected", "coexistence-protect")
-SIGNAL_COUNTS = ("runs", "runs_second_call_tabs_select", "runs_own_tab_before_first_write", "snapshots_after_navigation",
+SIGNAL_COUNTS = ("runs", "runs_second_call_tabs_select", "runs_own_tab_before_first_write",
+                 "snapshots_after_navigation_same_request", "snapshots_after_navigation_next_request",
                  "snapshot_after_navigation_chars", "unchanged_since", "wait_for_text", "wait_for_text_under_50ms",
                  "wait_for_with_delta", "wait_for_without_delta")
 
@@ -167,27 +168,36 @@ def policy_label(policy: str | None, source: str | None) -> str:
     return "none recorded" if policy is None else policy if source == "suite-manifest" else f"{policy} (from {source})"
 
 
-def tool_calls(run: dict) -> list[tuple[str, dict, str, bool]]:
-    """(tool, arguments, result text, is_error) in order, from the run's Claude Code stream."""
+def tool_calls(run: dict) -> list[tuple[str, dict, str, bool, str | None]]:
+    """(tool, arguments, result text, is_error, request) in order, from the run's Claude Code stream. The request is
+    the model request that sent the call: its assistant message id, as in analyze-model-rounds.py, or the event's line
+    for a message without an id."""
     events = Path(run.get("run_dir") or "") / "events.jsonl"
     if not events.is_file():
         return []
     pending, out = {}, []
-    for line in events.read_text(errors="ignore").splitlines():
+    for number, line in enumerate(events.read_text(errors="ignore").splitlines()):
         try:
             event = json.loads(line)
         except ValueError:
             continue
-        content = (event.get("message") or {}).get("content")
+        message = event.get("message") or {}
+        content = message.get("content")
         for block in content if isinstance(content, list) else []:
             if block.get("type") == "tool_use":
-                pending[block["id"]] = (block["name"].split("__")[-1].replace("browser_", ""), block.get("input") or {})
+                pending[block["id"]] = (block["name"].split("__")[-1].replace("browser_", ""), block.get("input") or {},
+                                        message.get("id") or f"line {number}")
             elif block.get("type") == "tool_result":
                 raw = block.get("content")
                 text = raw if isinstance(raw, str) else " ".join(i.get("text", "") for i in raw or [] if isinstance(i, dict))
-                name, args = pending.pop(block.get("tool_use_id"), ("?", {}))
-                out.append((name, args, text, bool(block.get("is_error"))))
+                name, args, request = pending.pop(block.get("tool_use_id"), ("?", {}, None))
+                out.append((name, args, text, bool(block.get("is_error")), request))
     return out
+
+
+def same_request(before: tuple, call: tuple) -> bool:
+    """Whether two calls went out in the same model request, so the second cannot have seen the first's result."""
+    return before[4] is not None and before[4] == call[4]
 
 
 def result_fields(text: str) -> dict:
@@ -199,8 +209,15 @@ def result_fields(text: str) -> dict:
     return value if isinstance(value, dict) else {}
 
 
-def tabs_action(call: tuple[str, dict, str, bool]) -> str | None:
+def tabs_action(call: tuple) -> str | None:
     return call[1].get("action") if call[0] == "tabs" else None
+
+
+def navigating(call: tuple) -> bool:
+    """Whether a call loads a page: a navigation, a `tabs new` with a URL, or a call whose Kitsune result has
+    `navigated` (a click that navigated; Playwright's results do not say)."""
+    return (call[0] in NAVIGATIONS or (tabs_action(call) == "new" and bool(call[1].get("url")))
+            or "navigated" in result_fields(call[2]))
 
 
 def evaluation(run: dict) -> dict:
@@ -309,7 +326,7 @@ def behaviour(units: dict) -> dict:
             m["runs"] += 1
             if calls and calls[0][0] == "tabs" and calls[0][1].get("action") == "list":
                 m["runs_starting_with_tabs_list"] += 1
-            for i, (name, args, text, is_error) in enumerate(calls):
+            for i, (name, args, text, is_error, _) in enumerate(calls):
                 m["calls"] += 1
                 if is_error:
                     errors[target][f"{name}: {text[:90]}"] += 1
@@ -325,13 +342,17 @@ def behaviour(units: dict) -> dict:
                 if name in ACTIONS:
                     m["actions"] += 1
                     m["action_chars"] += len(text)
-                    following = calls[i + 1][0] if i + 1 < len(calls) else None
-                    m["actions_followed_by_observation"] += following in OBSERVATIONS
+                    following = calls[i + 1] if i + 1 < len(calls) else None
+                    observed = following is not None and following[0] in OBSERVATIONS
+                    together = observed and same_request(calls[i], following)
+                    m["actions_followed_by_observation_same_request"] += together
+                    m["actions_followed_by_observation_next_request"] += observed and not together
     summary = {}
     for target, m in out.items():
         summary[target] = {
             **dict(m),
-            "observation_after_action_rate": round(m["actions_followed_by_observation"] / m["actions"], 3) if m["actions"] else None,
+            **{f"observation_after_action_{when}_rate": round(m[f"actions_followed_by_observation_{when}"] / m["actions"], 3)
+               if m["actions"] else None for when in ("same_request", "next_request")},
             "mean_action_response_chars": round(m["action_chars"] / m["actions"]) if m["actions"] else None,
             "mean_find_chars": round(m["find_chars"] / m["find_calls"]) if m["find_calls"] else None,
             "mean_full_snapshot_chars": round(m["full_snapshot_chars"] / m["full_snapshots"]) if m["full_snapshots"] else None,
@@ -342,8 +363,9 @@ def behaviour(units: dict) -> dict:
 
 def signals(units: dict) -> dict:
     """Per group and target: runs whose 2nd call is `tabs select` (kitsune#399); runs that open a tab before their first
-    write (kitsune#393); bare snapshots right after a navigating call, their characters and `unchanged_since` answers
-    (kitsune#400, kitsune#401); `wait_for {text}` answered in under 50 ms and `wait_for` results with and without a
+    write (kitsune#393); bare snapshots right after a navigating call (navigating), sent in the same model request as
+    that call or in the next one (#124), and their characters and `unchanged_since` answers (kitsune#400,
+    kitsune#401); `wait_for {text}` answered in under 50 ms and `wait_for` results with and without a
     `snapshot_delta` (kitsune#402, kitsune#403); the median first request, the fixed prefix (kitsune#405). Navigations
     seen in results, `unchanged_since`, `elapsed` and `snapshot_delta` are Kitsune result fields."""
     counts = collections.defaultdict(lambda: {t: collections.Counter() for t in TARGETS})
@@ -362,13 +384,14 @@ def signals(units: dict) -> dict:
             first_write = next((i for i, call in enumerate(calls) if call[0] in WRITES), None)
             m["runs_own_tab_before_first_write"] += first_write is not None and any(
                 tabs_action(call) == "new" for call in calls[:first_write])
-            for (before, _, before_text, before_error), (name, args, text, _) in zip(calls, calls[1:]):
-                navigated = before in NAVIGATIONS or "navigated" in result_fields(before_text)
-                if name == "snapshot" and not args and navigated and not before_error:
-                    m["snapshots_after_navigation"] += 1
+            for before, call in zip(calls, calls[1:]):
+                name, args, text = call[:3]
+                if name == "snapshot" and not args and navigating(before) and not before[3]:
+                    m["snapshots_after_navigation_" + ("same_request" if same_request(before, call)
+                                                       else "next_request")] += 1
                     m["snapshot_after_navigation_chars"] += len(text)
                     m["unchanged_since"] += "unchanged_since" in result_fields(text)
-            for name, args, text, _ in calls:
+            for name, args, text, *_ in calls:
                 if name != "wait_for":
                     continue
                 fields = result_fields(text)
@@ -402,7 +425,7 @@ def run_holds(run: dict) -> dict | None:
     return hold_metrics(evidence) if evidence is not None else None
 
 
-def writes_in_copy(after: list[tuple[str, dict, str, bool]]) -> bool:
+def writes_in_copy(after: list[tuple]) -> bool:
     """Whether the calls after a copy write (COPY_WRITES) before the agent leaves the copy (its next `tabs new` or
     `tabs select`) or the run ends."""
     for call in after:
@@ -419,9 +442,8 @@ def run_read_only(run: dict) -> dict:
     (writes_in_copy). Copies are None when the session evidence does not say the user opened the starting tabs (seeding
     user_channel or user_bidi)."""
     calls = tool_calls(run)
-    refused = collections.Counter(" ".join(filter(None, (name, tabs_action((name, args, text, error)))))
-                                  for name, args, text, error in calls
-                                  if result_fields(text).get("code") == "user_tab_read_only")
+    refused = collections.Counter(" ".join(filter(None, (call[0], tabs_action(call))))
+                                  for call in calls if result_fields(call[2]).get("code") == "user_tab_read_only")
     evidence = session_evidence(run) or {}
     copies_to_write = copies_to_read = None
     if evidence.get("seeding") in USER_SEEDINGS:
@@ -571,6 +593,10 @@ def review(suite_dir, compare=None, threshold=1.10) -> dict:
 def markdown(report: dict, threshold: float) -> str:
     a = report["audit"]
     lines = [f"# Release review: `{report['suite']}`", "",
+             "Observations right after an action and bare snapshots right after navigating are split by model request "
+             "(assistant message id): one sent in the same request as the call before it had not seen that call's result "
+             "and cost no request; one in the next request cost a request. Reviews before #124 counted both together and "
+             "did not count `tabs new` with a URL as navigating, so their numbers are not comparable with these.", "",
              "## Audit", "",
              f"- Elicitation policy: {policy_label(report['elicitation'], report['elicitation_source'])}",
              f"- Runs: {a.get('runs', 0)}; scorable {a.get('scorable', 0)}; "
@@ -621,7 +647,9 @@ def markdown(report: dict, threshold: float) -> str:
                      f"{o['mcp_calls']['playwright']} / {o['mcp_calls']['kitsune']} | {' '.join(o['kitsune_calls'])} |")
     lines += ["", "## Behaviour", "", "| Signal | Playwright | Kitsune |", "| --- | ---: | ---: |"]
     b = report["behaviour"]
-    for key, label in (("calls", "Tool calls"), ("observation_after_action_rate", "Observation right after an action"),
+    for key, label in (("calls", "Tool calls"),
+                       ("observation_after_action_same_request_rate", "Observation right after an action, same request"),
+                       ("observation_after_action_next_request_rate", "Observation right after an action, next request"),
                        ("mean_action_response_chars", "Mean action response (chars)"), ("blind_waits", "`wait_for {time}` only"),
                        ("runs_starting_with_tabs_list", "Runs starting with `tabs list`"),
                        ("mean_find_chars", "Mean `find` result (chars)"), ("mean_full_snapshot_chars", "Mean full snapshot (chars)"),
@@ -630,15 +658,18 @@ def markdown(report: dict, threshold: float) -> str:
     lines += ["", "Tool errors (Kitsune): " + (", ".join(f"{v}× {k}" for k, v in b["kitsune"]["tool_errors"].items()) or "none")]
     lines += ["", "## Tabs, snapshots after navigation, waits and first request by group", "",
               "| Group | Runs PW / K | 2nd call `tabs select` PW / K | Own tab before first write PW / K | "
-              "Median first request input PW / K | K bare snapshots right after navigating | K chars of those snapshots | "
-              "K `unchanged_since` | K `wait_for {text}` under 50 ms / all | K `wait_for` with / without delta |",
-              "| --- | --- | --- | --- | --- | ---: | ---: | ---: | --- | --- |"]
+              "Median first request input PW / K | Bare snapshots right after navigating, same request PW / K | "
+              "Next request PW / K | K chars of those snapshots, same + next request | "
+              "K `unchanged_since`, same + next request | K `wait_for {text}` under 50 ms / all | K `wait_for` with / without delta |",
+              "| --- | --- | --- | --- | --- | --- | --- | ---: | ---: | --- | --- |"]
     for group, s in report["signals"].items():
         pw, k = s["playwright"], s["kitsune"]
         both = lambda key: f"{pw[key]} / {k[key]}"
         lines.append(f"| {group} | {both('runs')} | {both('runs_second_call_tabs_select')} | "
                      f"{both('runs_own_tab_before_first_write')} | {both('median_first_request_input_tokens')} | "
-                     f"{k['snapshots_after_navigation']} | {k['snapshot_after_navigation_chars']} | {k['unchanged_since']} | "
+                     f"{both('snapshots_after_navigation_same_request')} | "
+                     f"{both('snapshots_after_navigation_next_request')} | "
+                     f"{k['snapshot_after_navigation_chars']} | {k['unchanged_since']} | "
                      f"{k['wait_for_text_under_50ms']} / {k['wait_for_text']} | "
                      f"{k['wait_for_with_delta']} / {k['wait_for_without_delta']} |")
     lines += ["", "## Kitsune holds", "",
