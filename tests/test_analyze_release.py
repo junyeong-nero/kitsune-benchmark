@@ -551,6 +551,88 @@ class ReleaseReviewTests(unittest.TestCase):
             self.assertIn("| personal | playwright | 2 | — | — | — | — | 7.0 | 825 | 1,000 | 400 |", text)
             self.assertIn("| personal | kitsune | 2 | 4.0 (1/2) | 1.0 | 2.0 / 0.5 | 6 / 4 | 3.0 | 1,000 | 1,000 | 200 |", text)
             self.assertIn("counts shared memory more than once", text)
+            self.assertIn("personal ran both targets concurrently, so CPU and time are measured under shared load.",
+                          text)
+            self.assertNotIn("one after the other", text)
+
+    def test_counterbalanced_attempts_spread_order_ratios_and_claims(self):
+        # #107: --attempts 2 --order abba --sequential; attempt 1 runs ab (Playwright first), attempt 2 ba.
+        with tempfile.TemporaryDirectory() as folder:
+            snap = ("snapshot", {}, '{"snapshot":"x"}', False)
+            # (entry, task): per attempt (Playwright input, Kitsune input, Kitsune success).
+            plan = {("personal-v0", "pb-a"): ((1000, 800, True), (1000, 900, True)),
+                    ("personal-v0", "pb-b"): ((1000, 700, False), (1000, 600, True)),
+                    ("gallery-crowded-v0", "ui-a"): ((1000, 900, True), (1000, 1300, True))}
+            log = []
+            for attempt, order in ((1, "ab"), (2, "ba")):
+                for entry in ("personal-v0", "gallery-crowded-v0"):
+                    pairs = []
+                    for (name, task), attempts in plan.items():
+                        if name != entry:
+                            continue
+                        pw, k, success = attempts[attempt - 1]
+                        key = "personal_task" if entry.startswith("personal") else "gallery_task"
+                        pairs.append({key: task, "results": {
+                            "playwright": run(folder, f"{attempt}-{task}-p", True, pw, [snap]),
+                            "kitsune": run(folder, f"{attempt}-{task}-k", success, k, [snap])}})
+                    path = Path(folder) / f"attempt-{attempt:03d}-{entry}.json"
+                    path.write_text(json.dumps({"pairs": pairs}))
+                    log.append({"name": entry, "suite_summary_path": str(path), "attempt": attempt, "order": order})
+            (Path(folder) / "suite-log.jsonl").write_text("".join(json.dumps(e) + "\n" for e in log))
+
+            self.assertEqual(release.suite_attempts(folder), {1: ["ab"], 2: ["ba"]})
+            report = release.review(folder)
+            self.assertEqual(report["audit"]["runs"], 12, "the audit covers both attempts")
+            self.assertEqual(report["outcomes"]["personal"]["kitsune"], 1, "other sections read attempt 1")
+            self.assertEqual(report["ratios"]["personal"]["input"], 0.8)
+
+            groups = report["attempts"]["groups"]
+            personal = groups["personal"]["by_order"]
+            self.assertEqual({order: (row["units"], row["playwright"], row["kitsune"]) for order, row in personal.items()},
+                             {"ab": (2, 2, 1), "ba": (2, 2, 2), "all attempts": (4, 4, 3)})
+            self.assertEqual(personal["ab"]["ratios"]["input"], 0.8)
+            self.assertEqual(personal["ba"]["ratios"]["input"], 0.75)
+            self.assertEqual(personal["all attempts"]["ratios"]["input"], round(2300 / 3000, 3))
+            # Both orders put Kitsune's input below Playwright's; successes and calls do not agree on a side.
+            self.assertEqual(groups["personal"]["claims"],
+                             {"successes": None, "input": "kitsune lower", "output": "kitsune lower",
+                              "mcp_calls": None, "elapsed": None})
+            crowded = groups["gallery-crowded"]
+            self.assertEqual((crowded["by_order"]["ab"]["ratios"]["input"], crowded["by_order"]["ba"]["ratios"]["input"]),
+                             (0.9, 1.3))
+            self.assertIsNone(crowded["claims"]["input"], "the orders disagree")
+
+            spread = report["attempts"]["spread"]
+            self.assertEqual(spread["groups"]["personal"],
+                             {"units": 2, "success_changed": {"playwright": 0, "kitsune": 1},
+                              "median_input_ratio_spread": 0.1, "max_input_ratio_spread": 0.1})
+            pb_b = next(u for u in spread["units"] if u["task"] == "pb-b")
+            # Kitsune failed pb-b in attempt 1: no input ratio there, so no spread.
+            self.assertEqual((pb_b["orders"], pb_b["input_ratio"], pb_b["input_ratio_spread"]),
+                             (["ab", "ba"], [None, 0.6], None))
+            self.assertEqual(pb_b["success"]["kitsune"], [False, True])
+            self.assertEqual(spread["groups"]["gallery-crowded"]["max_input_ratio_spread"], 0.4)
+
+            text = release.markdown(report, 1.10)
+            self.assertIn("## Audit (all attempts)", text)
+            self.assertIn("- Attempts: 2. This audit pools every attempt; the other sections read attempt 1 only", text)
+            self.assertIn("personal (ab), gallery-crowded (ab) ran the targets one after the other in the given order, "
+                          "without shared load", text)
+            self.assertNotIn("concurrently", text)
+            self.assertIn("## Attempts and execution orders", text)
+            self.assertIn("Attempts: 1 ab; 2 ba.", text)
+            self.assertIn("| personal | ab | 2 | 2 / 1 | 1 | 0.8 | 0.8 | 1.0 | 1.0 |", text)
+            self.assertIn("| personal | no claim | kitsune lower | kitsune lower | no claim | no claim |", text)
+            self.assertIn("| gallery-crowded | no claim | no claim | no claim | no claim | no claim |", text)
+            self.assertIn("| personal | 2 | 0 / 1 | 0.1 | 0.1 |", text)
+            self.assertIn("| ui-a (gallery-crowded-v0) | ab / ba | 0.9 / 1.3 | 0.4 | yes / yes | yes / yes |", text)
+            self.assertIn("| pb-b (personal-v0) | ab / ba | — / 0.6 | — | yes / yes | no / yes |", text)
+
+    def test_single_attempt_suite_has_no_attempts_section(self):
+        with tempfile.TemporaryDirectory() as folder:
+            report = release.review(self.suite(folder))
+            self.assertNotIn("attempts", report)
+            self.assertNotIn("## Attempts and execution orders", release.markdown(report, 1.10))
 
 
 if __name__ == "__main__":

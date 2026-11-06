@@ -60,6 +60,41 @@ external are the same in both plans.
 - **Coexistence:** always runs paired in one process, Playwright first.
 - **Duration:** expected about 1.5–2 h. The 2026-10-26 cohort took 2 h 17 min for 480 runs.
 
+## Counterbalanced cohort (claim-grade, #107)
+
+The one-attempt cohort above gives observations. To state a Kitsune/Playwright claim from a release cohort, run the
+same lite plan twice with the target order counterbalanced and no shared load:
+
+```sh
+uv run --locked python scripts/run-full-suite.py --plan lite --attempts 2 --order abba --sequential \
+  --kitsune-project artifacts/vendor/kitsune-<TAG> --out artifacts/opus-subscription-<TAG>-abba
+uv run --locked python scripts/analyze-release.py artifacts/opus-subscription-<TAG>-abba
+```
+
+- **What runs:** every lite entry once AB (attempt 1, Playwright first) and once BA (attempt 2, Kitsune first), one
+  process per entry, in `attempt-001/` and `attempt-002/`. Coexistence follows the attempt's order. The Kitsune-only
+  unprotected arm has no order.
+- **Cost:** about 612 agent runs (2 × 306) and roughly 2.5× the wall time of the one-attempt cohort, since the
+  targets no longer run concurrently.
+- **When to use it:** for releases that change defaults (for example the user-tab policy, the snapshot budget or the
+  tool set), where the report has to say whether Kitsune now costs more or less than Playwright. Patch releases keep
+  the one-attempt cohort.
+- **Resume:** `--from`/`--previous-suite` resume single-attempt suites only; they refuse `--attempts 2`.
+
+`analyze-release.py` reads attempt 1 in its usual sections and audits both attempts. Its "Attempts and execution
+orders" section adds, per group:
+
+- successes and Kitsune/Playwright ratios (input, output, MCP calls, elapsed on joint successes) in each order and
+  over both attempts;
+- the claims: a ratio is a claim only when the AB and BA ratios are on the same side of 1, and a success difference
+  only when Kitsune's successes minus Playwright's are on the same side of 0 in both orders. Otherwise it says
+  "no claim";
+- per-unit spread: the units whose success changed between attempts, and each unit's Kitsune/Playwright input ratio
+  in attempt 1 and 2 where both targets succeeded, with the median and largest difference.
+
+Resource measures from a sequential cohort are not comparable with those of a concurrent one. A difference between
+releases is still an observation (see the rules below).
+
 ## Procedure
 
 1. **Pin.** Clone `<TAG>` into `artifacts/vendor/kitsune-<TAG>`, then check that `git describe --tags` equals `<TAG>`
@@ -182,7 +217,8 @@ Rules:
 
 ## Limits
 
-- One attempt, fixed process layout, no order counterbalancing: this is not a ranking.
+- One attempt, fixed process layout, no order counterbalancing: this is not a ranking. The counterbalanced cohort
+  above is the claim-grade option.
 - The `lite` plan has 21 units per gallery layout. One unit moves a layout's success rate by about 5 points.
 - Live-site tasks depend on the pages as they are on the run date.
 - Resource measures are taken under concurrent load and are not comparable with sequential runs.

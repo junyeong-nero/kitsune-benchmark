@@ -226,6 +226,10 @@ uv run --locked python scripts/run-full-suite.py --sequential --attempts 2 --ord
   --kitsune-project artifacts/vendor/kitsune-pinned --out artifacts/v3-repeated
 ```
 
+`scripts/analyze-release.py` on such a suite adds per-order ratios, the claims both orders agree on and per-unit
+spread between attempts; the release-cohort form (`--plan lite`, about 612 runs) is in the
+[release cohort protocol](experiments/2026-10-29-release-cohort-protocol.md#counterbalanced-cohort-claim-grade-107).
+
 Every pair/run manifest records configured geometry read from launch/server args:
 Playwright `viewport_size` 1280×720 (content) and the Kitsune headless Firefox
 `window_size` (a window, not a content area). Configured window height is never
