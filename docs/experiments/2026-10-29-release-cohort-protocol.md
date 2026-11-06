@@ -108,8 +108,9 @@ external are the same in both plans.
 5. **Analyse and report** (see below). Since v0.7.1, the review is scripted:
    `uv run --locked python scripts/analyze-release.py artifacts/opus-subscription-<TAG> --compare <previous suite dir>`.
    It prints the audit, outcomes, Kitsune/Playwright ratios (also on the units shared with the previous cohort), the
-   units where Kitsune costs more than 1.10× Playwright, tool errors, and behaviour signals: observation right after an
-   action, blind waits, `browser_find` and snapshot sizes.
+   units where Kitsune costs more than 1.10× Playwright, the cost beyond tokens (setup, CPU, RSS, input excl. cache
+   reads), tool errors, and behaviour signals: observation right after an action, blind waits, `browser_find` and
+   snapshot sizes.
 
 ## Reported measures
 
@@ -128,6 +129,22 @@ On joint successes, as Kitsune/Playwright ratios:
 - MCP calls;
 - elapsed time;
 - the paired input-ratio median.
+
+Cost beyond tokens, per track and target on joint successes (the "Cost beyond tokens" section of
+`analyze-release.py`, #108), means per joint success:
+
+| Track | Target | Cold-start setup s | Warm-ready s | Task CPU s | Task RSS MiB (time-weighted) | Input | Input excl. cache reads |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Personal | Playwright | — | — | | | | |
+| Personal | Kitsune | | | | | | |
+
+- Cold-start setup is Kitsune's launch, bridge and browser readiness; warm-ready is the pair's idle `ready` phase.
+  Playwright launches its browser inside the task window and has neither. The script also gives their CPU and peak RSS.
+- Input excl. cache reads (`input_excl_cache_read_tokens`) is total input minus cache reads, so cache writes count:
+  Claude `uncached_input_tokens` + `cache_creation_input_tokens`, Codex `uncached_input_tokens`. It is not
+  `uncached_input_tokens` (`noncached_input_tokens` in the personal analysis), which for Claude leaves out cache writes.
+- Summed RSS counts shared memory more than once and is not unique memory; concurrent targets share load
+  ([resources](../resources.md)).
 
 Also reported:
 

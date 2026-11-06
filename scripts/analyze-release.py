@@ -28,6 +28,11 @@ suite-manifest.json, else from what its pairs recorded (summary, pair manifest, 
 different policies, or against a suite that recorded none, are not comparable: --compare still computes them and the
 report warns. An earlier suite that recorded none and ran a Kitsune from before its holds (kitsune#364) had no prompt
 to answer: the report says "no holds then (Kitsune < #364)" instead of warning.
+
+Cost beyond tokens (#108), per group and target on joint successes: Kitsune's cold-start setup and warm-ready time, CPU
+and sampled peak RSS (the pair's owner-filtered `setup` and `ready` phases, as in cost_metrics.pair_lifecycle), task
+CPU and time-weighted RSS (resources_task), and input excluding cache reads next to total input. The caveats of
+docs/resources.md apply: summed RSS is not unique memory, and concurrent targets share load.
 """
 from __future__ import annotations
 
@@ -40,6 +45,8 @@ import statistics
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from kitsune_benchmark.cost_metrics import (load_pair_resource_phases, normalized_usage, resource_cost,  # noqa: E402
+                                            total)
 from kitsune_benchmark.holds import DECISIONS, DETAILS, aggregate_holds, hold_metrics  # noqa: E402
 from kitsune_benchmark.holds import NAVIGATIONS as BROWSER_NAVIGATIONS  # noqa: E402
 
@@ -57,6 +64,7 @@ USER_SEEDINGS = ("user_channel", "user_bidi")
 # Kitsune-only coexistence arms, compared with default Kitsune on the user-seeded entry: coexistence-local-v2's
 # unprotected arm (user tabs writable) and coexistence-local-v1's protect arm.
 KITSUNE_ARMS = ("coexistence-unprotected", "coexistence-protect")
+MIB = 1024 * 1024
 SIGNAL_COUNTS = ("runs", "runs_second_call_tabs_select", "runs_own_tab_before_first_write",
                  "snapshots_after_navigation_same_request", "snapshots_after_navigation_next_request",
                  "snapshot_after_navigation_chars", "unchanged_since", "wait_for_text", "wait_for_text_under_50ms",
@@ -87,8 +95,21 @@ def load(suite_dir: str | Path) -> dict:
             task = (pair.get("personal_task") or pair.get("gallery_task") or pair.get("coexistence_task")
                     or pair.get("external_task") or "?")
             for target, run in pair["results"].items():
-                units[(entry["name"], task)][target] = {**run, "pair_dir": pair.get("pair_dir")}
+                units[(entry["name"], task)][target] = {**run, "pair_dir": pair.get("pair_dir"),
+                                                        "pair_lifecycle": pair_lifecycle(pair, target)}
     return units
+
+
+def pair_lifecycle(pair: dict, target: str) -> dict:
+    """A target's share of its pair's lifecycle, as in cost_metrics.pair_lifecycle: Kitsune's cold-start setup wall time
+    (`timing.kitsune_cold_start_setup_sec`) and the owner-filtered `setup` and `ready` phase resources. Old pairs
+    without inline phases are read from their resource-summary.json; absent files and fields stay None."""
+    try:
+        phases = (load_pair_resource_phases(pair).get("resource_phases") or {}).get(target) or {}
+    except (OSError, ValueError):
+        phases = {}
+    cold_start = (pair.get("timing") or {}).get("kitsune_cold_start_setup_sec") if target == "kitsune" else None
+    return {"cold_start_setup_sec": cold_start, "setup": phases.get("setup"), "ready": phases.get("ready")}
 
 
 def pair_policy(pair: dict) -> str | None:
@@ -238,6 +259,18 @@ def input_tokens(run: dict) -> int:
     return (run.get("usage") or {}).get("input_tokens") or 0
 
 
+def input_excl_cache_read_tokens(run: dict) -> int | None:
+    """Input excluding cache reads: total input minus cache reads, so Claude's cache writes count. Codex's
+    `uncached_input_tokens` (total minus cached); for Claude, `uncached_input_tokens` (input after the last cache
+    breakpoint, a few tokens) plus `cache_creation_input_tokens` (cache writes). Not `uncached_input_tokens` itself
+    (personal_analysis's `noncached_input_tokens`), which leaves out Claude's cache writes. None when the run reported
+    neither."""
+    usage = normalized_usage(run)
+    if usage.get("uncached_input_tokens") is None:
+        return None
+    return usage["uncached_input_tokens"] + (usage.get("cache_creation_input_tokens") or 0)
+
+
 def audit(units: dict) -> dict:
     counts = collections.Counter()
     models = collections.Counter()
@@ -295,6 +328,32 @@ def ratios(units: dict, keys=None) -> dict:
                       "elapsed": ratio(lambda r: r.get("elapsed_sec") or 0),
                       "paired_input_median": round(statistics.median(paired), 3) if paired else None,
                       "units_less_kitsune_input": sum(p < 1 for p in paired)}
+    return out
+
+
+def costs(units: dict) -> dict:
+    """Per group and target, on joint successes: Kitsune's cold-start setup time and its pair's `setup` and `ready`
+    phase resources (pair_lifecycle; Playwright starts its browser inside the task window and has neither), the task
+    window's resources (resources_task), and total input and input excluding cache reads, with coverage."""
+    groups = collections.defaultdict(list)
+    for key, runs in units.items():
+        group = group_of(key[0])
+        if group and all(solved(runs.get(t)) for t in TARGETS):
+            groups[group].append(runs)
+    out = {}
+    for group, joint in groups.items():
+        out[group] = {}
+        for target in TARGETS:
+            runs = [unit[target] for unit in joint]
+            lifecycle = [run.get("pair_lifecycle") or {} for run in runs]
+            out[group][target] = {
+                "joint": len(runs),
+                "cold_start_setup_sec": total([phases.get("cold_start_setup_sec") for phases in lifecycle]),
+                "setup": resource_cost([phases.get("setup") for phases in lifecycle]),
+                "ready": resource_cost([phases.get("ready") for phases in lifecycle]),
+                "resources_task": resource_cost([(run.get("resources") or {}).get("task") for run in runs]),
+                "input_tokens": total([(run.get("usage") or {}).get("input_tokens") for run in runs]),
+                "input_excl_cache_read_tokens": total([input_excl_cache_read_tokens(run) for run in runs])}
     return out
 
 
@@ -571,7 +630,7 @@ def review(suite_dir, compare=None, threshold=1.10) -> dict:
     units = load(suite_dir)
     policy, source = elicitation_policy(suite_dir)
     report = {"suite": str(suite_dir), "elicitation": policy, "elicitation_source": source, "audit": audit(units),
-              "outcomes": outcomes(units), "ratios": ratios(units),
+              "outcomes": outcomes(units), "ratios": ratios(units), "costs": costs(units),
               "outliers": outliers(units, threshold), "behaviour": behaviour(units), "signals": signals(units),
               "holds": holds(units), "hold_split": hold_split(units),
               "read_only": read_only(units), "read_only_split": read_only_split(units),
@@ -588,6 +647,55 @@ def review(suite_dir, compare=None, threshold=1.10) -> dict:
                              "read_only_now": read_only(units, group_of, shared),
                              "read_only_then": read_only(old, group_of, shared)}
     return report
+
+
+def mean_cell(value: dict, digits: int = 1) -> str:
+    """A total's mean per reporting run, with its coverage when runs are missing; — when no run reported."""
+    if value["total"] is None:
+        return "—"
+    reported = value["reported_runs"]
+    cell = f"{value['total'] / reported:,.{digits}f}"
+    return cell if not value["missing_runs"] else f"{cell} ({reported}/{reported + value['missing_runs']})"
+
+
+def rss_cell(value: float | None, runs: int, attempted: int) -> str:
+    if value is None:
+        return "—"
+    return f"{value / MIB:,.0f}" + (f" ({runs}/{attempted})" if runs < attempted else "")
+
+
+def cost_lines(costs: dict) -> list[str]:
+    lines = ["", "## Cost beyond tokens on joint successes", "",
+             "Means per joint success. Cold-start setup is Kitsune's launch, bridge and browser readiness wall time; "
+             "warm-ready is the pair's `ready` phase, an idle wait of about one second with the browser and bridge "
+             "already running. Their CPU and sampled peak RSS are the pair's `setup` and `ready` phases filtered to the "
+             "target's processes. Playwright starts its browser inside the task window and has no such phases (—). Task "
+             "CPU is user + system CPU per measured task; task RSS is the task windows' mean RSS weighted by their "
+             "duration. Input excl. cache reads is total input minus cache reads, so cache writes count: Codex "
+             "`uncached_input_tokens`; Claude `uncached_input_tokens` + `cache_creation_input_tokens`. It is not "
+             "`uncached_input_tokens`, which for Claude leaves out cache writes. (n/m): only n of m runs reported the "
+             "value.", "",
+             "| Group | Target | Joint | Cold-start setup s | Warm-ready s | Setup / ready CPU s | "
+             "Setup / ready peak RSS MiB | Task CPU s | Task RSS MiB | Input | Input excl. cache reads |",
+             "| --- | --- | ---: | ---: | ---: | --- | --- | ---: | ---: | ---: | ---: |"]
+    for group, by_target in costs.items():
+        for target, c in by_target.items():
+            setup, ready, task = c["setup"], c["ready"], c["resources_task"]
+            both = lambda first, second: "—" if first == second == "—" else f"{first} / {second}"
+            peak = lambda phase: rss_cell(phase["sampled_peak_rss_bytes"], phase["runs_with_peak_rss"], phase["attempted"])
+            lines.append(f"| {group} | {target} | {c['joint']} | {mean_cell(c['cold_start_setup_sec'])} | "
+                         f"{mean_cell(ready['duration_sec'])} | "
+                         f"{both(mean_cell(setup['observed_cpu_sec']), mean_cell(ready['observed_cpu_sec']))} | "
+                         f"{both(peak(setup), peak(ready))} | {mean_cell(task['observed_cpu_sec'])} | "
+                         f"{rss_cell(task['time_weighted_mean_rss_bytes'], task['runs_with_mean_rss'], task['attempted'])} | "
+                         f"{mean_cell(c['input_tokens'], digits=0)} | "
+                         f"{mean_cell(c['input_excl_cache_read_tokens'], digits=0)} |")
+    return lines + ["", "Caveats (docs/resources.md): RSS is summed over the target's processes and counts shared memory "
+                    "more than once; it is not unique memory (PSS, USS or physical footprint). Peaks are sampled peaks, "
+                    "the largest of the runs'. Personal, gallery and external run both targets concurrently, so CPU and "
+                    "time are measured under shared load. Kitsune's task window includes its already-running browser "
+                    "and bridge, Playwright's includes its browser launch: this is not a cold-versus-reused-session "
+                    "comparison. Remote model inference is not measured."]
 
 
 def markdown(report: dict, threshold: float) -> str:
@@ -616,6 +724,7 @@ def markdown(report: dict, threshold: float) -> str:
     for group, r in report["ratios"].items():
         lines.append(f"| {group} | {r['joint']} | {r['input']} | {r['paired_input_median']} | "
                      f"{r['units_less_kitsune_input']}/{r['joint']} | {r['output']} | {r['mcp_calls']} | {r['elapsed']} |")
+    lines += cost_lines(report["costs"])
     if "compare" in report:
         c = report["compare"]
         then_label = ("no holds then (Kitsune < #364)" if c["no_holds"]

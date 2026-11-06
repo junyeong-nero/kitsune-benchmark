@@ -488,6 +488,70 @@ class ReleaseReviewTests(unittest.TestCase):
             self.assertIn("| Runs that moved the user's view | 0 | 1 |", text)
             self.assertIn("the arm's input is 0.5× and its agent calls 0.5× default Kitsune's.", text)
 
+    def test_cost_beyond_tokens_on_joint_successes(self):
+        # #108: cold-start and warm-ready phases, task resources and input excluding cache reads per group and target.
+        with tempfile.TemporaryDirectory() as folder:
+            mib = 1024 * 1024
+            snap = ("snapshot", {}, '{"snapshot":"x"}', False)
+
+            def bucket(duration, cpu, peak, mean):
+                return {"duration_sec": duration, "observed_cpu_user_sec": cpu / 2, "observed_cpu_system_sec": cpu / 2,
+                        "sampled_peak_rss_bytes": peak * mib, "time_weighted_mean_rss_bytes": mean * mib}
+
+            def target_run(name, success, usage, task):
+                result = run(folder, name, success, usage["input_tokens"], [snap], resources={"task": task})
+                result["usage"] = usage
+                return result
+            # Claude: input includes cache reads (cached_input_tokens) and writes; Codex reports total and cached only.
+            claude = {"input_tokens": 1000, "cached_input_tokens": 800, "cache_creation_input_tokens": 150,
+                      "uncached_input_tokens": 50, "output_tokens": 10}
+            codex = {"input_tokens": 1000, "cached_input_tokens": 600, "output_tokens": 10}
+            # A pair from before inline phases: its setup and ready phases are read from its resource-summary.json.
+            old_summary = Path(folder) / "old-resource-summary.json"
+            old_summary.write_text(json.dumps({"metrics": {"phase/setup/owner/kitsune": bucket(2, 1, 6, 2),
+                                                           "phase/ready/owner/kitsune": bucket(1, 0.5, 4, 3)}}))
+            playwright_lifecycle = {"timing": {"kitsune_cold_start_setup_sec": None},
+                                    "resource_phases": {"playwright": {"setup": None, "ready": None}}}
+            pairs = [
+                {"personal_task": "pb-a", **playwright_lifecycle,
+                 "results": {"playwright": target_run("a-p", True, codex, bucket(10, 8, 900, 600))}},
+                {"personal_task": "pb-a", "timing": {"kitsune_cold_start_setup_sec": 4},
+                 "resource_phases": {"kitsune": {"setup": bucket(4, 3, 5, 2), "ready": bucket(1, 0.5, 3, 3)}},
+                 "results": {"kitsune": target_run("a-k", True, claude, bucket(10, 4, 1000, 700))}},
+                {"personal_task": "pb-b", **playwright_lifecycle,
+                 "results": {"playwright": target_run("b-p", True, codex, bucket(30, 6, 800, 900))}},
+                {"personal_task": "pb-b", "resource_summary_path": str(old_summary),
+                 "results": {"kitsune": target_run("b-k", True, claude, bucket(30, 2, 1200, 1100))}},
+                {"personal_task": "pb-c", **playwright_lifecycle,
+                 "results": {"playwright": target_run("c-p", True, codex, bucket(10, 99, 9000, 9000))}},
+                {"personal_task": "pb-c", "timing": {"kitsune_cold_start_setup_sec": 99},
+                 "resource_phases": {"kitsune": {"setup": bucket(99, 99, 9000, 9000), "ready": None}},
+                 "results": {"kitsune": target_run("c-k", False, claude, bucket(10, 99, 9000, 9000))}}]
+            path = Path(folder) / "personal-v0.json"
+            path.write_text(json.dumps({"pairs": pairs}))
+            (Path(folder) / "suite-log.jsonl").write_text(json.dumps({"name": "personal-v0", "suite_summary_path": str(path)}) + "\n")
+
+            report = release.review(folder)
+            kitsune, playwright = report["costs"]["personal"]["kitsune"], report["costs"]["personal"]["playwright"]
+            self.assertEqual(kitsune["joint"], 2, "pb-c is not a joint success")
+            self.assertEqual(kitsune["cold_start_setup_sec"], {"total": 4, "reported_runs": 1, "missing_runs": 1})
+            self.assertEqual((kitsune["setup"]["observed_cpu_sec"]["total"], kitsune["setup"]["sampled_peak_rss_bytes"]),
+                             (4, 6 * mib))
+            self.assertEqual(kitsune["ready"]["duration_sec"]["total"], 2)
+            self.assertEqual(kitsune["resources_task"]["observed_cpu_sec_per_measured_task"], 3)
+            self.assertEqual(kitsune["resources_task"]["time_weighted_mean_rss_bytes"], 1000 * mib, "weighted by duration")
+            self.assertEqual((kitsune["input_tokens"]["total"], kitsune["input_excl_cache_read_tokens"]["total"]),
+                             (2000, 400), "Claude: uncached input plus cache writes")
+            self.assertEqual(playwright["input_excl_cache_read_tokens"]["total"], 800, "Codex: total minus cached input")
+            self.assertIsNone(playwright["cold_start_setup_sec"]["total"])
+            self.assertIsNone(playwright["setup"]["observed_cpu_sec"]["total"])
+            text = release.markdown(report, 1.10)
+            self.assertIn("## Cost beyond tokens on joint successes", text)
+            self.assertIn("| Input | Input excl. cache reads |", text)
+            self.assertIn("| personal | playwright | 2 | — | — | — | — | 7.0 | 825 | 1,000 | 400 |", text)
+            self.assertIn("| personal | kitsune | 2 | 4.0 (1/2) | 1.0 | 2.0 / 0.5 | 6 / 4 | 3.0 | 1,000 | 1,000 | 200 |", text)
+            self.assertIn("counts shared memory more than once", text)
+
 
 if __name__ == "__main__":
     unittest.main()
