@@ -659,8 +659,8 @@ def markdown(report: dict, threshold: float) -> str:
     lines += ["", "## Tabs, snapshots after navigation, waits and first request by group", "",
               "| Group | Runs PW / K | 2nd call `tabs select` PW / K | Own tab before first write PW / K | "
               "Median first request input PW / K | Bare snapshots right after navigating, same request PW / K | "
-              "Next request PW / K | K chars of those snapshots | "
-              "K `unchanged_since` | K `wait_for {text}` under 50 ms / all | K `wait_for` with / without delta |",
+              "Next request PW / K | K chars of those snapshots, same + next request | "
+              "K `unchanged_since`, same + next request | K `wait_for {text}` under 50 ms / all | K `wait_for` with / without delta |",
               "| --- | --- | --- | --- | --- | --- | --- | ---: | ---: | --- | --- |"]
     for group, s in report["signals"].items():
         pw, k = s["playwright"], s["kitsune"]
