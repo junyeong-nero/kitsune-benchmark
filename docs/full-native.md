@@ -61,7 +61,9 @@ on the [personal track](personal-browsing.md): user-channel seeding and viewport
   `browser_tools_call` as the tool it runs: a gateway `browser_tabs close` is a close attempt, and the tab call is
   recorded under that tool with `via: "browser_tools_call"`. It blocks out-of-fixture navigation for every `url` in
   a call's arguments, nested ones included, so container commands (`browser_batch` and the like) cannot leave the
-  fixture either. The call itself reaches Kitsune unchanged.
+  fixture either. The call itself reaches Kitsune unchanged. It waits up to 330 s for the agent's calls, not the
+  frozen relay's 60 s: Kitsune lets a batch, parallel, workflow or resume call run 300 s, plus 30 s to settle and
+  report its partial progress. The harness's own setup and inventory calls keep the 60 s limit.
 
 ## Measures
 
@@ -73,11 +75,20 @@ graders' verdicts and each run's `events.jsonl`:
 | `successes`, `scorable_success_rate` | The tracks' own primary verdicts (`task_success`); unscorable runs are reported, not scored |
 | `input_tokens`, `uncached_input_tokens`, `output_tokens` | As on the other tracks (total input includes cached input), with `reported_runs`/`missing_runs` |
 | `mcp_calls`, `model_requests` | Agent-visible MCP calls; deduplicated model requests (Claude Code `token_attribution.requests`) |
+| `agent_calls`, `ran_calls` (per run, in `native`) | The agent's MCP calls in its events, and those that reached Kitsune (see below) |
 | `gateway_calls`, `gateway_called_tools`, `runs_using_gateway` | Calls to each gateway tool, and which tools `browser_tools_call` ran |
-| `container_calls`, `batch_steps`, `runs_using_containers` | Container calls (direct or through the gateway) and the commands packed into them: `browser_batch` commands, `browser_parallel` commands across sequences, one per `browser_retry` or `browser_broadcast`; a `browser_workflow` counts as a call without steps |
-| `capability_errors` | Results that name `capability_restricted` (the bridge refused a group), `tool_not_published` or `not_supported`, by code, including failed steps inside container results |
-| `unlisted_tool_calls` | Calls Claude Code refused because the tool was not in its list (`nonexistent_tool_calls`) |
-| `published_tools`, `gateway_published` | Per run, how many tools Kitsune listed to the agent and whether the gateway was among them, a check that the arm ran as configured |
+| `container_calls`, `batch_steps`, `runs_using_containers` | Container calls (direct or through the gateway) and the commands packed into them: `browser_batch` commands, `browser_parallel` commands across sequences, the wrapped command of a `browser_retry`, one per `browser_broadcast`. A nested `parallel` command counts the commands of its sequences and a nested `retry` its wrapped command, at any depth. A `browser_workflow` counts as a call without steps |
+| `capability_errors` | Results that name `capability_restricted` (the bridge refused a group), `tool_not_published` or `not_supported`, by code, including failed steps inside container results. A result's text is read, or its `structuredContent` when it has no text, so a code both carry counts once |
+| `unlisted_tool_calls` | Calls to a tool not in Claude Code's system-init tool list that did not run: Claude Code refused them |
+| `published_tools`, `gateway_published` | Per run, how many tools Kitsune listed to the agent in its first `tools/list` (all its pages, not later listings) and whether the gateway was among them, a check that the arm ran as configured |
+
+Gateway, container, step, capability and error counts cover only the calls that reached Kitsune. Claude Code refuses,
+without running it, a call to a tool not in its system-init list, and the relay refuses an out-of-fixture navigation.
+A call to a tool in the list ran unless the relay refused it. A call to an unlisted tool ran only if the relay
+recorded it (evidence `tab_calls`, with `via` for gateway calls), which happens once Claude Code refreshes its list
+after `browser_tools_publish`; such recorded calls go to the latest unlisted calls of the same tool. So a call that
+ran after a refresh is not unlisted, and the harness's own `nonexistent_tool_calls`, which reads the init list only,
+is not used here.
 
 `analysis.arms` totals each arm over all its runs, failures included. `analysis.by_category` splits them by unit
 category. `analysis.units` has one row per unit and arm. `analysis.joint_successes` compares input, calls and model
@@ -114,8 +125,9 @@ errors.
 - Lead with success on both arms. Read cost only on joint successes, with failures and unscored runs beside it.
 - One run per unit and arm is an observation, not an effect. The issue's question, whether orchestration pays, needs
   repeated, counterbalanced runs before any claim.
-- Claude Code may or may not refresh its tool list after `browser_tools_publish`. A newly published tool it does not
-  list shows up as an `unlisted_tool_calls` count, not as a capability error.
+- Claude Code may or may not refresh its tool list after `browser_tools_publish`. A call to a newly published tool
+  it does not list shows up as an `unlisted_tool_calls` count, not as a capability error or container use; one it
+  runs after a refresh counts as use.
 
 Not covered yet: repeated attempts (`--attempts`/`--order` as on the full suite), counting container steps that close
 or navigate starting tabs as close attempts (custody is still checked from the inventory after every call), and

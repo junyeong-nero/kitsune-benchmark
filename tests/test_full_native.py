@@ -1,16 +1,21 @@
 """Full-native track (#109): plan, wiring, Kitsune-only arms and offline analysis, with fakes. No model or browser."""
 from contextlib import redirect_stdout
+import hashlib
 import io
 import json
 from pathlib import Path
+import queue
 import tempfile
 import unittest
 from unittest.mock import patch
 
 from kitsune_benchmark.__main__ import main
-from kitsune_benchmark.full_native import (ARMS, BENCHMARK, analyze, agent_calls, main as analyze_main,
-                                           run_full_native, run_metrics, schedule, select_units, units)
-from kitsune_benchmark.full_native_session import FullNativeSession
+from kitsune_benchmark.full_native import (ARMS, BENCHMARK, CONTAINER_STEPS, analyze, agent_calls,
+                                           main as analyze_main, run_full_native, run_metrics, schedule,
+                                           select_units, units)
+from kitsune_benchmark.full_native_session import (AGENT_REQUEST_SECONDS, HARNESS_REQUEST_SECONDS,
+                                                   OUTSIDE_NAVIGATION, FullNativeSession)
+from kitsune_benchmark.smoke import ROOT
 from kitsune_benchmark.specs import Server
 
 
@@ -42,13 +47,15 @@ CORE_EVENTS = [tool_use("1", "browser_snapshot", {}), tool_result("1", "snapshot
 
 
 def fake_pair(root: Path, name: str, events: list, *, success=True, input_tokens=100, calls=None, requests=3,
-              published=("browser_click", "browser_snapshot")) -> dict:
+              published=("browser_click", "browser_snapshot"), tools_pages=None, tab_calls=None) -> dict:
     pair_dir = root / name
     run_dir = pair_dir / "runs" / "kitsune"
     run_dir.mkdir(parents=True)
     (run_dir / "events.jsonl").write_text("\n".join(json.dumps(e) for e in events))
-    (pair_dir / "kitsune-native-metadata.json").write_text(json.dumps(
-        {"enabled_tools": [], "tools_pages": [{"tools": [{"name": n} for n in published]}]}))
+    pages = [{"tools": [{"name": n} for n in published]}] if tools_pages is None else tools_pages
+    (pair_dir / "kitsune-native-metadata.json").write_text(json.dumps({"enabled_tools": [], "tools_pages": pages}))
+    if tab_calls is not None:
+        (pair_dir / "kitsune-session-evidence.json").write_text(json.dumps({"tab_calls": tab_calls}))
     result = {"run_dir": str(run_dir), "execution_status": "completed_unscored",
               "usage": {"input_tokens": input_tokens, "cached_input_tokens": input_tokens // 2, "output_tokens": 5},
               "mcp_calls": len(events) // 2 if calls is None else calls, "nonexistent_tool_calls": 0,
@@ -136,6 +143,9 @@ class FullNativeExecutionTests(unittest.TestCase):
             self.assertEqual(calls[0]["session"]["seeding"], "user_channel")  # personal units seed as the personal track
             self.assertEqual(calls[2]["session"]["task_tab"], "agent")  # gallery units as the gallery track
             self.assertEqual(calls[2]["experiment_spec"]["timeout_sec"], 240)
+            catalog = hashlib.sha256((ROOT / "tasks/personal/catalog.json").read_bytes()).hexdigest()
+            self.assertEqual(calls[0]["experiment_spec"]["catalog_sha256"], catalog)  # as run_personal records it
+            self.assertNotIn("catalog_sha256", calls[2]["experiment_spec"])
             self.assertEqual((result["requested_runs"], result["completed_runs"], result["stopped_reason"]), (4, 4, None))
             stored = json.loads(Path(result["suite_summary_path"]).read_text())
             self.assertEqual(stored["benchmark"], BENCHMARK)
@@ -174,8 +184,73 @@ class FullNativeAnalysisTests(unittest.TestCase):
         self.assertEqual(native["batch_steps"], 6)
         self.assertEqual(native["capability_errors"], {"capability_restricted": 1, "tool_not_published": 1,
                                                        "not_supported": 0})
-        self.assertEqual((native["agent_calls"], native["error_results"]), (4, 1))
+        self.assertEqual((native["agent_calls"], native["ran_calls"], native["error_results"]), (4, 4, 1))
         self.assertEqual((row["published_tools"], row["gateway_published"], row["model_requests"]), (3, True, 3))
+        self.assertEqual(row["unlisted_tool_calls"], 0)
+
+    def test_unlisted_calls_count_only_when_the_relay_ran_them(self):
+        listed = ["mcp__browser__" + n for n in ("browser_snapshot", "browser_tools_call", "browser_tools_publish",
+                                                 "browser_tools_search")]
+        refused = "<tool_use_error>Error: No such tool available: mcp__browser__browser_batch</tool_use_error>"
+        events = [
+            {"type": "system", "subtype": "init", "tools": listed},
+            tool_use("1", "browser_batch", {"commands": [{"action": "pageText"}] * 3}),
+            tool_result("1", refused + ' {"code": "tool_not_published"}', error=True),
+            tool_use("2", "browser_tools_publish", {"names": ["browser_batch"]}),
+            tool_result("2", '{"published": ["browser_batch"]}'),
+            tool_use("3", "browser_batch", {"commands": [{"action": "pageText"}, {"action": "links"}]}),
+            tool_result("3", '{"results": [{"ok": true}, {"ok": true}]}'),
+            tool_use("4", "browser_snapshot", {}), tool_result("4", "snapshot"),
+            tool_use("5", "browser_tools_call", {"name": "browser_navigate", "arguments": {"url": "https://x.invalid"}}),
+            tool_result("5", OUTSIDE_NAVIGATION, error=True),
+        ]
+        published = {"tool": "browser_tools_publish", "error": False}
+        snapshot = {"tool": "browser_snapshot", "error": False}
+        batch = {"tool": "browser_batch", "error": False}
+        for case, tab_calls, ran, containers, steps in (
+                ("refreshed list: the second batch ran", [published, batch, snapshot], 3, {"browser_batch": 1}, 2),
+                ("no refresh: both batches refused", [published, snapshot], 2, {}, 0)):
+            with self.subTest(case), tempfile.TemporaryDirectory() as folder:
+                row = run_metrics(fake_pair(Path(folder), "u", events, tab_calls=tab_calls))
+                native = row["native"]
+                self.assertEqual((native["agent_calls"], native["ran_calls"]), (5, ran))
+                self.assertEqual(native["container_calls"], containers)
+                self.assertEqual(native["batch_steps"], steps)
+                self.assertEqual(row["unlisted_tool_calls"], 2 - len(containers))
+                self.assertEqual(native["capability_errors"]["tool_not_published"], 0, "a refusal is not Kitsune's")
+                self.assertEqual(native["error_results"], 0)
+                self.assertEqual(native["gateway_calls"]["browser_tools_publish"], 1)
+                self.assertEqual(native["gateway_calls"]["browser_tools_call"], 0, "the relay blocked it")
+
+    def test_batch_steps_recurse_into_nested_parallel_and_retry(self):
+        click, text = {"action": "click", "ref": "e1"}, {"action": "pageText"}
+        batch = {"commands": [click, {"action": "parallel", "sequences": [[click, text], [
+                     {"action": "retry", "command": click}]]},
+                 {"action": "retry", "command": {"action": "parallel", "sequences": [[click], [text]]}}, "bad"]}
+        self.assertEqual(CONTAINER_STEPS["browser_batch"](batch), 1 + 3 + 2 + 1)
+        self.assertEqual(CONTAINER_STEPS["browser_retry"](
+            {"command": {"action": "parallel", "sequences": [[click, text, click]]}}), 3)
+        self.assertEqual(CONTAINER_STEPS["browser_retry"]({}), 1)
+        self.assertEqual(CONTAINER_STEPS["browser_parallel"](
+            {"sequences": [[{"action": "retry", "command": {"action": "retry", "command": click}}], "bad"]}), 1)
+        self.assertEqual(CONTAINER_STEPS["browser_batch"]({"commands": "bad"}), 0)
+
+    def test_published_tools_are_the_first_listing_and_codes_are_read_once(self):
+        result = {"isError": True, "content": [{"type": "text", "text": '{"code": "capability_restricted"}'}],
+                  "structuredContent": {"code": "capability_restricted"}}
+        only_structured = {"isError": True, "content": [], "structuredContent": {"code": "not_supported"}}
+        events = [{"type": "item.completed", "item": {"type": "mcp_tool_call", "tool": "browser_cookies",
+                                                      "status": "completed", "arguments": {}, "result": r}}
+                  for r in (result, only_structured)]
+        pages = [{"tools": [{"name": "browser_click"}], "nextCursor": "2"},
+                 {"tools": [{"name": "browser_tools_call"}]},
+                 {"tools": [{"name": "browser_click"}, {"name": "browser_tools_call"}, {"name": "browser_batch"}]}]
+        with tempfile.TemporaryDirectory() as folder:
+            row = run_metrics(fake_pair(Path(folder), "c", events, tools_pages=pages))
+        self.assertEqual((row["published_tools"], row["gateway_published"]), (2, True),
+                         "both pages of the first tools/list, not the listing after a publish")
+        self.assertEqual(row["native"]["capability_errors"],
+                         {"capability_restricted": 1, "tool_not_published": 0, "not_supported": 1})
 
     def test_codex_events_and_missing_events(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -184,7 +259,7 @@ class FullNativeAnalysisTests(unittest.TestCase):
                 "type": "mcp_tool_call", "tool": "browser_tools_call", "status": "completed",
                 "arguments": {"name": "browser_batch", "arguments": {"commands": [{}, {}]}},
                 "result": {"isError": True, "content": [{"type": "text", "text": '{"code":"not_supported"}'}]}}}))
-            self.assertEqual(agent_calls(events), [{"tool": "browser_tools_call", "error": True,
+            self.assertEqual(agent_calls(events), [{"tool": "browser_tools_call", "error": True, "listed": True,
                 "arguments": {"name": "browser_batch", "arguments": {"commands": [{}, {}]}},
                 "text": '{"code":"not_supported"}'}])
             missing = run_metrics({"pair_dir": folder, "results": {"kitsune": {"run_dir": folder + "/none"}}})
@@ -226,6 +301,26 @@ class FullNativeAnalysisTests(unittest.TestCase):
 
 
 class GatewayRelayTests(unittest.TestCase):
+    def test_agent_requests_wait_for_kitsune_containers(self):
+        session = FullNativeSession({"target": "kitsune", "upstream": [], "evidence_path": "/dev/null"})
+        session.send = lambda message: None
+        timeouts = []
+        class Replies:
+            def get(self, timeout):
+                timeouts.append(timeout)
+                if len(timeouts) == 3:
+                    raise queue.Empty
+                return {"jsonrpc": "2.0", "id": f"personal-harness-{session.serial}", "result": {"content": []}}
+        session.pending = Replies()
+        params = {"name": "browser_batch", "arguments": {"commands": []}}
+        self.assertIn("result", session.request("tools/call", params, role="agent"))
+        self.assertIn("result", session.request("tools/call", params))
+        self.assertGreater(timeouts[0], AGENT_REQUEST_SECONDS - 1)
+        self.assertLessEqual(timeouts[1], HARNESS_REQUEST_SECONDS)
+        self.assertEqual((AGENT_REQUEST_SECONDS, HARNESS_REQUEST_SECONDS), (330, 60))
+        with self.assertRaisesRegex(ValueError, "timed out"):
+            session.request("tools/call", params, role="agent")
+
     def test_relay_counts_gateway_calls_as_the_tool_they_run(self):
         with tempfile.TemporaryDirectory() as folder:
             settings = {"target": "kitsune", "upstream": [], "bootstrap_url": "http://local/t/start",

@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 from collections import Counter
 from dataclasses import replace
+import hashlib
 import json
 from pathlib import Path
 import re
@@ -31,7 +32,7 @@ import sys
 from . import gallery, personal
 from .adapter import claude_budget, harness_pins, with_claude_overrides, write_json
 from .cost_metrics import normalized_usage
-from .full_native_session import GATEWAY_CALL, agent_call
+from .full_native_session import GATEWAY_CALL, OUTSIDE_NAVIGATION, agent_call
 from .personal_session import ELICITATION_POLICIES
 from .smoke import ROOT, run_pair, source_revision
 from .specs import Server, Task
@@ -43,12 +44,32 @@ ARMS = {"core": {"KITSUNE_CAPS": "core"},
 PERSONAL_CATEGORIES = ("research", "handoff_draft", "long_page_lookup")
 GALLERY_UNITS = (("ui-table", "crowded"), ("ui-table", "isolated"))
 GATEWAY_TOOLS = ("browser_tools_search", GATEWAY_CALL, "browser_tools_publish")
+
+
+def command_steps(command) -> int:
+    """The commands one batch-shaped command packs: a nested `parallel` counts the commands of its sequences, a
+    nested `retry` its wrapped command, any other command (malformed ones included) one."""
+    if isinstance(command, dict) and command.get("action") == "parallel":
+        return sequences_steps(command.get("sequences"))
+    if isinstance(command, dict) and command.get("action") == "retry" and isinstance(command.get("command"), dict):
+        return command_steps(command["command"])
+    return 1
+
+
+def commands_steps(commands) -> int:
+    return sum(command_steps(command) for command in commands) if isinstance(commands, list) else 0
+
+
+def sequences_steps(sequences) -> int:
+    return sum(commands_steps(sequence) for sequence in sequences) if isinstance(sequences, list) else 0
+
+
 # Kitsune container tools (automation group) and the commands the agent packed into one call. A workflow runs a named
 # file whose steps the call does not show, so it counts as a container call without steps.
 CONTAINER_STEPS = {
-    "browser_batch": lambda a: len(a.get("commands") or []),
-    "browser_parallel": lambda a: sum(len(s) for s in a.get("sequences") or [] if isinstance(s, list)),
-    "browser_retry": lambda a: 1,
+    "browser_batch": lambda a: commands_steps(a.get("commands")),
+    "browser_parallel": lambda a: sequences_steps(a.get("sequences")),
+    "browser_retry": lambda a: command_steps(a.get("command")) if isinstance(a.get("command"), dict) else 1,
     "browser_broadcast": lambda a: 1,
     "browser_workflow": lambda a: 0,
 }
@@ -104,12 +125,14 @@ def full_native_relay(prepare_server):
 
 
 def run_unit(item: dict, spec: dict, *, variant: int, elicitation: str, kitsune_project, executable, harness) -> dict:
+    provenance = {}
     if item["track"] == "personal":
         task = selected = personal.selected_tasks([item["task"]])[0]
+        provenance = {"catalog_sha256": hashlib.sha256((ROOT / spec["catalog"]).read_bytes()).hexdigest()}
     else:
         task = gallery.select([item["task"]])[0]
         selected = {"id": task.id, "category": task.category}
-    experiment = {**spec, "selected_task": selected, "variant": variant, "layout": item["layout"],
+    experiment = {**spec, **provenance, "selected_task": selected, "variant": variant, "layout": item["layout"],
                   "elicitation": elicitation,
                   "full_native": {"benchmark": BENCHMARK, "unit": item["unit"], "arm": item["arm"],
                                   "kitsune_env": ARMS[item["arm"]], "tool_policy": "no_benchmark_allowlist"}}
@@ -198,11 +221,13 @@ def run_full_native(*, execute: bool = False, unit_ids: list[str] | None = None,
 
 # --------------------------------------------------------------------------- analysis (no model, no browser)
 def result_text(content) -> str:
+    """A result's text items; a result without text is read from its structuredContent, so a code both carry is
+    read once."""
     if isinstance(content, str):
         return content
     if isinstance(content, dict):
-        return result_text(content.get("content")) + (json.dumps(content["structuredContent"])
-                                                      if "structuredContent" in content else "")
+        text = result_text(content.get("content"))
+        return text or (json.dumps(content["structuredContent"]) if "structuredContent" in content else "")
     if isinstance(content, list):
         return "\n".join(item.get("text", "") for item in content if isinstance(item, dict))
     return ""
@@ -210,18 +235,23 @@ def result_text(content) -> str:
 
 def agent_calls(events_path: Path) -> list[dict]:
     """The agent's MCP calls in order, with their result's error flag and text, from Claude Code stream-json or
-    Codex JSONL events."""
-    calls, by_id = [], {}
+    Codex JSONL events. `listed`: the tool was in Claude Code's latest system-init tool list (always true without
+    one, as for Codex). Claude Code refuses an unlisted tool without running it, unless it refreshed its list since."""
+    calls, by_id, init_tools = [], {}, None
     for line in events_path.read_text().splitlines():
         if not line.strip():
             continue
         event = json.loads(line)
+        if event.get("type") == "system" and event.get("subtype") == "init":
+            tools = event.get("tools")
+            init_tools = {tool for tool in tools if isinstance(tool, str)} if isinstance(tools, list) else set()
+            continue
         item = event.get("item") if isinstance(event.get("item"), dict) else {}
         if event.get("type") == "item.completed" and item.get("type") == "mcp_tool_call":
             result = item.get("result") if isinstance(item.get("result"), dict) else {}
             calls.append({"tool": str(item.get("tool", "")).split("__")[-1],
                           "arguments": item.get("arguments") if isinstance(item.get("arguments"), dict) else {},
-                          "error": item.get("status") == "failed" or result.get("isError") is True,
+                          "listed": True, "error": item.get("status") == "failed" or result.get("isError") is True,
                           "text": result_text(result)})
             continue
         content = (event.get("message") or {}).get("content") if isinstance(event.get("message"), dict) else None
@@ -231,7 +261,7 @@ def agent_calls(events_path: Path) -> list[dict]:
             if event.get("type") == "assistant" and block.get("type") == "tool_use":
                 call = {"tool": str(block.get("name", "")).split("__")[-1],
                         "arguments": block.get("input") if isinstance(block.get("input"), dict) else {},
-                        "error": None, "text": ""}
+                        "listed": init_tools is None or block.get("name") in init_tools, "error": None, "text": ""}
                 by_id[block.get("id")] = call
                 calls.append(call)
             elif event.get("type") == "user" and block.get("type") == "tool_result" and block.get("tool_use_id") in by_id:
@@ -241,19 +271,58 @@ def agent_calls(events_path: Path) -> list[dict]:
 
 
 def published_tools(pair_dir: Path) -> list[str] | None:
-    """Tools the Kitsune server listed to the agent, from the relay's metadata; None without it."""
+    """Tools the Kitsune server listed to the agent at the start, from the relay's metadata: the first tools/list,
+    with its pages up to the first without nextCursor; later listings (after browser_tools_publish) are not included.
+    None without metadata."""
     try:
         metadata = json.loads((pair_dir / "kitsune-native-metadata.json").read_text())
     except (OSError, ValueError):
         return None
-    return sorted({tool["name"] for page in metadata.get("tools_pages", []) if isinstance(page, dict)
-                   for tool in page.get("tools", []) if isinstance(tool, dict) and "name" in tool})
+    names = set()
+    for page in metadata.get("tools_pages", []):
+        page = page if isinstance(page, dict) else {}
+        names.update(tool["name"] for tool in page.get("tools", []) if isinstance(tool, dict) and "name" in tool)
+        if not page.get("nextCursor"):
+            break
+    return sorted(names)
+
+
+def relay_tab_calls(pair_dir: Path) -> list[dict]:
+    """The agent calls the relay sent to Kitsune (evidence `tab_calls`); empty without evidence."""
+    try:
+        calls = json.loads((pair_dir / "kitsune-session-evidence.json").read_text()).get("tab_calls")
+    except (OSError, ValueError, AttributeError):
+        return []
+    return [call for call in calls if isinstance(call, dict)] if isinstance(calls, list) else []
+
+
+def relay_key(call: dict) -> tuple:
+    """How the relay records an agent call in tab_calls: the tool it runs, and `via` for a gateway call."""
+    name, _ = agent_call(call["tool"], call["arguments"])
+    return name, GATEWAY_CALL if call["tool"] == GATEWAY_CALL and name != GATEWAY_CALL else None
+
+
+def mark_ran(calls: list[dict], tab_calls: list[dict]) -> None:
+    """Set each call's `ran`: whether it reached Kitsune. The relay refused a call it answered with
+    OUTSIDE_NAVIGATION. A listed call ran otherwise. An unlisted call ran only when the relay recorded it, which
+    happens after Claude Code refreshed its list: per relay key, the tab_calls the listed calls leave over are the
+    unlisted calls that ran, assigned to the latest ones (a refresh follows a browser_tools_publish)."""
+    left = Counter((call.get("tool"), call.get("via")) for call in tab_calls)
+    for call in calls:
+        call["ran"] = call["listed"] and call["text"] != OUTSIDE_NAVIGATION
+        if call["ran"]:
+            left[relay_key(call)] -= 1
+    for call in reversed(calls):
+        if not call["listed"] and left[relay_key(call)] > 0:
+            call["ran"] = True
+            left[relay_key(call)] -= 1
 
 
 def run_metrics(pair: dict) -> dict:
     """One Kitsune run: grade, input, calls and model requests, and its native use (None when its events are missing):
     gateway calls by gateway tool and the tools browser_tools_call ran, container calls and the commands packed into
-    them (`batch_steps`), and capability errors by code. Gateway calls are unwrapped before counting containers."""
+    them (`batch_steps`), and capability errors by code, all over the calls that reached Kitsune (mark_ran).
+    `unlisted_tool_calls`: unlisted calls that did not run. Gateway calls are unwrapped before counting containers."""
     result = pair.get("results", {}).get("kitsune", {})
     evaluation = result.get("benchmark_evaluation") or {}
     usage = normalized_usage(result)
@@ -264,7 +333,7 @@ def run_metrics(pair: dict) -> dict:
            "input_tokens": usage.get("input_tokens"), "uncached_input_tokens": usage.get("uncached_input_tokens"),
            "output_tokens": usage.get("output_tokens"), "mcp_calls": result.get("mcp_calls"),
            "model_requests": (result.get("token_attribution") or {}).get("requests"),
-           "unlisted_tool_calls": result.get("nonexistent_tool_calls"),
+           "unlisted_tool_calls": None,
            "published_tools": len(published) if published is not None else None,
            "gateway_published": bool(set(GATEWAY_TOOLS) & set(published)) if published is not None else None,
            "native": None}
@@ -272,9 +341,12 @@ def run_metrics(pair: dict) -> dict:
         calls = agent_calls(Path(result["run_dir"]) / "events.jsonl")
     except (KeyError, OSError, ValueError):
         return row
+    mark_ran(calls, relay_tab_calls(Path(pair["pair_dir"])) if pair.get("pair_dir") else [])
+    ran = [call for call in calls if call["ran"]]
+    row["unlisted_tool_calls"] = sum(not call["listed"] and not call["ran"] for call in calls)
     gateway, via_gateway, containers, codes = Counter(), Counter(), Counter(), Counter()
     steps = 0
-    for call in calls:
+    for call in ran:
         if call["tool"] in GATEWAY_TOOLS:
             gateway[call["tool"]] += 1
         name, arguments = agent_call(call["tool"], call["arguments"])
@@ -282,12 +354,10 @@ def run_metrics(pair: dict) -> dict:
             via_gateway[name] += 1
         if name in CONTAINER_STEPS:
             containers[name] += 1
-            try:
-                steps += CONTAINER_STEPS[name](arguments)
-            except TypeError:
-                pass  # malformed container arguments: counted as a call, without steps
+            steps += CONTAINER_STEPS[name](arguments)
         codes.update(CAPABILITY_CODE.findall(call["text"]))
-    row["native"] = {"agent_calls": len(calls), "error_results": sum(c["error"] is True for c in calls),
+    row["native"] = {"agent_calls": len(calls), "ran_calls": len(ran),
+                     "error_results": sum(c["error"] is True for c in ran),
                      "gateway_calls": {tool: gateway[tool] for tool in GATEWAY_TOOLS},
                      "gateway_called_tools": dict(sorted(via_gateway.items())),
                      "container_calls": dict(sorted(containers.items())), "batch_steps": steps,
