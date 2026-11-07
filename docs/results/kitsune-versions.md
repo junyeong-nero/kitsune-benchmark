@@ -127,10 +127,11 @@ Runs on `taskset-v3.5-6` (`bf08938`).
 ## v0.7.3 → main `c0ea723` (pre-release main)
 
 `c0ea72352e3b29717bb03185c4307bf161d7c922` (`v0.7.3-8-gc0ea723`): v0.7.3 plus #477 (#473), #478 (#475), #479 (#474)
-and #480 (#471). No cohort yet; used as the A arm of the kitsune#472 A/B.
+and #480 (#471). No cohort yet; used as the A arm of both kitsune#472 A/Bs.
 
 | Date | Report | Model / harness | Kitsune revision | Notes |
 | --- | --- | --- | --- | --- |
+| 2026-11-07 | [kitsune#472 `new_refs` field A/B](2026-11-07-kitsune-472-new-refs-field-ab.md) | `claude-opus-5-5`, Claude Code subscription | `c0ea723` vs `c0ea723` + `new_refs` field (`dc7dc06`, local branch) | 64 Kitsune-only runs on `taskset-v3.5-6`: batched stale writes 0/16 → 3/16 issue runs, requests 157 → 158 (issue 87 → 91), input 1.004×, same success and safety; not supported |
 | 2026-11-06 | [kitsune#472 new-tab-refs hint A/B](2026-11-06-kitsune-472-new-tab-refs-ab.md) | `claude-opus-5-5`, Claude Code subscription | `c0ea723` vs `c0ea723` + hint (`f048f0f`, local cherry-pick of kitsune#476) | 64 Kitsune-only runs on `taskset-v3.5-4`: batched stale writes 3/16 → 2/16 issue runs, requests 160 → 162, input 1.001×, same success and safety; not supported |
 
 ## v0.7.2 → main `286cfe5` (pre-release main)
