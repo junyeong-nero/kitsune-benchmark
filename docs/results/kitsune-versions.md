@@ -111,6 +111,19 @@ These are observations; a release-improvement claim still goes through a
 [coexistence track](../coexistence.md) is part of the full suite. The taskset-v2
 user-seeded tab custody contract is retained unchanged.
 
+## v0.7.3 → main `ad04bac` (pre-release main)
+
+`ad04bac13c6b18aa26b47ef34ce8e856a088bde2` (`v0.7.3-10-gad04bac`): `c0ea723` plus #482 (#481: `browser_tabs close`
+honors `tab_id` and never falls back to the active tab). The changes this benchmark measured since `286cfe5`:
+removals under one parent line folded (#471), a tab passed as a snapshot target explained (#473), handled key
+presses settle sooner (#475), and core `other_document` hints without `tab_id` (#474). #481 was not exercised.
+
+Runs on `taskset-v3.5-6` (`bf08938`).
+
+| Date | Report | Model / harness | Kitsune revision | Notes |
+| --- | --- | --- | --- | --- |
+| 2026-11-08 | [Lite cohort](2026-11-08-main-ad04bac.md) | `claude-opus-5-5`, Claude Code subscription | `ad04bac` | 306 scorable runs in one invocation. Kitsune solves every unit; Playwright misses `co-typing-01` v1. K/PW input (`286cfe5` → `ad04bac`): personal 0.829 → 0.854, crowded 0.591 → 0.695, isolated 0.751 → 0.777, coexistence 0.839 → 0.858, external 0.901 → 0.916; Kitsune's own input is unchanged in personal and isolated. `ui-table` page clicks 2,182 → 1,417 chars (#471); handled keys p50 0.25–0.28 s (#475). Candidates kitsune#483–#488, among them a one-option list's container listed as a button (#483) and line breaks deleted in single-line fields (#484) |
+
 ## v0.7.3 → main `c0ea723` (pre-release main)
 
 `c0ea72352e3b29717bb03185c4307bf161d7c922` (`v0.7.3-8-gc0ea723`): v0.7.3 plus #477 (#473), #478 (#475), #479 (#474)
