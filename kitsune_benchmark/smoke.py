@@ -32,6 +32,10 @@ from .specs import Server, Task, identifier, load_task, positive_int
 
 ROOT = Path(__file__).resolve().parent.parent
 TARGETS = ("playwright", "kitsune")
+# Exhibition arms (external MiniWoB track only): other vendors' code-execution browser tools, driving their own
+# installed browser app and profile rather than a private Firefox. Reported apart from the head-to-head.
+EXHIBITION_TARGETS = ("aside", "ego")
+ALL_TARGETS = TARGETS + EXHIBITION_TARGETS
 WS_SETTING = "const WS_URL = 'ws://127.0.0.1:47652';"
 
 
@@ -201,8 +205,8 @@ def run_pair(*, execute: bool = False, kitsune_project: str | None = None,
     channel). viewport_reports returns a target's fixture page viewport reports after its run;
     equalize_kitsune_viewport adds Firefox's chrome height to the Kitsune window so its content
     viewport matches Playwright's. The defaults leave every existing track's launch unchanged."""
-    if not targets or len(set(targets)) != len(targets) or set(targets) - set(TARGETS):
-        raise ValueError("targets must be a non-empty subset of playwright, kitsune.")
+    if not targets or len(set(targets)) != len(targets) or set(targets) - set(ALL_TARGETS):
+        raise ValueError("targets must be a non-empty subset of " + ", ".join(ALL_TARGETS) + ".")
     if kitsune_preset is not None and not re.fullmatch(r"[a-z][a-z0-9_-]{0,31}", kitsune_preset):
         raise ValueError("Invalid Kitsune tool preset name.")
     reserved = {"KITSUNE_HOME", "KITSUNE_HTTP_PORT", "KITSUNE_WS_PORT", "KITSUNE_TOKEN", "KITSUNE_TOOL_PRESET"}
@@ -272,6 +276,9 @@ def run_pair(*, execute: bool = False, kitsune_project: str | None = None,
             ("PLAYWRIGHT_BROWSERS_PATH", "PLAYWRIGHT_SKIP_BROWSER_GC", "PWTEST_SOCKETS_DIR"), 60, 45),
         "kitsune": Server("kitsune", "uv", ("run", "--locked", "--project", str(project), "kitsune"),
             kitsune_vars, 60, 45),
+        # Code-execution tools: one call may run a whole script, so the per-call limit is each vendor's own 120s.
+        "aside": Server("aside", str(Path.home() / ".local/bin/aside"), ("mcp",), (), 60, 130),
+        "ego": Server("ego", sys.executable, (str(ROOT / "kitsune_benchmark/ego_mcp.py"),), (), 60, 130),
     }
     specs = {target: specs[target] for target in targets}
     if enabled_tools is not None:

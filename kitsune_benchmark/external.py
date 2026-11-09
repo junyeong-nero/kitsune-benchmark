@@ -15,9 +15,11 @@ import re
 
 from .adapter import claude_budget, harness_pins, with_claude_overrides, write_json
 from .cost_metrics import normalized_usage
-from .miniwob import UI_TOOLS, BenchmarkServer, config, fetch_source, task_sha256, verify_source
+from .miniwob import EXHIBITION_TOOLS, UI_TOOLS, BenchmarkServer, config, fetch_source, task_sha256, verify_source
 from .personal import incomplete_stop
-from .smoke import ROOT, TARGETS, run_pair, source_revision
+from .smoke import ALL_TARGETS, ROOT, TARGETS, run_pair, source_revision
+
+TOOLS = {**UI_TOOLS, **EXHIBITION_TOOLS}
 from .specs import identifier, load_task
 
 KINDS = ("miniwob", "live")
@@ -82,7 +84,9 @@ def pair_complete(pair: dict, targets: tuple[str, ...] = TARGETS) -> bool:
 
 def aggregate(pairs: list[dict]) -> dict:
     totals = {}
-    for target in TARGETS:
+    for target in ALL_TARGETS:
+        if not any(target in p["results"] for p in pairs):
+            continue
         entry = {}
         for kind in KINDS:
             runs = [p["results"][target] for p in pairs if p["external_kind"] == kind and target in p["results"]]
@@ -113,8 +117,8 @@ def run_external(*, execute: bool = False, fetch: bool = False, task_ids: list[s
     model, _ = harness_pins(spec, harness)
     per_run = claude_budget(spec, harness)
     targets = tuple(targets)
-    if not targets or len(set(targets)) != len(targets) or set(targets) - set(TARGETS):
-        raise ValueError("targets must be a non-empty subset of playwright, kitsune.")
+    if not targets or len(set(targets)) != len(targets) or set(targets) - set(ALL_TARGETS):
+        raise ValueError("targets must be a non-empty subset of " + ", ".join(ALL_TARGETS) + ".")
     if budget_usd is not None and (per_run is None or isinstance(budget_usd, bool)
                                    or not isinstance(budget_usd, (int, float)) or budget_usd <= 0):
         raise ValueError("--budget-usd needs a positive amount and an API-key harness (claude-api or claude-api-full).")
@@ -125,7 +129,7 @@ def run_external(*, execute: bool = False, fetch: bool = False, task_ids: list[s
                 "planned_model_runs": len(targets) * len(tasks), "source_present": source.exists(),
                 "max_budget_usd_per_run": per_run, "suite_budget_usd": budget_usd,
                 "worst_case_usd": len(targets) * len(tasks) * per_run if per_run else None,
-                "ui_tools": UI_TOOLS,
+                "ui_tools": {t: TOOLS[t] for t in targets},
                 "next": "Use external --execute explicitly; live tasks reach public sites, and execution consumes "
                         "subscription quota or API credit."}
     if any(task["kind"] == "miniwob" for task in tasks):
@@ -148,12 +152,12 @@ def run_external(*, execute: bool = False, fetch: bool = False, task_ids: list[s
             with BenchmarkServer(source, spec, task) as fixture:
                 pair = run_pair(execute=True, kitsune_project=kitsune_project, executable=executable,
                     experiment_spec=experiment, artifact_scope="external", task_for_target=fixture.begin,
-                    evaluate=fixture.evaluate, enabled_tools=UI_TOOLS, harness=harness, targets=targets)
+                    evaluate=fixture.evaluate, enabled_tools=TOOLS, harness=harness, targets=targets)
         else:
             fixture = LiveTask(task)
             pair = run_pair(execute=True, kitsune_project=kitsune_project, executable=executable,
                 experiment_spec=experiment, artifact_scope="external", task_for_target=fixture.begin,
-                evaluate=fixture.evaluate, enabled_tools=UI_TOOLS, harness=harness, targets=targets)
+                evaluate=fixture.evaluate, enabled_tools=TOOLS, harness=harness, targets=targets)
         pair["external_task"] = task["id"]
         pair["external_kind"] = task["kind"]
         write_json(Path(pair["pair_dir"]) / "external-summary.json", pair)
