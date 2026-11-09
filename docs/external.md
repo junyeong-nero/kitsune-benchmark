@@ -140,9 +140,36 @@ tool names and unsafe navigation schemes are audited after each run.
 The reason: MiniWoB rewards are client-side JavaScript state, so an agent with arbitrary page JS could call
 `core.endEpisode` or change the reward globals instead of solving the task.
 
+**Exhibition arms** (`--targets aside,ego`, MiniWoB only) are the exception: each has only a code-execution
+tool, so only the prompt keeps it away from the reward. They are reported apart from the head-to-head (see
+[Exhibition arms](#exhibition-arms-aside-and-egolite)).
+
 **This is not a hardened anti-cheating boundary.** The reward comes from browser-side upstream code, not a
 privileged independent service. A malicious agent that found an unexpected tool or browser surface could
 still forge it. Do not use this track to evaluate adversarial agents or to claim a standard MiniWoB score.
+
+## Exhibition arms: Aside and ego(lite)
+
+`smoke.EXHIBITION_TARGETS` adds two vendor browsers that agents drive through code execution. Only this track
+accepts them; the default targets are still `playwright,kitsune`.
+
+| Target | Server | Tool allowlist |
+| --- | --- | --- |
+| `aside` | `~/.local/bin/aside mcp` | `repl` (not `exec`, which delegates to Aside's own agent) |
+| `ego` | `kitsune_benchmark/ego_mcp.py`, wrapping `ego-browser nodejs` | `run_script` |
+
+- **Prerequisites:** the Aside CLI, and Aside Browser signed in with a normal window open; ego lite in
+  `/Applications` with onboarding done (`EGO_BROWSER_BIN` overrides the helper path).
+- **Differences:** they drive the vendor's installed Chromium app and its persistent profile, not a fresh private
+  Firefox. The resource collector sees only the MCP process. The per-call limit is 130 s, against 45 s.
+- **Cleanup:** ego keeps the task spaces an agent creates, and a later `taskSpace(name)` resumes one with the
+  same name. Close them in ego lite before repeating a run.
+
+```sh
+uv run --locked python -m kitsune_benchmark external --kind miniwob --targets aside,ego --execute
+```
+
+First result: [2026-11-09 exhibition](results/2026-11-09-exhibition-aside-ego-miniwob.md).
 
 ## Artifacts
 
