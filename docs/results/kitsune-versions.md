@@ -111,6 +111,15 @@ These are observations; a release-improvement claim still goes through a
 [coexistence track](../coexistence.md) is part of the full suite. The taskset-v2
 user-seeded tab custody contract is retained unchanged.
 
+## v0.7.3 → main `85b50d2` (pre-release main)
+
+`85b50d2cdce53c3e7eefb02e4b3d4e2e95ecfee9` (`v0.7.3-18-g85b50d2`): `ad04bac` plus #489 (#487), #490 (#484),
+#491 (#483) and #492 (#488). No cohort yet; used as the A arm of the kitsune#485 A/B.
+
+| Date | Report | Model / harness | Kitsune revision | Notes |
+| --- | --- | --- | --- | --- |
+| 2026-11-09 | [kitsune#485 collapse-by-size A/B](2026-11-09-kitsune-485-collapse-by-size-ab.md) | `claude-opus-5-5`, Claude Code subscription | `85b50d2` vs `357456e` (kitsune PR #493) | 80 Kitsune-only runs on `taskset-v3.5-10`: expansion reads 25 → 0, target input 0.743×, same success and safety; guard input 1.113× and 1.082× from path variance; inconclusive |
+
 ## v0.7.3 → main `ad04bac` (pre-release main)
 
 `ad04bac13c6b18aa26b47ef34ce8e856a088bde2` (`v0.7.3-10-gad04bac`): `c0ea723` plus #482 (#481: `browser_tabs close`
