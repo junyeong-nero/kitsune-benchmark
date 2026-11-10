@@ -106,8 +106,18 @@ releases is still an observation (see the rules below).
    uv run --locked python -m kitsune_benchmark doctor --json      # subscription login, no API key
    uv run --locked python -m unittest discover -s tests           # all pass
    K=$PWD/artifacts/vendor/kitsune-<TAG>
+   PERSONAL_BROWSER_TEST=1 PERSONAL_KITSUNE_TEST=1 KITSUNE_PROJECT="$K" \
+     uv run --locked python -m unittest discover -s tests -p test_coexistence.py -v
+   PERSONAL_BROWSER_TEST=1 PERSONAL_KITSUNE_TEST=1 KITSUNE_PROJECT="$K" \
+     uv run --locked python -m unittest discover -s tests -p test_taskset_v3.py -k Native -v
    uv run --locked python scripts/probe-snapshot-budget.py $K artifacts/preflight-<TAG> --layout crowded
    ```
+
+   **2026-11-10 preflight addendum (#136/#137):** new cohorts must pass the native
+   coexistence and viewport checks, not merely default discovery where they are
+   skipped. Run the repaired tests against the pinned Kitsune revision. This is
+   not a claim that earlier cohorts passed these checks; their reported baseline
+   defects remain part of their records. Tasks, fixtures and graders are unchanged.
 
    - The probe must complete all 21 crowded gallery tasks. This proves that personal-style setup works against the
      release.

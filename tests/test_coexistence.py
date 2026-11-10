@@ -553,8 +553,17 @@ def kitsune_with_user_channel(folder, bidi_port):
             yield ["uv", "run", "--locked", "--project", str(project), "kitsune"]
 
 
-def snapshot_text(session) -> str:
-    """Playwright returns Markdown; Kitsune a JSON object whose `snapshot` holds the same lines."""
+def snapshot_text(session, previous=None) -> str:
+    """Reuse a full snapshot from a tab result before requesting another, possibly unchanged, tree."""
+    if previous:
+        try:
+            payload = json.loads(previous)
+        except ValueError:
+            payload = None
+        if (isinstance(payload, dict) and payload.get("snapshot")
+                and not payload.get("unchanged_since") and not payload.get("snapshot_delta")):
+            return payload["snapshot"]
+    # Playwright returns Markdown; Kitsune puts the tree in a JSON object's snapshot field.
     texts = []
     for item in session.tool("browser_snapshot", {})["content"]:
         text = item.get("text", "")
@@ -573,6 +582,26 @@ def ref_for(snapshot: str, role: str, name: str) -> str:
             if match:
                 return match[1]
     raise AssertionError(f"No {role} {name!r} in snapshot:\n{snapshot[:2000]}")
+
+
+class SnapshotTextTests(unittest.TestCase):
+    def test_reuses_a_full_snapshot_without_another_call(self):
+        session = Mock()
+        tree = '- textbox "Memo" [ref=e1]'
+        self.assertEqual(snapshot_text(session, json.dumps({"snapshot": tree, "tab": {"current": True}})), tree)
+        session.tool.assert_not_called()
+
+    def test_reads_when_a_tab_result_has_no_fresh_full_tree(self):
+        tree = '- textbox "Memo" [ref=e1]'
+        for previous in (None, "{}", "Playwright tab selected", json.dumps({"snapshot": ""}),
+                         json.dumps({"snapshot": "unchanged", "unchanged_since": "browser_tabs"}),
+                         json.dumps({"snapshot": "partial tree", "snapshot_delta": True})):
+            for current in (tree, json.dumps({"snapshot": tree})):
+                with self.subTest(previous=previous, current=current):
+                    session = Mock()
+                    session.tool.return_value = {"content": [{"text": current}]}
+                    self.assertEqual(snapshot_text(session, previous), tree)
+                    session.tool.assert_called_once_with("browser_snapshot", {})
 
 
 class NativeMixin:
@@ -630,11 +659,11 @@ class NativeMixin:
                     if self.target == "kitsune":
                         # Kitsune holds writes to the tab the user views (kitsune#364), and under kitsune#393 user
                         # tabs are read-only, so the agent writes the memo in a tab of its own (#65).
-                        agent("browser_tabs", {"action": "new", "url": trial.url(memo)})
+                        opened = agent("browser_tabs", {"action": "new", "url": trial.url(memo)})
                     else:
                         tab = next(t for t in session.inventory() if t["url"] == trial.url(memo))
-                        agent("browser_tabs", {"action": "select", "index": tab["id"]})
-                    snapshot = snapshot_text(session)
+                        opened = agent("browser_tabs", {"action": "select", "index": tab["id"]})
+                    snapshot = snapshot_text(session, opened)
                     label = "메모" if task["fixture"] == "orders" else "점검일"
                     value = trial.expected["answer"] if task["fixture"] == "orders" else trial.expected["점검일"]
                     agent("browser_type", {"target": ref_for(snapshot, "textbox", label), "element": label, "text": value})
