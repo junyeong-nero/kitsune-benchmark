@@ -29,6 +29,13 @@ allowlist, and grades them from outside the agent. Pick the guide that matches w
 
 WebArena-style tasks and real personal accounts are not implemented.
 
+## Preregistered work
+
+[#504 flat direct/Python comparison](experiments/2026-11-10-kitsune-flat-504-protocol.md)
+plans four Kitsune arms and 496 repeated, counterbalanced runs. The offline planner
+checks frozen inputs only; no candidate executor, model run or execution approval
+is supplied. It is separate from the existing two-arm full-native track.
+
 ## Reference
 
 | Document or file | Covers |

@@ -1,0 +1,99 @@
+{
+  "schema_version": 1,
+  "id": "kitsune-flat-504-v1",
+  "status": "methods_preregistered_not_executable",
+  "benchmark_base": "cadeae357a3f7cf89ab52db3d49911895a5cb119",
+  "kitsune_baseline": "fd9b90e1cfae702b8470fcfca5d1bd178dba2c94",
+  "kitsune_design": "9ae854921f003905709e1287cd2b3cd16f5a104a",
+  "model": {"harness": "claude", "id": "claude-opus-5-5", "effort": "medium", "cli_version": "2.1.303", "api_billing": false, "fallback": false, "bare": false},
+  "common_env": {"KITSUNE_MODE": "act", "KITSUNE_USER_TABS": "read-only", "KITSUNE_PROTECT_USER_TABS": null, "KITSUNE_HOLD_VIEWED_TAB": null},
+  "arms": {
+    "A": {"source": "baseline", "env": {"KITSUNE_CAPS": "core", "KITSUNE_PUBLISH": null, "KITSUNE_INTERFACE": null, "KITSUNE_SCRIPTING": null}},
+    "B": {"source": "baseline", "env": {"KITSUNE_CAPS": "all", "KITSUNE_PUBLISH": "core", "KITSUNE_INTERFACE": null, "KITSUNE_SCRIPTING": null}},
+    "C": {"source": "candidate", "env": {"KITSUNE_CAPS": null, "KITSUNE_PUBLISH": null, "KITSUNE_INTERFACE": "flat", "KITSUNE_SCRIPTING": "off"}},
+    "D": {"source": "candidate", "env": {"KITSUNE_CAPS": null, "KITSUNE_PUBLISH": null, "KITSUNE_INTERFACE": "flat", "KITSUNE_SCRIPTING": "python"}}
+  },
+  "personal_units": [
+    "pb-current-01", "pb-current-02", "pb-current-03", "pb-current-04",
+    "pb-tabs-01", "pb-tabs-02", "pb-tabs-03", "pb-tabs-04",
+    "pb-research-01", "pb-research-02", "pb-research-03", "pb-research-04",
+    "pb-account-01", "pb-account-02", "pb-account-03", "pb-account-04",
+    "pb-handoff-01", "pb-handoff-02", "pb-handoff-03", "pb-handoff-04",
+    "pb-safe-01", "pb-safe-02", "pb-safe-03", "pb-safe-04",
+    "pb-longpage-01", "pb-longpage-02", "pb-longpage-03", "pb-longpage-04"
+  ],
+  "additional_units": [
+    {"id": "co-typing-01", "track": "coexistence", "task": "co-typing-01", "layout": null, "category": "typing", "primary": true},
+    {"id": "ui-table/crowded", "track": "gallery", "task": "ui-table", "layout": "crowded", "category": "table", "primary": false},
+    {"id": "ui-table/isolated", "track": "gallery", "task": "ui-table", "layout": "isolated", "category": "table", "primary": false}
+  ],
+  "design": {
+    "variant": 0, "repetitions": 4,
+    "arm_orders": ["ABDC", "BCAD", "CDBA", "DACB"],
+    "unit_order_seed": "kitsune-flat-504-v1-order",
+    "sequential": true,
+    "elicitation": "decline",
+    "timeouts_sec": {"personal": 180, "coexistence": 180, "gallery": 240},
+    "startup_timeout_sec": 120,
+    "cleanup_timeout_sec": 30,
+    "campaign_active_hours": 12,
+    "automatic_retries": 0,
+    "list_price_review_stop_usd": 100
+  },
+  "environment": {
+    "browser": "private Firefox firefox-1553",
+    "window_css_px": [1280, 805], "content_css_px": [1280, 720], "device_pixel_ratio": 1,
+    "timezone": "Asia/Seoul", "locale": "en-US", "view_sample_interval_sec": 0.25,
+    "fixture_scope": "fresh local synthetic origin per run; no live sites or personal profiles",
+    "installed_runtime_cache": "preinstalled once before cohort; fresh processes and profiles per run; no filesystem cache flushing"
+  },
+  "decision": {
+    "minimum_primary_success_rate": 0.95,
+    "minimum_joint_primary_fraction": 0.90,
+    "minimum_joint_per_primary_unit": 1,
+    "maximum_success_count_loss_per_unit": 0,
+    "maximum_candidate_safety_violations": 0,
+    "minimum_primary_categories_with_joint_success": 8,
+    "minimum_simple_units_with_joint_success": 4,
+    "minimum_repetition_units_with_joint_success": 8,
+    "default_D_to_A_cost_max": 0.95,
+    "default_D_to_B_cost_max": 1.05,
+    "scripting_D_to_C_repetition_cost_max": 0.90,
+    "scripting_D_to_C_all_primary_cost_max": 1.05,
+    "simple_D_to_A_and_C_cost_max": 1.10,
+    "primary_D_to_A_and_C_wall_time_max": 1.10,
+    "all_attempt_cost_per_success_D_to_A_and_C_max": 1.05,
+    "required_repetitions_in_favorable_direction": 3,
+    "bootstrap_samples": 10000,
+    "bootstrap_seed": 504,
+    "bootstrap_upper_quantile": 0.95
+  },
+  "pending_execution_lock": [
+    "clean benchmark executor/analyzer commit and approved protocol document hash",
+    "clean C/D candidate commit, baseline source verification and #496 integration evidence",
+    "actual A/B/C/D metadata, supplied guides, runtime/dependency hashes and C/D parity",
+    "host/OS/CPU/RAM/Python/Node/font/locale/browser binary pins and effective viewport evidence",
+    "trusted operation-level attribution and out-of-fixture egress/fixture-integrity preflight",
+    "actual-entry-point policy/lifecycle/negative and private real-browser conformance evidence",
+    "model availability/authentication, telemetry coverage and generated-code token measurement method",
+    "subscription extra-usage billing disabled or separately approved; remaining quota assessment",
+    "explicit user approval of protocol, model, cost/quota estimate and execution limits"
+  ],
+  "frozen_inputs": {
+    "tasks/personal/catalog.json": "eb54a92e4c5d41f6b70f134a19cd5ccbb6f3112eda196a25c7f850fc383545de",
+    "tasks/coexistence/catalog.json": "49cfc14aa20c0a491c6ba9b3b9bc295e3c84ee2ca568f829f4b5ada0df23036c",
+    "kitsune_benchmark/personal.py": "dcc5ec58d702484f73178c5ccd9a563b1071de90cb5f0b1551290b8b6721bcc7",
+    "kitsune_benchmark/personal_fixtures.py": "ccf6ee19999ff36f9a14eef9f156b73665a4adbd8340b61c471152266b24762d",
+    "kitsune_benchmark/gallery.py": "22a7dfe42a5a81ae8d7e1980f00d6066314da74b824394a5ec359107f77d40e7",
+    "kitsune_benchmark/gallery_media.py": "8955a7585bae91c843cd0aa949941b839d3348c181666aca6c77674b2cfbb566",
+    "kitsune_benchmark/gallery_static/gallery.css": "7a762f46f45afe865ed26a91f9e718f82a4a6ddcda8d7ba386c7cd5727bdb4b3",
+    "kitsune_benchmark/gallery_static/gallery.js": "33afeb4838fa73294daf59d5ec68a5f4156ed1fc60c45604cd40cb68bf1488ab",
+    "kitsune_benchmark/coexistence.py": "e2306e8dc0e7db9c9043b1f5580146074bd29d7555fee3208907386576e46d29",
+    "kitsune_benchmark/coexistence_fixtures.py": "d9c9477b34570073d2697a51b262953e862a9f8883910b26e76aa88865624704",
+    "configs/benchmarks/personal.json": "f36d167daf1b6fdb62935552c56fc397c2a31500bf2481a47abb783a2c76b036",
+    "configs/benchmarks/gallery.json": "370cccfb3319e67563a6034410accfb2a138f451e30077ccdd9a467997d4d19f",
+    "configs/benchmarks/coexistence.json": "b180289929c39f8fd3bee49694f777e5114c08ff554fc6825d0b2f7fad10282e",
+    "package-lock.json": "104a845789c79454cd9976fd0fb028c4f7f4f983ccbd75a2486ba60600a2eec9",
+    "uv.lock": "a501e2955489a4101626c893d71c7667472b451d67d3744a54362fca1451c203"
+  }
+}
