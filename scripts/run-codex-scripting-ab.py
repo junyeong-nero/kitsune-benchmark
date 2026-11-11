@@ -38,6 +38,7 @@ from kitsune_benchmark.smoke import rewrite_json
 
 BENCHMARK = "kitsune-codex-scripting-ab-v1"
 UNAVAILABLE = ["model_requests", "first_request_input_tokens", "list_price_cost_usd"]
+RUNNER_FILES = (Path(__file__), ROOT / "scripts/run-scripting-ab.py")
 
 
 def model() -> str:
@@ -58,7 +59,7 @@ def catalogs(project: str) -> dict:
         result[arm] = sorted(json.loads(probe.stdout))
         if len(result[arm]) != ab.EXPECTED_TOOLS[arm]:
             raise ValueError(f"Unexpected {arm} server catalog: {len(result[arm])} tools")
-        if ("browser_run_python" in result[arm]) != (arm == "scripting"):
+        if ("browser_run_python" in result[arm]) != (settings.get("KITSUNE_SCRIPTING") == "1"):
             raise ValueError(f"Unexpected Python availability in {arm}")
     return result
 
@@ -117,11 +118,11 @@ def do_run(args) -> int:
     if ab.git(project, "rev-parse", "HEAD") != args.kitsune_sha or ab.git(project, "status", "--porcelain"):
         raise ValueError("Kitsune revision changed or dirty")
     manifest = {"benchmark": BENCHMARK, "harness": "codex", "model": model(), "effort": "medium",
-                "kitsune_sha": args.kitsune_sha, "plan": ab.plan(), "catalog_preflight": catalogs(project),
+                "kitsune_sha": args.kitsune_sha, "arms": ab.ARMS,
+                "plan": ab.plan(), "catalog_preflight": catalogs(project),
                 "unavailable_metrics": UNAVAILABLE,
                 "catalog_limit": "MiniWoB catalog is server preflight only, not client inventory attestation.",
-                "runner_sha256": {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in
-                                  (Path(__file__), ROOT / "scripts/run-scripting-ab.py")}}
+                "runner_sha256": {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in RUNNER_FILES}}
     out = Path(args.out)
     rows = ab.load_log(out)
     path = out / "manifest.json"
@@ -178,6 +179,7 @@ def do_run(args) -> int:
 
 
 def analyze(out: Path) -> dict:
+    baseline, candidate = ab.ARMS
     rows = ab.load_log(out)
     report = {"runs": len(rows), "harness": "codex", "unavailable_metrics": UNAVAILABLE, "tracks": {}}
     for track in ("miniwob", "personal", "gallery", "all"):
@@ -196,8 +198,8 @@ def analyze(out: Path) -> dict:
         joint = [v for v in by.values() if all(v.get(arm, {}).get("scorable") and
                                              v[arm]["success"] for arm in ab.ARMS)]
         report["tracks"][track] = {"arms": arms, "joint_cells": len(joint),
-            **{f"joint_{k}_ratio": ab.ratio(sum(v["scripting"][k] for v in joint),
-                                           sum(v["legacy"][k] for v in joint))
+            **{f"joint_{k}_ratio": ab.ratio(sum(v[candidate][k] for v in joint),
+                                           sum(v[baseline][k] for v in joint))
                for k in ("input", "output", "calls", "elapsed")}}
     return report
 
