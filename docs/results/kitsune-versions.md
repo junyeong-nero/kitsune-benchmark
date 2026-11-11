@@ -111,6 +111,15 @@ These are observations; a release-improvement claim still goes through a
 [coexistence track](../coexistence.md) is part of the full suite. The taskset-v2
 user-seeded tab custody contract is retained unchanged.
 
+## v0.7.3 → main `883d80e` (pre-release main)
+
+`883d80e` (`v0.7.3-35-g883d80e`), clean pinned checkout. The standard baseline keeps scripting OFF and the
+historical 23-tool UI allowlist; it does not include the separate `c698d40` CAPS patch.
+
+| Date | Report | Model / harness | Revision | Result |
+| --- | --- | --- | --- | --- |
+| 2026-11-12 | [Lite baseline — incomplete](2026-11-12-main-883d80e-incomplete.md) | `claude-opus-5-5`, Claude Code subscription | `883d80e` | Stops at the session limit in personal-v1: 98 attempted, 96 successful/scorable, 2 quota errors, 208 unattempted. On 47 joint personal units K/PW input 0.831; Kitsune input +2.6% vs `c0f80a2` on the same units, −15.3% vs v0.7.2 on 45 units excluding changed `pb-tabs-03`. No gallery/coexistence/external or full-suite verdict |
+
 ## v0.7.3 → main `c0f80a2` (pre-release main)
 
 `c0f80a2` (`v0.7.3-24-gc0f80a2`): `85b50d2` plus #493 (#485: a collapsed run is listed when its lines total at most
