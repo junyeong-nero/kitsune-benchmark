@@ -66,7 +66,7 @@ def git(path, *args) -> str:
     return subprocess.run(["git", "-C", str(path), *args], capture_output=True, text=True).stdout.strip()
 
 
-def run_one(run: dict, project: str) -> dict:
+def run_one(run: dict, project: str, benchmark: str = "kitsune-scripting-surface-ab-v1") -> dict:
     from kitsune_benchmark import external, gallery, personal
     from kitsune_benchmark.adapter import with_claude_overrides
     from kitsune_benchmark.full_native import full_native_relay
@@ -74,7 +74,7 @@ def run_one(run: dict, project: str) -> dict:
     from kitsune_benchmark.smoke import run_pair
 
     env = ARMS[run["arm"]]
-    tag = {"benchmark": "kitsune-scripting-surface-ab-v1", "arm": run["arm"], "kitsune_env": env,
+    tag = {"benchmark": benchmark, "arm": run["arm"], "kitsune_env": env,
            "tool_policy": "no_benchmark_allowlist"}
     common = dict(execute=True, kitsune_project=project, executable="claude", harness="claude",
                   enabled_tools=None, targets=("kitsune",), kitsune_env=env, artifact_scope="scripting-ab")
