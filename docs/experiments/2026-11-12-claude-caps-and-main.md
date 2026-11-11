@@ -64,4 +64,13 @@ uv run --locked python scripts/run-full-suite.py --harness claude --model claude
   --out artifacts/opus-subscription-main-883d80e
 ```
 
+### Baseline preflight amendment (before any B model invocation)
+
+The optional `test_personal_fixtures` native tests first failed on a short-name import, then on 22 legacy MCP-seeding
+subtests (`no_current_tab` followed by `user_tab_read_only`). The production personal track already uses user-channel
+seeding. Only that test file was updated to use the same user channel and assert zero agent-owned seeded tabs,
+and to support module-name invocation. No Kitsune source, task, production harness, grader or measured run changed.
+The combined personal/native modules then passed **61/61**. Initial failed test attempts remain disclosed here;
+they are not model runs or silently retried benchmark attempts.
+
 Neither experiment authorizes main merges, remote pushes, releases, issue posting or changes to benchmark tasks.

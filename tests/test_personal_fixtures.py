@@ -1,4 +1,5 @@
 import copy
+from contextlib import ExitStack, nullcontext
 from http.cookiejar import CookieJar
 import json
 import unittest
@@ -249,12 +250,17 @@ class NewFixtureTests(unittest.TestCase):
 
 
 def seed_natively(test, task, target, upstream):
-    with PersonalServer(task, 0) as server, tempfile.TemporaryDirectory(prefix="pb-", dir="/tmp") as folder:
+    with PersonalServer(task, 0, user_channel=target == "kitsune") as server, \
+            tempfile.TemporaryDirectory(prefix="pb-", dir="/tmp") as folder, ExitStack() as stack:
         server.begin(target)
         trial = server.trials[server.by_target[target]]
-        session = NativeSession({"target": target, "upstream": upstream(folder), "bootstrap_url": trial.url("/start"),
+        port = server.bidi_ports[target] if target == "kitsune" else None
+        command = stack.enter_context(upstream(folder, port))
+        # Match the real personal track: user-owned starting tabs, not MCP navigation of a foreign tab.
+        seeding = {"seeding": "user_channel", "user_driver": {"bidi_url": f"ws://127.0.0.1:{port}"}} if port else {}
+        session = NativeSession({"target": target, "upstream": command, "bootstrap_url": trial.url("/start"),
             "urls": [trial.url(p) for p in trial.paths], "active_index": trial.active_index,
-            "evidence_path": folder + "/evidence.json", "origin": server.origin})
+            "evidence_path": folder + "/evidence.json", "origin": server.origin, **seeding})
         try:
             session.start()
             session.request("initialize", {"protocolVersion": "2024-11-05", "capabilities": {},
@@ -265,6 +271,9 @@ def seed_natively(test, task, target, upstream):
             test.assertTrue(evaluation["scorable"], evaluation)
             test.assertTrue(evaluation["initial_state_verified"])
             test.assertFalse(evaluation["task_success"])
+            if target == "kitsune":
+                test.assertEqual(session.evidence["seeding"], "user_channel")
+                test.assertEqual(session.evidence["seeded_owned_by_agent"], 0)
         finally:
             session.close()
 
@@ -278,17 +287,16 @@ class NativePlaywrightSeedTests(unittest.TestCase):
                     patch.dict(os.environ, {"PLAYWRIGHT_BROWSERS_PATH": str(ROOT / "artifacts/browsers"),
                                             "PLAYWRIGHT_SKIP_BROWSER_GC": "1", "PWTEST_SOCKETS_DIR": sockets}):
                 seed_natively(self, task, "playwright",
-                              lambda folder: ["node", cli, "--browser", "firefox", "--isolated", "--headless"])
+                              lambda folder, port: nullcontext(["node", cli, "--browser", "firefox", "--isolated", "--headless"]))
 
 
 @unittest.skipUnless(os.environ.get("PERSONAL_KITSUNE_TEST") == "1", "opt-in isolated Kitsune/Firefox MCP test; no model calls")
 class NativeKitsuneSeedTests(unittest.TestCase):
     def test_new_fixtures_seed_via_real_kitsune(self):
-        from test_personal import isolated_kitsune
+        from tests.test_personal import isolated_kitsune
         for task in new_tasks():
-            with self.subTest(task=task["id"]), tempfile.TemporaryDirectory(prefix="pb-", dir="/tmp") as folder, \
-                    isolated_kitsune(folder) as upstream:
-                seed_natively(self, task, "kitsune", lambda _: upstream)
+            with self.subTest(task=task["id"]):
+                seed_natively(self, task, "kitsune", lambda folder, port: isolated_kitsune(folder, bidi_port=port))
 
 
 if __name__ == "__main__":
