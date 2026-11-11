@@ -1,6 +1,6 @@
 # Protocol: scripting-surface schema text (kitsune#521, PR kitsune#523)
 
-Frozen before counted runs. Runner: `scripts/run-schema-trim-ab.py`, which reuses the tasks, order, metrics and
+Frozen before counted runs. Completed 2026-11-11, 80/80: [results](../results/2026-11-11-kitsune-521-schema-trim-ab.md). Runner: `scripts/run-schema-trim-ab.py`, which reuses the tasks, order, metrics and
 stops of `scripts/run-scripting-ab.py` ([original protocol](2026-11-11-kitsune-scripting-surface-ab.md)).
 
 ## Question
