@@ -118,6 +118,7 @@ historical 23-tool UI allowlist; it does not include the separate `c698d40` CAPS
 
 | Date | Report | Model / harness | Revision | Result |
 | --- | --- | --- | --- | --- |
+| 2026-11-12 | [Five-way MiniWoB exhibition](2026-11-12-five-way-miniwob.md) | `claude-opus-5-5`, Claude subscription | main `883d80e` vs patched scripting `c698d40`, plus PW/ego/Aside | 70 scorable, 69 raw successes; both Kitsune arms 14/14, scripting/main input 0.703 with zero Python calls. Aside/ego use less input and fewer MCP calls than scripting but more model requests/time on primary joint-success sets. Page JS, changing Aside description and ego TaskSpace reuse limit attribution. Separate from the incomplete lite baseline |
 | 2026-11-12 | [Lite baseline — incomplete](2026-11-12-main-883d80e-incomplete.md) | `claude-opus-5-5`, Claude Code subscription | `883d80e` | Stops at the session limit in personal-v1: 98 attempted, 96 successful/scorable, 2 quota errors, 208 unattempted. On 47 joint personal units K/PW input 0.831; Kitsune input +2.6% vs `c0f80a2` on the same units, −15.3% vs v0.7.2 on 45 units excluding changed `pb-tabs-03`. No gallery/coexistence/external or full-suite verdict |
 
 ## v0.7.3 → main `c0f80a2` (pre-release main)
