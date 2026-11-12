@@ -51,6 +51,10 @@ PROJECT_DEFAULTS = {"main": str(ROOT / "artifacts/vendor/kitsune-main-883d80e"),
 RUNNER_FILES = (*suite.RUNNER_FILES, Path(__file__))
 RECORD_CATALOG = False
 CONTEXT_PREFIX = None
+LIMITATIONS = ["Aside/ego use installed browsers, not fresh isolated profiles.",
+               "MiniWoB does not attest equal viewports or browser engines.",
+               "Code-execution tools are trusted local code, not an anti-cheating sandbox.",
+               "Shared exhibition browsers have no isolation/viewport attestation."]
 SCRIPT_TOOLS = {"browser_run_python", "run_script", "repl"}
 REWARD = re.compile(r"core\.|endEpisode|WOB_|EPISODE")
 PAGE_JS = re.compile(r"\.evaluate\s*\(|Runtime\.(?:evaluate|callFunctionOn)")
@@ -227,10 +231,7 @@ def do_run(args):
                 "continue_unstarted": args.continue_unstarted,
                 "record_catalog": RECORD_CATALOG, "context_prefix": CONTEXT_PREFIX,
                 "catalog_preflight_sha256": hashlib.sha256(catalog_path.read_bytes()).hexdigest(),
-                "limitations": ["Aside/ego use installed browsers, not fresh isolated profiles.",
-                                "MiniWoB does not attest equal viewports or browser engines.",
-                                "Code-execution tools are trusted local code, not an anti-cheating sandbox.",
-                                "Shared exhibition browsers have no isolation/viewport attestation."],
+                "limitations": LIMITATIONS,
                 "runner_sha256": {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in RUNNER_FILES}}
     # Canonicalize tuples before comparing to a stored JSON manifest.
     manifest = json.loads(json.dumps(manifest))
@@ -259,7 +260,7 @@ def do_run(args):
             write_json(out / "catalogs" / f"{run['seq']:03d}-before.json", before)
             if before[run["arm"]] != catalog_preflight["catalogs"][run["arm"]]:
                 raise ValueError(f"Catalog changed before attempt {run['seq']}; no inference started for this cell")
-        print(f"[{run['seq']}/70] {run['task']} r{run['repeat']} {run['arm']}", flush=True)
+        print(f"[{run['seq']}/{len(manifest['plan'])}] {run.get('unit', run['task'])} r{run['repeat']} {run['arm']}", flush=True)
         pair = run_one(run, projects)
         row = {**run, "harness": "claude", "model": manifest["model"], **metrics(pair, run["arm"])}
         with (out / "runs.jsonl").open("a") as handle:
