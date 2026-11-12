@@ -93,7 +93,8 @@ source/environment/filter choices remain unchanged. In particular, the older CAP
 and five-way cohorts are not reconfigured. Do not enable Python in the standard
 UI-only allowlist or pool those two treatments. Reproduce historical runs from their
 recorded commits, not the latest harness. `full-native` is a separate legacy CAPS
-experiment and is not repaired by this standard-UI change.
+experiment with its own [pre-fixture compatibility check](full-native.md#revision-compatibility);
+unsupported revisions stop rather than being converted to either standard UI or product default.
 
 ## Choose the smallest relevant run
 

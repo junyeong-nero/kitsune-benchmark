@@ -18,7 +18,8 @@ from .gallery import run_gallery
 from .personal import config as personal_config, pair_complete, run_personal, runnable_ids
 from .personal_session import ELICITATION_POLICIES
 from .coexistence import run_coexistence
-from .full_native import run_full_native, units as full_native_units
+from .full_native import (COMPATIBILITY_ERROR, FullNativeCompatibilityError,
+                          run_full_native, units as full_native_units)
 from .hostile import run_hostile
 
 
@@ -111,7 +112,7 @@ def main(argv: list[str] | None = None) -> int:
     coexistence.add_argument("--budget-usd", type=float)
     full_native = subparsers.add_parser("full-native", help="Full-native track (#109): Kitsune only, KITSUNE_CAPS=core vs "
                                         "KITSUNE_CAPS=all + KITSUNE_PUBLISH=core on the same units, no allowlist; "
-                                        "reported apart from the head-to-head; plan by default")
+                                        "requires a legacy CAPS/PUBLISH-compatible checkout; plan by default")
     full_native.add_argument("--execute", action="store_true", help="Run the selected units in both arms; consumes "
                              "subscription quota or API credit")
     full_native.add_argument("--unit", action="append", dest="unit_ids",
@@ -288,6 +289,10 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "plan" or result["execution_status"] == "completed_unscored":
             return 0
         return 3
+    except FullNativeCompatibilityError:
+        # Fixed text only; the worker's raw stderr/configuration stays in private evidence.
+        print(COMPATIBILITY_ERROR)
+        return 2
     except (OSError, ValueError, subprocess.SubprocessError):
         # JSON/OS exceptions may include config lines, paths, or secrets.
         # Do not echo raw exception text to automated logs.
