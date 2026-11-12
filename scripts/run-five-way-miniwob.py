@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter, defaultdict
+from dataclasses import replace
 import hashlib
 import importlib.util
 import json
@@ -19,6 +20,7 @@ import re
 import statistics
 import subprocess
 import sys
+import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -32,7 +34,7 @@ from kitsune_benchmark.adapter import resolve, write_json
 from kitsune_benchmark.claude_harness import claude_environment
 from kitsune_benchmark.full_native import agent_calls
 from kitsune_benchmark.miniwob import BenchmarkServer
-from kitsune_benchmark.smoke import rewrite_json, run_pair, source_revision
+from kitsune_benchmark.smoke import private_ports, rewrite_json, run_pair, source_revision
 
 BENCHMARK = "claude-five-way-miniwob-v1"
 SHAS = {"main": "883d80eee2c85f81410352ea8f86b81e11a2b682",
@@ -44,6 +46,11 @@ ARMS = {"kitsune-main": ("kitsune", "main", {}, external.TOOLS["kitsune"]),
         "aside": ("aside", "main", {}, external.TOOLS["aside"])}
 EXPECTED = dict(zip(ARMS, (23, 14, 23, 1, 1)))
 suite.ab.EXPECTED_TOOLS = EXPECTED
+PROJECT_DEFAULTS = {"main": str(ROOT / "artifacts/vendor/kitsune-main-883d80e"),
+                    "scripting": str(ROOT.parent / "kitsune-scripting-caps-default")}
+RUNNER_FILES = (*suite.RUNNER_FILES, Path(__file__))
+RECORD_CATALOG = False
+CONTEXT_PREFIX = None
 SCRIPT_TOOLS = {"browser_run_python", "run_script", "repl"}
 REWARD = re.compile(r"core\.|endEpisode|WOB_|EPISODE")
 PAGE_JS = re.compile(r"\.evaluate\s*\(|Runtime\.(?:evaluate|callFunctionOn)")
@@ -77,12 +84,10 @@ def vendor_pins():
             "ego_guide_sha256": hashlib.sha256(ego_mcp.describe(ego).encode()).hexdigest()}
 
 
-def preflight(projects):
-    """Use the existing Kitsune MCP SDK in a worker; the benchmark has no MCP dependency."""
+def preflight(projects, only_arm=None):
+    """List catalogs without starting a browser or touching the user's bridge/home."""
     env = claude_environment(resolve("claude"))
     commands = {
-        "kitsune-main": ("uv", ["run", "--locked", "--project", projects["main"], "kitsune"]),
-        "kitsune-scripting": ("uv", ["run", "--locked", "--project", projects["scripting"], "kitsune"]),
         "playwright": ("node", [str(ROOT / "node_modules/@playwright/mcp/cli.js"), "--browser", "firefox", "--isolated", "--headless"]),
         "ego": (sys.executable, [str(ROOT / "kitsune_benchmark/ego_mcp.py")]),
         "aside": (str(Path.home() / ".local/bin/aside"), ["mcp"]),
@@ -100,15 +105,29 @@ async def main():
                 listed = await client.list_tools()
                 if listed.nextCursor:
                     raise ValueError("Unexpected paginated catalog: " + arm)
-                result[arm] = {"tools": [t.model_dump(mode="json") for t in listed.tools],
-                               "instructions": init.instructions, "server_info": init.serverInfo.model_dump(mode="json")}
+                result[arm] = {"tools": [t.model_dump(mode="json", exclude_none=True) for t in listed.tools],
+                               "instructions": init.instructions, "server_info": init.serverInfo.model_dump(mode="json", exclude_none=True)}
     print(json.dumps(result))
 asyncio.run(main())
 '''
-    servers = {arm: {"command": command, "args": args, "env": {**env, **ARMS[arm][2]}}
-               for arm, (command, args) in commands.items()}
-    done = subprocess.run(["uv", "run", "--locked", "--project", projects["main"], "python", "-c", worker],
-                          input=json.dumps(servers), env=env, capture_output=True, text=True, timeout=180)
+    with tempfile.TemporaryDirectory(prefix="five-way-catalog-") as home:
+        servers = {}
+        for arm, (target, source, settings, _) in ARMS.items():
+            if only_arm is not None and arm != only_arm:
+                continue
+            isolated = {}
+            if target == "kitsune":
+                command, args = "uv", ["run", "--locked", "--project", projects[source], "python", "-c",
+                                      "from kitsune.server import mcp; mcp.run(transport='stdio')"]
+                http, ws = private_ports()
+                isolated = {"KITSUNE_HOME": str(Path(home) / arm), "KITSUNE_HTTP_PORT": str(http),
+                            "KITSUNE_WS_PORT": str(ws), "KITSUNE_TOKEN": "catalog-preflight-only",
+                            "KITSUNE_NO_BRIDGE_RESTART": "1"}
+            else:
+                command, args = commands[target]
+            servers[arm] = {"command": command, "args": args, "env": {**env, **settings, **isolated}}
+        done = subprocess.run(["uv", "run", "--locked", "--project", projects["main"], "python", "-c", worker],
+                              input=json.dumps(servers), env=env, capture_output=True, text=True, timeout=180)
     if done.returncode:
         raise ValueError("Catalog preflight failed: " + done.stderr)
     result = json.loads(done.stdout)
@@ -116,7 +135,29 @@ asyncio.run(main())
         catalog["tools"] = [t for t in catalog["tools"] if ARMS[arm][3] is None or t["name"] in ARMS[arm][3]]
         if len(catalog["tools"]) != EXPECTED[arm]:
             raise ValueError(f"Unexpected preflight {arm} catalog size: {len(catalog['tools'])}")
-    return result
+    return {arm: canonical_catalog(catalog) for arm, catalog in result.items()}
+
+
+def canonical_catalog(catalog):
+    return {**catalog, "tools": sorted(catalog["tools"], key=lambda t: t["name"])}
+
+
+def observed_catalog(pair_dir):
+    """First complete model-facing catalog plus initialize metadata; later publication stays in the raw log."""
+    try:
+        records = [json.loads(line) for line in (Path(pair_dir) / "catalog-metadata.jsonl").read_text().splitlines()]
+        init = next(r["response"]["result"] for r in records if r["method"] == "initialize")
+        tools = []
+        for record in records:
+            if record["method"] == "tools/list":
+                page = record["response"]["result"]
+                tools.extend(page["tools"])
+                if not page.get("nextCursor"):
+                    return canonical_catalog({"tools": tools, "instructions": init.get("instructions"),
+                                              "server_info": init["serverInfo"]})
+    except (OSError, ValueError, KeyError, StopIteration):
+        pass
+    return None
 
 
 def verify_sources(projects, benchmark_sha):
@@ -136,22 +177,35 @@ def run_one(row, projects):
     experiment = {**spec, "selected_task": task, "five_way": {"benchmark": BENCHMARK, **row},
                   "upstream_task_sha256": external.task_sha256(upstream, task["task_id"])}
     with BenchmarkServer(upstream, spec, task) as fixture:
+        def begin(target):
+            task = fixture.begin(target)
+            if CONTEXT_PREFIX:
+                # Unique across cohorts and cells, but stable across this attempt's script rounds.
+                context = f"{CONTEXT_PREFIX}-{row['seq']:03d}"
+                task = replace(task, prompt=task.prompt + f" Use a fresh tab/context for this attempt, not one from an earlier task. "
+                               f"If your API uses a named TaskSpace/session, use exactly {context!r} and keep using it within this attempt.")
+            return task
         return run_pair(execute=True, kitsune_project=projects[source], executable="claude", harness="claude",
                         targets=(target,), kitsune_env=env, enabled_tools={target: tools} if tools else None,
                         artifact_scope="five-way-miniwob", experiment_spec=experiment,
-                        task_for_target=fixture.begin, evaluate=fixture.evaluate)
+                        task_for_target=begin, evaluate=fixture.evaluate, record_catalog=RECORD_CATALOG)
 
 
 def metrics(pair, arm):
     target = ARMS[arm][0]
     normalized = {"pair_dir": pair["pair_dir"], "results": {"kitsune": pair["results"][target]}}
     row = suite.metrics(normalized)
-    scripts = [c for c in agent_calls(Path(row["run_dir"]) / "events.jsonl") if c["tool"] in SCRIPT_TOOLS]
+    calls = agent_calls(Path(row["run_dir"]) / "events.jsonl")
+    scripts = [c for c in calls if c["tool"] in SCRIPT_TOOLS]
+    direct_js = [c for c in calls if c["tool"] in ("browser_evaluate", "browser_run_code_unsafe") or
+                 (c["tool"] == "browser_tools_call" and '"browser_evaluate"' in json.dumps(c["arguments"]))]
     code = [json.dumps(c["arguments"], ensure_ascii=False) for c in scripts]
+    direct_code = [json.dumps(c["arguments"], ensure_ascii=False) for c in direct_js]
     row.update(target=target, script_calls=len(scripts), script_errors=sum(bool(c["error"]) for c in scripts),
-               reward_pattern_hits=sum(len(REWARD.findall(s)) for s in code),
-               page_js_hits=sum(len(PAGE_JS.findall(s)) for s in code),
-               script_urls=[url for s in code for url in suite.ab.URL.findall(s)])
+               reward_pattern_hits=sum(len(REWARD.findall(s)) for s in code + direct_code),
+               page_js_hits=sum(len(PAGE_JS.findall(s)) for s in code) + len(direct_js),
+               direct_js_calls=len(direct_js),
+               script_urls=[url for s in code + direct_code for url in suite.ab.URL.findall(s)])
     return row
 
 
@@ -164,19 +218,20 @@ def do_run(args):
     if (out / "stopped.json").exists():
         raise ValueError("Prior runner exception requires review; use a separate deliberate continuation")
     catalog_path = out / "catalog-preflight.json"
-    if json.loads(catalog_path.read_text())["vendors"] != vendors:
+    catalog_preflight = json.loads(catalog_path.read_text())
+    if catalog_preflight["vendors"] != vendors:
         raise ValueError("Vendor preflight differs from current installation")
     manifest = {"benchmark": BENCHMARK, "harness": "claude", "model": suite.model(), "effort": "medium",
                 "benchmark_sha": benchmark_sha, "projects": projects, "kitsune_shas": SHAS,
                 "arms": ARMS, "expected_tools": EXPECTED, "plan": plan(), "vendors": vendors,
                 "continue_unstarted": args.continue_unstarted,
+                "record_catalog": RECORD_CATALOG, "context_prefix": CONTEXT_PREFIX,
                 "catalog_preflight_sha256": hashlib.sha256(catalog_path.read_bytes()).hexdigest(),
                 "limitations": ["Aside/ego use installed browsers, not fresh isolated profiles.",
                                 "MiniWoB does not attest equal viewports or browser engines.",
                                 "Code-execution tools are trusted local code, not an anti-cheating sandbox.",
-                                "Pair headless/browser_binary fields describe Firefox setup, not the vendor browsers."],
-                "runner_sha256": {p.name: hashlib.sha256(p.read_bytes()).hexdigest()
-                                  for p in (*suite.RUNNER_FILES, Path(__file__))}}
+                                "Shared exhibition browsers have no isolation/viewport attestation."],
+                "runner_sha256": {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in RUNNER_FILES}}
     # Canonicalize tuples before comparing to a stored JSON manifest.
     manifest = json.loads(json.dumps(manifest))
     path = out / "manifest.json"
@@ -198,6 +253,12 @@ def do_run(args):
         verify_sources(projects, benchmark_sha)
         if vendor_pins() != vendors:
             raise ValueError("Vendor version/guide changed; stop for review")
+        if RECORD_CATALOG:
+            before = preflight(projects, run["arm"])
+            (out / "catalogs").mkdir(exist_ok=True, mode=0o700)
+            write_json(out / "catalogs" / f"{run['seq']:03d}-before.json", before)
+            if before[run["arm"]] != catalog_preflight["catalogs"][run["arm"]]:
+                raise ValueError(f"Catalog changed before attempt {run['seq']}; no inference started for this cell")
         print(f"[{run['seq']}/70] {run['task']} r{run['repeat']} {run['arm']}", flush=True)
         pair = run_one(run, projects)
         row = {**run, "harness": "claude", "model": manifest["model"], **metrics(pair, run["arm"])}
@@ -209,6 +270,15 @@ def do_run(args):
         if vendor_pins() != vendors:
             raise ValueError("Vendor version/guide changed during attempt; raw evidence retained")
         reason = suite.stop_reason(row, args.continue_unstarted)
+        if RECORD_CATALOG:
+            after = preflight(projects, run["arm"])
+            write_json(out / "catalogs" / f"{run['seq']:03d}-after.json", after)
+            expected = catalog_preflight["catalogs"][run["arm"]]
+            if after[run["arm"]] != expected or observed_catalog(pair["pair_dir"]) != expected:
+                catalog_error = "Model-facing or postflight catalog differs from frozen preflight"
+                reason = reason or catalog_error
+                write_json(out / "stopped.json", {"reason": reason, "catalog_error": catalog_error,
+                                                  "seq": run["seq"], "pair_dir": pair["pair_dir"]})
         if reason:
             print(f"stop: {reason}; inspect {row['run_dir']}", file=sys.stderr)
             return 2
@@ -232,7 +302,7 @@ def analyze(out):
                        "tool_errors": dict(sum((Counter(r["tool_errors"]) for r in selected), Counter())),
                        **{key: sum(r[key] for r in selected) for key in ("reward_pattern_hits", "page_js_hits")}}
     comparisons = {}
-    for baseline in ("kitsune-main", "kitsune-scripting"):
+    for baseline in list(ARMS)[:2]:
         comparisons[baseline] = {}
         for arm in ARMS:
             joint = [v for v in by.values() if all(v.get(a, {}).get("scorable") and v[a]["success"] for a in (baseline, arm))]
@@ -249,8 +319,8 @@ def main():
     run = sub.add_parser("run")
     probe = sub.add_parser("preflight")
     for child in (run, probe):
-        child.add_argument("--main-project", default=str(ROOT / "artifacts/vendor/kitsune-main-883d80e"))
-        child.add_argument("--scripting-project", default=str(ROOT.parent / "kitsune-scripting-caps-default"))
+        child.add_argument("--main-project", default=PROJECT_DEFAULTS["main"])
+        child.add_argument("--scripting-project", default=PROJECT_DEFAULTS["scripting"])
     run.add_argument("--limit", type=int)
     run.add_argument("--continue-unstarted", action="store_true")
     for child in (run, probe, sub.add_parser("analyze")):

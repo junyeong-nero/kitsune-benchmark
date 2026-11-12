@@ -197,14 +197,15 @@ def run_pair(*, execute: bool = False, kitsune_project: str | None = None,
              kitsune_firefox_args: tuple[str, ...] = (),
              kitsune_firefox_prefs: dict[str, str] | None = None,
              viewport_reports: Callable[[str], list[dict] | None] | None = None,
-             equalize_kitsune_viewport: bool = False) -> dict:
+             equalize_kitsune_viewport: bool = False, record_catalog: bool = False) -> dict:
     """kitsune_preset sets KITSUNE_TOOL_PRESET for the Kitsune server (A/B of its tool surface).
     targets restricts which MCPs run, e.g. Kitsune-only A/B arms.
     kitsune_env adds KITSUNE_* settings (e.g. KITSUNE_PROTECT_USER_TABS) for the Kitsune server;
     kitsune_firefox_args/prefs extend the web-ext Firefox launch (the coexistence track's user
     channel). viewport_reports returns a target's fixture page viewport reports after its run;
     equalize_kitsune_viewport adds Firefox's chrome height to the Kitsune window so its content
-    viewport matches Playwright's. The defaults leave every existing track's launch unchanged."""
+    viewport matches Playwright's. record_catalog adds a transparent filtered-catalog recorder.
+    The defaults leave every existing track's launch unchanged."""
     if not targets or len(set(targets)) != len(targets) or set(targets) - set(ALL_TARGETS):
         raise ValueError("targets must be a non-empty subset of " + ", ".join(ALL_TARGETS) + ".")
     if kitsune_preset is not None and not re.fullmatch(r"[a-z][a-z0-9_-]{0,31}", kitsune_preset):
@@ -295,7 +296,10 @@ def run_pair(*, execute: bool = False, kitsune_project: str | None = None,
         **({"kitsune_env": dict(sorted(kitsune_env.items()))} if kitsune_env else {}),
         **({"kitsune_firefox_args": list(kitsune_firefox_args)} if kitsune_firefox_args else {}),
         **({"kitsune_firefox_prefs": dict(kitsune_firefox_prefs)} if kitsune_firefox_prefs else {}),
-        "enabled_tools": enabled_tools, "browser_binary": str(firefox), "headless": True,
+        "enabled_tools": enabled_tools,
+        "browser_binary": str(firefox) if any(t in TARGETS for t in targets) else None,
+        "headless": None if any(t in EXHIBITION_TARGETS for t in targets) else True,
+        **({"record_catalog": True} if record_catalog else {}),
         "kitsune_source": source_revision(project), "benchmark_source": benchmark_source(),
         "extension_patch": patch_info,
         "http_port": http_port, "ws_port": ws_port,
@@ -357,8 +361,15 @@ def run_pair(*, execute: bool = False, kitsune_project: str | None = None,
                             ResourceRoot(browser.pid, "browser_launcher", "kitsune", True)) if target == "kitsune" else ()
                 # Session relays (prepare_server) set up lazily and record it in their evidence file.
                 evidence = relay_evidence_path(server) if prepare_server is not None else None
+                if record_catalog:
+                    server = replace(server, command=sys.executable,
+                        args=(str(ROOT / "kitsune_benchmark/mcp_tool_filter.py"),
+                              json.dumps(list(server.enabled_tools) if server.enabled_tools else None),
+                              "--metadata", str(pair_dir / "catalog-metadata.jsonl"),
+                              "--", server.command, *server.args), enabled_tools=())
                 result = run(server, task, model, executable=path, timeout=timeout,
-                             output_root=str(pair_dir / "runs"), confirm_isolated_browser=True,
+                             output_root=str(pair_dir / "runs"), confirm_isolated_browser=target in TARGETS,
+                             confirm_shared_exhibition_browser=target in EXHIBITION_TARGETS,
                              resource_roots=external, resource_observer=resources, viewport=viewports[target],
                              harness=harness, effort=effort, max_budget_usd=max_budget_usd,
                              session_setup=partial(session_setup, evidence) if evidence is not None else None)

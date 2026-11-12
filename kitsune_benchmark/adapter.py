@@ -321,7 +321,7 @@ def model_request_observed(audit: dict) -> bool:
 def run(
     server: Server, task: Task, model: str, *, executable: str = "codex",
     codex_home: str | None = None, timeout: int = 300, output_root: str = "runs",
-    confirm_isolated_browser: bool = False,
+    confirm_isolated_browser: bool = False, confirm_shared_exhibition_browser: bool = False,
     resource_roots: tuple[ResourceRoot, ...] = (),
     resource_observer: ResourceCollector | None = None,
     viewport: dict | None = None,
@@ -335,7 +335,9 @@ def run(
         raise ValueError("claude-api runs require a per-run dollar cap.")
     if os.name != "posix":
         raise ValueError("Process-group cleanup is currently supported only on POSIX.")
-    if not confirm_isolated_browser:
+    if confirm_shared_exhibition_browser and (server.id not in ("aside", "ego") or confirm_isolated_browser):
+        raise ValueError("Shared-browser confirmation is only for non-isolated Aside/ego exhibition runs.")
+    if not (confirm_isolated_browser or confirm_shared_exhibition_browser):
         raise ValueError("Use --confirm-isolated-browser only after setting up a dedicated test browser/profile.")
     positive_int(timeout, "timeout")
     text(model, "model")
@@ -377,7 +379,8 @@ def run(
         "prompt_sha256": hashlib.sha256(task.prompt.encode()).hexdigest(),
         "timeout_sec": timeout,
         "argv": argv, "preflight": preflight_report,
-        "isolated_browser_confirmed_by_operator": True,
+        "isolated_browser_confirmed_by_operator": confirm_isolated_browser,
+        **({"shared_exhibition_browser_confirmed_by_operator": True} if confirm_shared_exhibition_browser else {}),
         "environment_reset": "not_implemented", "external_evaluation": "not_implemented",
         "token_budget": "not_enforced",
         "api_cost": ({"max_budget_usd_per_run": max_budget_usd, "source": "Claude Code total_cost_usd estimate"}
