@@ -111,6 +111,15 @@ These are observations; a release-improvement claim still goes through a
 [coexistence track](../coexistence.md) is part of the full suite. The taskset-v2
 user-seeded tab custody contract is retained unchanged.
 
+## Default `47dafa2` vs experimental code-first `f5c7a0f`
+
+Actual 14-tool default versus six-tool code-first, both with Python and unchanged browser/input code.
+The candidate remains unmerged. Separate model cohorts must not be pooled.
+
+| Date | Report | Model / harness | Revision | Result |
+| --- | --- | --- | --- | --- |
+| 2026-11-13 | [Expanded four-way](2026-11-13-expanded-four-way-codex.md) | `gpt-6.1-sol`, medium, ChatGPT subscription | `47dafa2` / `f5c7a0f`, plus Aside/EgoLite | 184 scorable raw successes, 46/46 each. Candidate/default input 0.971, adjusted time 1.048; Aside leads isolated UI, Kitsune is stronger on crowded UI. Native viewport/profile/permission differences disclosed; no model handoff coverage. Existing merge hold retained |
+
 ## v0.7.3 → main `79eb955` (pre-release main)
 
 `79eb955` (`v0.7.3-41-g79eb955`), clean pinned remote main: scripting is now the default, CAPS/PUBLISH/MODE
