@@ -56,6 +56,45 @@ No command edits Claude Code's or Codex's login or configuration. Each CLI reads
 existing login; there is no API-key or alternate-model fallback. API billing is only
 the explicit `--harness claude-api` described below.
 
+## Standard UI profile versus the product default
+
+`personal`, `gallery`, `coexistence`, `external`/`benchmark`, and `smoke --ui-tools` use
+**`legacy-ui-23`** for Kitsune: explicit **`KITSUNE_SCRIPTING=0`** plus the historical
+23-tool UI allowlist. `scripts/run-full-suite.py` uses these same track entry points;
+its suite manifest and Kitsune pair manifests record the profile and setting.
+Plan-only output names the profile without starting a process.
+
+This is intentionally **not** Kitsune's product default. At `79eb955`, the native
+legacy catalog has 30 tools, filtered to 23; the native default has 14. Applying
+the old UI allowlist to that default would expose only **11**, dropping
+`browser_run_python`, `browser_ask_user` and `browser_resume`. Standard execution
+now opts out of scripting explicitly rather than silently measuring that hybrid.
+It does not change the product's installed/global default or any approval/user-tab policy.
+
+After private browser/bridge provisioning, but **before any agent in the pair or
+fixture seeding**, the harness opens a no-model native MCP connection for each
+selected Kitsune/Playwright target. It retrieves every catalog page and validates
+the **exact filtered tool-name set**, not just its count. Missing/unexpected names,
+duplicates, invalid pagination or native-server errors stop the pair before inference;
+they are not silently retried. Probes call no browser tools and decline any elicitation.
+Full native schemas/instructions and the verdict are saved privately as
+`<target>-catalog-preflight.json`, including failure evidence. Probe time is reported
+separately as `timing.catalog_preflight_sec`, outside agent elapsed time.
+
+This is a **separate startup connection**, not a guarantee against later per-session
+catalog changes or a sandbox. It also adds native startup/warm-up work, so retain the
+harness revision when comparing historical timing. Parallel suite peers are separate
+processes: an already-running peer is allowed to settle under the existing stop policy.
+
+The actual 14-tool default remains a **separate code-enabled experiment**, e.g.
+[`run-five-way-main.py`'s frozen protocol](experiments/2026-11-12-five-way-main-79eb955.md).
+Custom `run_pair` callers do not opt into `standard_ui` automatically; their explicit
+source/environment/filter choices remain unchanged. In particular, the older CAPS
+and five-way cohorts are not reconfigured. Do not enable Python in the standard
+UI-only allowlist or pool those two treatments. Reproduce historical runs from their
+recorded commits, not the latest harness. `full-native` is a separate legacy CAPS
+experiment and is not repaired by this standard-UI change.
+
 ## Choose the smallest relevant run
 
 | Command | What is selected | Maximum requested agent runs |

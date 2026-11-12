@@ -130,6 +130,8 @@ class FullSuiteTests(unittest.TestCase):
                 self.assertEqual(launched, expected)
                 self.assertCountEqual(self.outputs, outputs + ["suite-manifest.json", "suite-summary.json"])
                 self.assertEqual(self.manifest["attempts"], 1)
+                self.assertEqual(self.manifest["kitsune_profile"], "legacy-ui-23")
+                self.assertEqual(self.manifest["kitsune_env"], {"KITSUNE_SCRIPTING": "0"})
                 self.assertEqual(self.manifest["elicitation"], "decline")
                 self.assertEqual((self.manifest["resumed_from"], self.manifest["previous_suite"]), (None, None))
                 self.assertTrue(all(entry["attempt"] == 1 for entry in entries))

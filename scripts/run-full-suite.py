@@ -24,6 +24,9 @@ model_request_observed false, stopped_before_client_timeout true) is rerun whole
 ports, up to N times. Each retry is in the pair summary and the entry's suite-log line as setup_retries, with the failed
 run's error_detail and the discarded runs of the pair's other target. Any other failure still stops the suite.
 
+The standard tracks use the legacy-ui-23 profile: Kitsune KITSUNE_SCRIPTING=0, both native targets' 23-tool
+UI allowlists, and a per-pair no-model catalog check. This is not the product-default 14-tool experiment.
+
 The default harness is `claude`: Claude Code on the claude.ai subscription login, which spends no API
 credit and has no dollar cap. API-key harnesses (`claude-api`, `claude-api-full`) bill ANTHROPIC_API_KEY
 credit and need --allow-api-billing plus --budget-usd and --max-budget-usd-per-run.
@@ -186,6 +189,7 @@ def main() -> int:
     manifest = {"model": args.model, "harness": args.harness, "budget_usd": args.budget_usd,
                 "max_budget_usd_per_run": args.max_budget_usd_per_run,
                 "kitsune_project": str(Path(args.kitsune_project).resolve()),
+                "kitsune_profile": "legacy-ui-23", "kitsune_env": {"KITSUNE_SCRIPTING": "0"},
                 "kitsune": git_identity(args.kitsune_project),
                 "taskset": git_identity(Path(__file__).resolve().parent.parent, "taskset-*"),
                 "started": time.strftime("%Y-%m-%dT%H:%M:%S%z"),

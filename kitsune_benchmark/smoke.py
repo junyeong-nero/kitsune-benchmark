@@ -23,6 +23,7 @@ import urllib.error
 import urllib.request
 import uuid
 
+from .catalog import STANDARD_UI_PROFILE, preflight_catalog
 from .cost_metrics import observation_volume, pair_resource_phases, rpc_records, run_timing
 from .adapter import (API_HARNESSES, PINNED_CODEX_VERSION, claude_budget, harness_environment, harness_pins, harness_preflight,
                       resolve, run, terminate_group, write_json)
@@ -197,7 +198,8 @@ def run_pair(*, execute: bool = False, kitsune_project: str | None = None,
              kitsune_firefox_args: tuple[str, ...] = (),
              kitsune_firefox_prefs: dict[str, str] | None = None,
              viewport_reports: Callable[[str], list[dict] | None] | None = None,
-             equalize_kitsune_viewport: bool = False, record_catalog: bool = False) -> dict:
+             equalize_kitsune_viewport: bool = False, record_catalog: bool = False,
+             standard_ui: bool = False) -> dict:
     """kitsune_preset sets KITSUNE_TOOL_PRESET for the Kitsune server (A/B of its tool surface).
     targets restricts which MCPs run, e.g. Kitsune-only A/B arms.
     kitsune_env adds KITSUNE_* settings (e.g. KITSUNE_PROTECT_USER_TABS) for the Kitsune server;
@@ -205,9 +207,22 @@ def run_pair(*, execute: bool = False, kitsune_project: str | None = None,
     channel). viewport_reports returns a target's fixture page viewport reports after its run;
     equalize_kitsune_viewport adds Firefox's chrome height to the Kitsune window so its content
     viewport matches Playwright's. record_catalog adds a transparent filtered-catalog recorder.
-    The defaults leave every existing track's launch unchanged."""
+    standard_ui pins Kitsune's legacy surface and checks each native target's filtered catalog before
+    launching any agent. Custom experiments leave it off and retain their explicitly selected treatment.
+    """
     if not targets or len(set(targets)) != len(targets) or set(targets) - set(ALL_TARGETS):
         raise ValueError("targets must be a non-empty subset of " + ", ".join(ALL_TARGETS) + ".")
+    profile = {}
+    if standard_ui:
+        from .miniwob import UI_TOOLS  # miniwob imports ROOT from this module
+        for target in targets:
+            if target in UI_TOOLS and (enabled_tools is None or enabled_tools.get(target) != UI_TOOLS[target]):
+                raise ValueError("standard_ui requires the complete standard UI allowlist for each native target")
+        if "kitsune" in targets:
+            if (kitsune_env or {}).get("KITSUNE_SCRIPTING", "0") != "0":
+                raise ValueError("standard_ui requires KITSUNE_SCRIPTING=0; use a separate product-default experiment")
+            kitsune_env = {**(kitsune_env or {}), "KITSUNE_SCRIPTING": "0"}
+            profile = {"kitsune_profile": STANDARD_UI_PROFILE}
     if kitsune_preset is not None and not re.fullmatch(r"[a-z][a-z0-9_-]{0,31}", kitsune_preset):
         raise ValueError("Invalid Kitsune tool preset name.")
     reserved = {"KITSUNE_HOME", "KITSUNE_HTTP_PORT", "KITSUNE_WS_PORT", "KITSUNE_TOKEN", "KITSUNE_TOOL_PRESET"}
@@ -224,7 +239,8 @@ def run_pair(*, execute: bool = False, kitsune_project: str | None = None,
     model, effort = harness_pins(spec, harness)
     max_budget_usd = claude_budget(spec, harness)
     if not execute:
-        return {"mode": "smoke_plan_only", "model_invoked": False, "experiment": spec,
+        return {"mode": "smoke_plan_only", "model_invoked": False, "experiment": spec, **profile,
+                **({"kitsune_env": kitsune_env} if standard_ui and kitsune_env else {}),
                 "next": "Install pinned tools/private Firefox, then use smoke --execute."
                 " Execution consumes subscription quota."}
     if os.name != "posix":
@@ -290,7 +306,7 @@ def run_pair(*, execute: bool = False, kitsune_project: str | None = None,
                  for target, server in specs.items()}
     manifest = {
         "viewport": viewports,
-        "experiment": spec, "harness": harness, "model": model, "reasoning_effort": effort,
+        "experiment": spec, "harness": harness, "model": model, "reasoning_effort": effort, **profile,
         "max_budget_usd_per_run": max_budget_usd, "kitsune_tool_preset": kitsune_preset,
         "targets": list(targets),
         **({"kitsune_env": dict(sorted(kitsune_env.items()))} if kitsune_env else {}),
@@ -344,6 +360,15 @@ def run_pair(*, execute: bool = False, kitsune_project: str | None = None,
                 "firefox.log", "browser_launcher")
             await_bridge(http_port, env["KITSUNE_TOKEN"], browser, extension=True)
         setup_seconds = time.monotonic() - setup_started
+        catalog_seconds = None
+        if standard_ui:
+            catalog_started = time.monotonic()
+            # Check all native targets before the first model in this pair, including Playwright-first pairs.
+            # Probe the native server, not the lazy fixture relay: no task page is loaded or seeded here.
+            for target, server in specs.items():
+                if target in TARGETS:
+                    preflight_catalog(server, server.enabled_tools, env, pair_dir / f"{target}-catalog-preflight.json")
+            catalog_seconds = time.monotonic() - catalog_started
         resources.set_phase("ready")
         time.sleep(1)
         # Scope these values to this Python process and its children only.
@@ -416,6 +441,7 @@ def run_pair(*, execute: bool = False, kitsune_project: str | None = None,
                "evaluation": "per_target_external_evaluator" if evaluate else "not_implemented",
                "resource_summary_path": str(pair_dir / "resource-summary.json"),
                "resource_phases": pair_resource_phases(resources.summary, specs),
-               "timing": {"kitsune_cold_start_setup_sec": setup_seconds if "kitsune" in specs else None}}
+               "timing": {"kitsune_cold_start_setup_sec": setup_seconds if "kitsune" in specs else None,
+                          **({"catalog_preflight_sec": catalog_seconds} if standard_ui else {})}}
     write_json(pair_dir / "pair-summary.json", summary)
     return summary

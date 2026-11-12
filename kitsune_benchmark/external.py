@@ -14,6 +14,7 @@ from pathlib import Path
 import re
 
 from .adapter import claude_budget, harness_pins, with_claude_overrides, write_json
+from .catalog import STANDARD_UI_PROFILE
 from .cost_metrics import normalized_usage
 from .miniwob import EXHIBITION_TOOLS, UI_TOOLS, BenchmarkServer, config, fetch_source, task_sha256, verify_source
 from .personal import incomplete_stop
@@ -126,6 +127,7 @@ def run_external(*, execute: bool = False, fetch: bool = False, task_ids: list[s
     if not execute:
         return {"mode": "external_plan_only", "model_invoked": False, "config": spec, "harness": harness,
                 "model": model, "targets": list(targets), "selected_tasks": tasks,
+                "kitsune_profile": STANDARD_UI_PROFILE if "kitsune" in targets else None,
                 "planned_model_runs": len(targets) * len(tasks), "source_present": source.exists(),
                 "max_budget_usd_per_run": per_run, "suite_budget_usd": budget_usd,
                 "worst_case_usd": len(targets) * len(tasks) * per_run if per_run else None,
@@ -152,12 +154,12 @@ def run_external(*, execute: bool = False, fetch: bool = False, task_ids: list[s
             with BenchmarkServer(source, spec, task) as fixture:
                 pair = run_pair(execute=True, kitsune_project=kitsune_project, executable=executable,
                     experiment_spec=experiment, artifact_scope="external", task_for_target=fixture.begin,
-                    evaluate=fixture.evaluate, enabled_tools=TOOLS, harness=harness, targets=targets)
+                    evaluate=fixture.evaluate, enabled_tools=TOOLS, harness=harness, targets=targets, standard_ui=True)
         else:
             fixture = LiveTask(task)
             pair = run_pair(execute=True, kitsune_project=kitsune_project, executable=executable,
                 experiment_spec=experiment, artifact_scope="external", task_for_target=fixture.begin,
-                evaluate=fixture.evaluate, enabled_tools=TOOLS, harness=harness, targets=targets)
+                evaluate=fixture.evaluate, enabled_tools=TOOLS, harness=harness, targets=targets, standard_ui=True)
         pair["external_task"] = task["id"]
         pair["external_kind"] = task["kind"]
         write_json(Path(pair["pair_dir"]) / "external-summary.json", pair)

@@ -51,7 +51,7 @@ def main(argv: list[str] | None = None) -> int:
     smoke.add_argument("--kitsune-project", help="Kitsune source checkout; defaults to sibling directory")
     smoke.add_argument("--timeout", type=int, help="Wall-clock seconds per agent run")
     smoke.add_argument("--task", dest="task_file", help="Task JSON ({id, prompt}) instead of the default read-only smoke task")
-    smoke.add_argument("--ui-tools", action="store_true", help="Expose only the benchmark UI tool allowlist to each MCP")
+    smoke.add_argument("--ui-tools", action="store_true", help="Use the standard 23-tool UI profile (Kitsune legacy opt-out), with a no-model catalog preflight")
     smoke.add_argument("--targets", default="playwright,kitsune", help="Comma-separated MCPs to run")
     benchmark = subparsers.add_parser("external", aliases=["benchmark"], help="External track: 7 MiniWoB++ tasks "
                                       "(upstream reward) + 3 ungraded live public-web tasks; plan by default")
@@ -269,7 +269,7 @@ def main(argv: list[str] | None = None) -> int:
             result = run_pair(execute=args.execute, kitsune_project=args.kitsune_project,
                               executable=executable, timeout=args.timeout, harness=args.harness,
                               experiment_spec=spec, targets=targets,
-                              enabled_tools=UI_TOOLS if args.ui_tools else None)
+                              enabled_tools=UI_TOOLS if args.ui_tools else None, standard_ui=args.ui_tools)
             print(json.dumps(result, indent=2, ensure_ascii=False))
             if not args.execute:
                 return 0
