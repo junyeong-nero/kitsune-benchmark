@@ -111,6 +111,17 @@ These are observations; a release-improvement claim still goes through a
 [coexistence track](../coexistence.md) is part of the full suite. The taskset-v2
 user-seeded tab custody contract is retained unchanged.
 
+## v0.7.3 → main `79eb955` (pre-release main)
+
+`79eb955` (`v0.7.3-41-g79eb955`), clean pinned remote main: scripting is now the default, CAPS/PUBLISH/MODE
+settings are removed, and tool approvals are extension-configured. Both Kitsune arms use this same source:
+actual default (14 tools) vs explicit `KITSUNE_SCRIPTING=0` legacy (30), neither with a benchmark allowlist.
+This is not a continuation of the old filtered-23-tool baseline or the local `c698d40` experiment.
+
+| Date | Report | Model / harness | Revision | Result |
+| --- | --- | --- | --- | --- |
+| 2026-11-12 | [Latest-main five-way MiniWoB](2026-11-12-five-way-main-79eb955.md) | `claude-opus-5-5`, Claude subscription | `79eb955` for both Kitsune arms, plus PW/ego/Aside | 70 scorable, 69 raw successes; Kitsune legacy/default/PW/Aside 14/14 each, ego 13/14. Default/legacy input **0.669**, requests **1.042**, calls **1.023**, elapsed **0.971**; no Python calls. Full before/actual/after catalogs matched all 70 attempts, distinct vendor contexts observed. Page-JS flags and shared-browser state remain; no broader lite/approval-safety or release verdict |
+
 ## v0.7.3 → main `883d80e` (pre-release main)
 
 `883d80e` (`v0.7.3-35-g883d80e`), clean pinned checkout. The standard baseline keeps scripting OFF and the
