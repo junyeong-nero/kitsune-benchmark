@@ -41,7 +41,7 @@ Reuse the existing five-way machinery, not new grading or task prompts:
 - Two repeats; sequential rotated arm order, reversed per task on repeat 1. No episode retries/replacements.
 - 120-second episodes / 180-second harness limit; existing MCP envelopes remain 45 seconds for
   Kitsune/Playwright and 130 for vendor script tools. Report this difference, do not attribute it to language.
-- Shared unique fresh-context instruction for every arm, prefix `bm-code-first-20261112-v1-SEQ`.
+- Shared unique fresh-context instruction for every arm, prefix `bm-code-first-20261112-v2-SEQ`.
   Do not close/claim unrelated contexts or change signed-in browser state to make tests pass.
 - Run first five attempts and audit them before the remaining 65. After a normal no-start attempt with
   no telemetry errors, `--continue-unstarted` may proceed to the next cell; that attempt stays unscorable
@@ -63,21 +63,32 @@ cross-product comparison. The two Kitsune arms are the primary same-environment 
 - Negative-path MCP cancellation/late-response diagnostics and the existing Python gather cancellation
   warning can be logged while assertions pass; no full product-suite certification is claimed.
 
+## Explicit quota restart
+
+The initial v1 cohort (`artifacts/claude-code-first-five-way`, benchmark commit `7f39f07`) stopped
+at seq 1 on 2026-11-12 21:20 KST: `429 usage_limit_reached`, five-hour subscription limit.
+It had zero token usage, zero MCP calls and zero episode starts. Preserve its raw row and catalogs;
+it is an unscorable harness failure, not a product failure or an efficiency result.
+
+The operator explicitly approved a new 70-attempt cohort after the reported 21:30 KST reset.
+V2 has a new output directory and context prefix. Both product SHAs, tasks, model, guides and
+all other execution policy stay unchanged. Do not retry again automatically if v2 hits a limit.
+
 ## Commands
 
-From the clean benchmark branch `experiment/code-first-efficiency`:
+From the clean benchmark branch `experiment/code-first-efficiency`, after 21:30 KST:
 
 ```sh
 uv run --locked python -m kitsune_benchmark doctor --harness claude --json
 uv run --locked python scripts/run-code-first-five-way.py preflight \
-  --out artifacts/claude-code-first-five-way
+  --out artifacts/claude-code-first-five-way-v2
 uv run --locked python scripts/run-code-first-five-way.py run \
-  --out artifacts/claude-code-first-five-way --continue-unstarted --limit 5
+  --out artifacts/claude-code-first-five-way-v2 --continue-unstarted --limit 5
 # Audit those five attempts, then only unattempted cells:
 uv run --locked python scripts/run-code-first-five-way.py run \
-  --out artifacts/claude-code-first-five-way --continue-unstarted
+  --out artifacts/claude-code-first-five-way-v2 --continue-unstarted
 uv run --locked python scripts/run-code-first-five-way.py analyze \
-  --out artifacts/claude-code-first-five-way
+  --out artifacts/claude-code-first-five-way-v2
 ```
 
 ## Required analysis

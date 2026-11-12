@@ -12,7 +12,7 @@ _spec = importlib.util.spec_from_file_location("five_way", ROOT / "scripts/run-f
 five = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(five)
 
-five.BENCHMARK = "claude-code-first-five-way-v1"
+five.BENCHMARK = "claude-code-first-five-way-v2"
 five.SHAS = {"main": "47dafa20a3fddc697a7d991e15d39e4b0232c10d",
              "scripting": "f5c7a0f85aefd89e621e73665e33d33d79d50676"}
 five.ARMS = {
@@ -28,7 +28,7 @@ five.PROJECT_DEFAULTS = {"main": str(ROOT / "artifacts/vendor/kitsune-code-first
                          "scripting": str(ROOT.parent / "kitsune")}
 five.RUNNER_FILES += (Path(__file__),)
 five.RECORD_CATALOG = True
-five.CONTEXT_PREFIX = "bm-code-first-20261112-v1"
+five.CONTEXT_PREFIX = "bm-code-first-20261112-v2"
 five.__doc__ = __doc__
 
 if __name__ == "__main__":
