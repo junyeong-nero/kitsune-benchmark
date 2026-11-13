@@ -1,13 +1,19 @@
 # Agent-browsing combinations: token-efficiency comparison
 
-**Status: PILOT V1 STOPPED / SEPARATE FIRST-NINE RESTART AUTHORIZED / MAIN RUN NOT AUTHORIZED.**
+**Status: RESTART STOPPED AT START 6 / FIVE SCORED CODEX RESULTS / MAIN RUN ON HOLD.**
+See the [partial first-nine report](../results/2026-11-13-agent-browsing-combinations-first-nine.md).
+Browser Harness fixture setup failed; the last three authorized configurations
+were not started. The restarted cohort is stopped, not resumable without review
+and renewed authorization.
 The first counted CLI start failed during MCP initialization; no model turn or
 usage was recorded. See the [stopped pilot report](../results/2026-11-13-agent-browsing-combinations-pilot.md).
 Do not resume that manifest or erase its counted start. After the correction, the
 operator explicitly selected **only the first nine starts of a new cohort**.
-Cumulative CLI starts are therefore capped at **10 including the prior failure**.
-Stop after those nine regardless of audit outcome; the remaining 18 and the main
-comparison are not authorized. The new manifest must set `authorized_cli_starts: 9`.
+That authorization capped cumulative CLI starts at **10 including the prior
+failure**; actual cumulative starts are **7** (one old failure plus six restarted
+starts). The frozen restart manifest sets `authorized_cli_starts: 9`. The remaining
+18 and the main comparison were not authorized, and neither stopped cohort may
+be automatically retried.
 The operator subsequently authorized merging the benchmark work into `main` and
 running this diagnostic **before a separately authorized main comparison**. Local
 merge `527aea0` integrates the preparation scaffold with updated upstream `main`;
@@ -41,15 +47,15 @@ multiplying every candidate by every model before establishing feasibility.
 
 | ID | Outer agent | Browser interface | Browser/runtime | State |
 | --- | --- | --- | --- | --- |
-| codex-kitsune-zen | Codex | Kitsune, six tools | Private Zen | Explicit Zen binary/private profile/bridge; final freeze required |
-| codex-playwright | Codex | Microsoft Playwright MCP | Private Chrome (Chromium) | Explicit owned Chrome CDP endpoint; final freeze required |
-| codex-aside | Codex | Aside native MCP REPL | Aside app | Fresh native REPL context, not a fresh profile |
-| codex-ego | Codex | EgoLite script wrapper | EgoLite app | Fresh TaskSpace, not a fresh profile; native guide retained |
-| codex-devtools | Codex | Chrome DevTools MCP | Private Chrome | Explicit owned Chrome endpoint; native schemas retained |
-| codex-browser-harness | Codex | Browser Harness MCP | Private Chrome | Private daemon/config + owned Chrome; fresh-PNG image bridge |
-| codex-agent-browser | Codex | agent-browser MCP | Private Chrome | Private MCP session/daemon + owned Chrome; native schemas |
-| claude-kitsune-zen | Claude Code | Kitsune, six tools | Private Zen | Same product/browser treatment as Codex Kitsune |
-| claude-playwright | Claude Code | Microsoft Playwright MCP | Private Chrome (Chromium) | Same browser/tool treatment as Codex Playwright |
+| codex-kitsune-zen | Codex | Kitsune, six tools | Private Zen | One scored pass in the stopped restart; explicit private Zen |
+| codex-playwright | Codex | Microsoft Playwright MCP | Private Chrome (Chromium) | One scored pass in the stopped restart; owned Chrome |
+| codex-aside | Codex | Aside native MCP REPL | Aside app | One scored pass; fresh REPL context, not a fresh profile |
+| codex-ego | Codex | EgoLite script wrapper | EgoLite app | One scored pass; fresh TaskSpace, not a fresh profile |
+| codex-devtools | Codex | Chrome DevTools MCP | Private Chrome | One scored pass; owned Chrome, native schemas |
+| codex-browser-harness | Codex | Browser Harness MCP | Private Chrome | Actual CLI fixture setup failed at start 6; unscorable |
+| codex-agent-browser | Codex | agent-browser MCP | Private Chrome | No-model preflight passed; not started after the stop |
+| claude-kitsune-zen | Claude Code | Kitsune, six tools | Private Zen | Not started after the stop; shares validated Zen runtime |
+| claude-playwright | Claude Code | Microsoft Playwright MCP | Private Chrome (Chromium) | Not started after the stop; shares validated Chrome runtime |
 
 Selected CLI model pins are `gpt-6.1-sol` and `claude-opus-5-5`, both medium,
 using existing subscription logins. These are requests, not independent backend
@@ -311,7 +317,15 @@ evidence-supported presentation update. The scaffold is now merged into local
   `artifacts/agent-combinations-postfix-preflight-v1/`.
 - [x] Obtain authorization for a **separate first-nine-only restart**. Preserve
   the old failed start; cumulative CLI cap is 10, not a fresh unrestricted 27.
-- [ ] Execute and audit that new cohort, then stop; no additional 18 starts.
+- [x] Freeze `7426bd7` with `authorized_cli_starts: 9`; pass 30 focused pilot tests
+  including the hard authorization cap and safety-stop checks.
+- [ ] Complete that first-nine cohort: **stopped at start 6**, five scored passes
+  and one Browser Harness setup failure; three configurations unstarted.
+- [x] Audit and report the partial cohort without approving continuation or
+  pooling it with the earlier failure. No additional 18 starts.
+- [ ] Resolve Browser Harness initialization evidence/synchronization before
+  requesting another inference cohort; four no-model replays did not reproduce
+  the failure and do not constitute a fix.
 
 Plan-only command (no browser/model):
 
@@ -319,8 +333,8 @@ Plan-only command (no browser/model):
 uv run --locked python -m kitsune_benchmark.agent_combinations
 ```
 
-Authorized restart workflow (**first nine only**; new evidence directories only;
-`freeze` invokes no model):
+Restart workflow for reference (**both existing cohorts are now stopped; new
+inference requires renewed authorization**; `freeze` invokes no model):
 
 ```sh
 uv run --locked python scripts/preflight-agent-combinations.py --out artifacts/<preflight>
@@ -348,8 +362,11 @@ zero findings at preparation time.
 
 ## Remaining execution gates
 
-1. Finish the source-matched no-inference interface checks and regression suite;
-   freeze exact catalogs, guides, browser/CLI binaries and owned runtime resources.
+1. Resolve the Browser Harness fixture-initialization blocker, retain failing
+   inventories, and validate the actual catalog-probe/relay lifecycle without
+   inference. Do not claim the four passing replays fixed the observed failure.
+   Re-freeze exact catalogs, guides, browser/CLI binaries and owned resources only
+   for a newly authorized cohort.
 2. Prepare manual Chrome fixture instructions and collect operator-reported
    extension/mode/model and permissions. Validate server-side functional grading
    without attaching to the personal profile or issuing a hidden model smoke

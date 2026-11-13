@@ -2,8 +2,11 @@
 
 **Status: STOPPED; not a completed comparison and not approval for the main run.**
 The first counted CLI start failed before a model turn was observed. No success
-rate, token-efficiency ratio or product ranking can be reported. No retry,
-replacement attempt, remaining CLI configuration or manual Chrome task was run.
+rate, token-efficiency ratio or product ranking can be reported for this cohort.
+No retry, replacement attempt, remaining CLI configuration or manual Chrome task
+was run within it. The separately authorized restart is documented in the
+[partial first-nine report](2026-11-13-agent-browsing-combinations-first-nine.md);
+its results do not replace this failed start.
 
 ## Integration and preparation
 
