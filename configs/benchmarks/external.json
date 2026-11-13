@@ -1,15 +1,15 @@
 {
-  "id": "miniwob-mcp-ui-pilot",
+  "id": "external-v1",
+  "catalog": "tasks/external/catalog.json",
   "model": "gpt-6-luna",
   "reasoning_effort": "medium",
   "codex_version": "0.163.0",
   "claude_code": {"model": "claude-opus-5-5", "effort": "medium", "version": "2.1.303", "max_budget_usd_per_run_by_model": {"claude-opus-5-5": 1.0, "claude-sonnet-5-5": 0.5, "claude-haiku-5-5": 0.1}},
   "timeout_sec": 180,
+  "live_timeout_sec": 300,
   "source_repository": "https://github.com/Farama-Foundation/miniwob-plusplus.git",
   "source_revision": "33c3b4ddef8c6eb67c57a29663d844b1eda7e614",
   "source_directory": "artifacts/vendor/miniwob",
-  "task_id": "click-test-2",
-  "seed": 42,
   "episode_timeout_ms": 120000,
-  "purpose": "Original MiniWoB++ task/reward in a Firefox MCP UI-only integration track; not a standard Gym leaderboard score"
+  "purpose": "Seven original MiniWoB++ tasks/rewards plus three ungraded live public-web tasks in one Firefox MCP UI-only track; not a standard Gym leaderboard score"
 }

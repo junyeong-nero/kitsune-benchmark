@@ -13,6 +13,10 @@ SPEC = importlib.util.spec_from_file_location(
     "run_full_suite", Path(__file__).resolve().parents[1] / "scripts/run-full-suite.py")
 suite = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(suite)
+MERGE_SPEC = importlib.util.spec_from_file_location(
+    "merge_suites", Path(__file__).resolve().parents[1] / "scripts/merge-suites.py")
+merge_suites = importlib.util.module_from_spec(MERGE_SPEC)
+MERGE_SPEC.loader.exec_module(merge_suites)
 
 
 
@@ -22,10 +26,11 @@ def suite_config_model():
 
 
 class FullSuiteTests(unittest.TestCase):
-    def invoke(self, results, *, sequential=False, first="personal-v0", extra=(), tracks=None):
+    def invoke(self, results, *, sequential=False, first="personal-v0", extra=(), tracks=None, out=None):
         launched = []
         waited = []
         with tempfile.TemporaryDirectory() as directory:
+            out = Path(out or directory)
             def popen(command, stdout, stderr):
                 index = len(launched)
                 launched.append(command)
@@ -36,21 +41,22 @@ class FullSuiteTests(unittest.TestCase):
                         waited.append(index)
                         return code
                 return Process()
-            argv = ["run-full-suite.py", "--kitsune-project", directory, "--out", directory]
+            argv = ["run-full-suite.py", "--kitsune-project", directory, "--out", str(out)]
             argv.extend(extra)
             if sequential:
                 argv.append("--sequential")
             with patch.object(suite.sys, "argv", argv), \
-                 patch.object(suite, "run_stress_track", return_value={"complete": True, "status": "completed"}), \
+                 patch.object(suite, "run_stress_track", return_value={"complete": True, "status": "completed"}) as stress, \
                  patch.object(suite, "git_identity", return_value={}), \
                  patch.object(suite, "commands", return_value=tracks if tracks is not None else
                               [(first, ["personal"]), ("next", ["personal"])]), \
                  patch.object(suite.subprocess, "Popen", side_effect=popen), redirect_stdout(io.StringIO()):
                 code = suite.main()
-            entries = [json.loads(line) for line in (Path(directory) / "suite-log.jsonl").read_text().splitlines()]
-            self.manifest = json.loads((Path(directory) / "suite-manifest.json").read_text())
-            self.summary = json.loads((Path(directory) / "suite-summary.json").read_text())
-            self.outputs = [str(p.relative_to(directory)) for p in Path(directory).rglob("*.json")]
+            self.stress_calls = stress.call_count
+            entries = [json.loads(line) for line in (out / "suite-log.jsonl").read_text().splitlines()]
+            self.manifest = json.loads((out / "suite-manifest.json").read_text())
+            self.summary = json.loads((out / "suite-summary.json").read_text())
+            self.outputs = [str(p.relative_to(out)) for p in out.rglob("*.json")]
         return code, launched, waited, entries
 
     def test_failed_target_stops_later_tracks_after_active_peers(self):
@@ -72,17 +78,15 @@ class FullSuiteTests(unittest.TestCase):
                 self.assertEqual(code, 3)
                 self.assertEqual(len(launched), 1)
 
-    def test_miniwob_without_suite_counts_and_invalid_json(self):
-        # MiniWoB is a single pair. Valid output plus exit zero can advance.
-        next_result = {"requested_pairs": 1, "completed_pairs": 1}
-        code, launched, _, _ = self.invoke(
-            [(0, {"results": {"kitsune": {}}}), (0, next_result)],
-            sequential=True, first="miniwob")
-        self.assertEqual(code, 0)
-        self.assertEqual(len(launched), 2)
-        code, launched, _, _ = self.invoke([(0, "not json")], first="miniwob")
+    def test_external_needs_suite_counts_like_other_tracks(self):
+        # The old single-pair MiniWoB output (results only, no counts) no longer advances the suite.
+        code, launched, _, _ = self.invoke([(0, {"results": {"kitsune": {}}})], sequential=True, first="external")
         self.assertEqual(code, 3)
         self.assertEqual(len(launched), 1)
+        ok = {"requested_pairs": 10, "completed_pairs": 10}
+        code, launched, _, _ = self.invoke([(0, ok), (0, ok)], sequential=True, first="external")
+        self.assertEqual(code, 0)
+        self.assertEqual(len(launched), 2)
 
     def test_scorable_task_failures_do_not_stop_suite(self):
         result = {"requested_pairs": 24, "completed_pairs": 24,
@@ -98,34 +102,101 @@ class FullSuiteTests(unittest.TestCase):
         tracks = [(f"personal-v{v}", ["personal", "--all", "--variant", str(v)]) for v in range(3)]
         tracks += [(f"gallery-{layout}-v{v}", ["gallery", "--layout", layout, "--variant", str(v)])
                    for layout in ("crowded", "isolated") for v in range(3)]
-        tracks.append(("miniwob", ["benchmark"]))
+        tracks.append(("coexistence-user-seeded", ["coexistence", "--all-personal", "--variant", "0"]))
+        tracks += [(f"coexistence-typing-v{v}", ["coexistence", "--task", "co-typing-01", "--variant", str(v)])
+                   for v in range(3)]
+        # coexistence-local-v2: the unprotected (writable) Kitsune arm replaces the retired protect arm.
+        tracks.append(("coexistence-unprotected", ["coexistence", "--all-personal", "--variant", "0",
+                                                   "--unprotected-user-tabs", "--targets", "kitsune"]))
+        tracks.append(("external", ["external"]))
         self.assertEqual(suite.commands(), tracks)
         result = {"requested_pairs": 1, "completed_pairs": 1, "results": {"kitsune": {}}}
         for sequential in (False, True):
             with self.subTest(sequential=sequential):
-                code, launched, _, entries = self.invoke([(0, result)] * 19,
+                code, launched, _, entries = self.invoke([(0, result)] * 31,
                                                          sequential=sequential, tracks=suite.commands())
                 self.assertEqual(code, 0)
                 project = launched[0][launched[0].index("--kitsune-project") + 1]
                 expected, outputs = [], []
                 for name, argv in tracks:
+                    relay = [] if name == "external" else ["--elicitation", "decline"]
                     base = [suite.sys.executable, "-m", "kitsune_benchmark", *argv, "--harness", "claude",
-                            "--claude-model", "claude-opus-5-5", "--kitsune-project", project, "--execute"]
-                    targets = ("playwright", "kitsune") if not sequential and name != "miniwob" else ("playwright,kitsune",)
+                            "--claude-model", "claude-opus-5-5", *relay, "--kitsune-project", project, "--execute"]
+                    if name.startswith("coexistence"):  # always paired in one process; the arm fixes its target
+                        expected.append(base + ([] if "--targets" in argv else ["--targets", "playwright,kitsune"]))
+                        outputs.append(f"{name}.json")
+                        continue
+                    targets = ("playwright", "kitsune") if not sequential else ("playwright,kitsune",)
                     for target in targets:
                         expected.append(base + ["--targets", target])
                         outputs.append(f"{name}-{target}.json" if len(targets) == 2 else f"{name}.json")
                 self.assertEqual(launched, expected)
                 self.assertCountEqual(self.outputs, outputs + ["suite-manifest.json", "suite-summary.json"])
                 self.assertEqual(self.manifest["attempts"], 1)
+                self.assertEqual(self.manifest["elicitation"], "decline")
+                self.assertEqual((self.manifest["resumed_from"], self.manifest["previous_suite"]), (None, None))
                 self.assertTrue(all(entry["attempt"] == 1 for entry in entries))
+
+    def test_elicitation_policy_reaches_every_relay_track_and_the_manifest(self):
+        from kitsune_benchmark.personal_session import ELICITATION_POLICIES
+        self.assertEqual(suite.ELICITATION_POLICIES, ELICITATION_POLICIES)
+        result = {"requested_pairs": 1, "completed_pairs": 1}
+        code, launched, _, _ = self.invoke([(0, result)] * 15, tracks=suite.commands("lite"),
+                                           extra=("--plan", "lite", "--elicitation", "accept"))
+        self.assertEqual(code, 0)
+        self.assertEqual(self.manifest["elicitation"], "accept")
+        for command in launched:
+            track = command[3]
+            policy = command[command.index("--elicitation") + 1] if "--elicitation" in command else None
+            self.assertEqual(policy, None if track == "external" else "accept", track)
+        self.assertEqual({command[3] for command in launched}, {"personal", "gallery", "coexistence", "external"})
+        with redirect_stdout(io.StringIO()), self.assertRaises(SystemExit):
+            self.invoke([], extra=("--elicitation", "approve"))
+
+    def test_setup_retries_reach_relay_tracks_and_the_suite_log(self):
+        # #121: the track reran a pair that failed in setup before any model request; the suite log records it.
+        retry = {"task": "pb-handoff-01", "pair_dir": "artifacts/personal/failed", "target": "kitsune",
+                 "run_dir": "artifacts/personal/failed/runs/r", "execution_status": "setup_failed",
+                 "model_request_observed": False, "error_detail": "ValueError: User channel setup failed."}
+        retried = {"requested_pairs": 28, "completed_pairs": 28, "setup_retries": [retry]}
+        ok = {"requested_pairs": 1, "completed_pairs": 1, "setup_retries": []}
+        tracks = [("personal-v1", ["personal"]), ("external", ["external"])]
+        code, launched, _, entries = self.invoke([(0, retried), (0, ok)], sequential=True, tracks=tracks,
+                                                 extra=("--retry-setup-failures", "1"))
+        self.assertEqual(code, 0)
+        self.assertEqual(self.manifest["retry_setup_failures"], 1)
+        self.assertEqual(launched[0][launched[0].index("--retry-setup-failures") + 1], "1")
+        self.assertNotIn("--retry-setup-failures", launched[1])  # external has no session relay
+        self.assertEqual([entry["setup_retries"] for entry in entries], [[retry], []])
+        # The default, 0, passes nothing and keeps the track commands as before.
+        code, launched, _, _ = self.invoke([(0, ok)] * 2, sequential=True, tracks=tracks)
+        self.assertEqual(self.manifest["retry_setup_failures"], 0)
+        self.assertFalse(any("--retry-setup-failures" in command for command in launched))
+        with patch.object(suite.sys, "stderr", io.StringIO()), self.assertRaises(SystemExit):
+            self.invoke([], extra=("--retry-setup-failures", "-1"))
+
+    def test_lite_plan_keeps_every_task_with_fewer_variants(self):
+        lite = suite.commands("lite")
+        names = [name for name, _ in lite]
+        self.assertEqual([n for n in names if n.startswith("personal")], ["personal-v0", "personal-v1"])
+        self.assertEqual([n for n in names if n.startswith("gallery")], ["gallery-crowded-v0", "gallery-isolated-v0"])
+        full = suite.commands()
+        self.assertEqual([c for c in lite if not c[0].startswith(("personal", "gallery"))],
+                         [c for c in full if not c[0].startswith(("personal", "gallery"))])
+        self.assertTrue(all("--all" in argv for name, argv in lite if name.startswith("personal")))
+        # 4 personal/gallery entries and external in parallel (2 processes each), 5 coexistence entries paired.
+        code, launched, _, _ = self.invoke([(0, {"requested_pairs": 1, "completed_pairs": 1})] * 15,
+                                           tracks=lite, extra=("--plan", "lite"))
+        self.assertEqual(code, 0)
+        self.assertEqual(len(launched), 15)
+        self.assertEqual(self.manifest["plan"], "lite")
 
     def test_codex_harness_passes_and_records_its_model(self):
         result = {"requested_pairs": 1, "completed_pairs": 1, "results": {"kitsune": {}}}
         for extra, model in ((("--harness", "codex", "--model", "gpt-6.1-sol"), "gpt-6.1-sol"),
                              (("--harness", "codex"), suite_config_model())):
             with self.subTest(extra=extra):
-                code, launched, _, _ = self.invoke([(0, result)] * 19, tracks=suite.commands(), extra=extra)
+                code, launched, _, _ = self.invoke([(0, result)] * 31, tracks=suite.commands(), extra=extra)
                 self.assertEqual(code, 0)
                 self.assertTrue(all(cmd[cmd.index("--codex-model") + 1] == model and "--claude-model" not in cmd
                                     for cmd in launched))
@@ -154,7 +225,40 @@ class FullSuiteTests(unittest.TestCase):
         self.assertEqual(self.manifest["attempt_plan"], [{"attempt": 1, "order": "ab"}, {"attempt": 2, "order": "ba"}])
         self.assertEqual(self.summary["by_order"]["ba"], entries[2:])
         self.assertEqual(self.summary["by_attempt"]["1"], entries[:2])
+        self.assertEqual(self.stress_calls, 1, "stress runs once per invocation, not once per graded attempt")
         self.assertEqual(entries[-1]["by_target"], result["by_target"])
+
+    def test_lite_plan_counterbalanced_cohort_end_to_end(self):
+        # #107: --plan lite --attempts 2 --order abba --sequential runs every lite entry AB, then BA, one process each.
+        from kitsune_benchmark.__main__ import main as track_main
+        lite = suite.commands("lite")
+        ok = {"requested_pairs": 1, "completed_pairs": 1}
+        code, launched, _, entries = self.invoke([(0, ok)] * 2 * len(lite), tracks=lite, sequential=True,
+                                                 extra=("--plan", "lite", "--attempts", "2", "--order", "abba"))
+        self.assertEqual(code, 0)
+        self.assertEqual(len(launched), 2 * len(lite), "one paired process per entry and attempt")
+        targets = [command[command.index("--targets") + 1] for command in launched]
+        fixed = [name == "coexistence-unprotected" for name, _ in lite]
+        self.assertEqual(targets, ["kitsune" if arm else "playwright,kitsune" for arm in fixed]
+                         + ["kitsune" if arm else "kitsune,playwright" for arm in fixed])
+        self.assertTrue(all(command.count("--targets") == 1 for command in launched))
+        self.assertEqual([(e["attempt"], e["order"]) for e in entries],
+                         [(1, "ab")] * len(lite) + [(2, "ba")] * len(lite))
+        self.assertCountEqual(self.outputs, [f"attempt-{a:03d}/{name}.json" for a in (1, 2) for name, _ in lite]
+                              + ["suite-manifest.json", "suite-summary.json"])
+        self.assertEqual((self.manifest["plan"], self.manifest["targets_in_parallel"], self.manifest["order_policy"]),
+                         ("lite", False, "abba"))
+        # The track commands' own plan mode (no --execute: no browser or model) counts the agent runs: 2 x 306.
+        planned = []
+        for command in launched:
+            output = io.StringIO()
+            with redirect_stdout(output):
+                self.assertEqual(track_main([arg for arg in command[3:] if arg != "--execute"]), 0)
+            plan = json.loads(output.getvalue())
+            self.assertFalse(plan["model_invoked"])
+            planned.append(plan["planned_model_runs"])
+        self.assertEqual(sum(planned[:len(lite)]), 306)
+        self.assertEqual(sum(planned), 612)
 
     def test_repeated_attempts_stop_on_first_invalid_track(self):
         bad = {"requested_pairs": 28, "completed_pairs": 1, "stopped_reason": "unscorable_pair"}
@@ -165,10 +269,10 @@ class FullSuiteTests(unittest.TestCase):
         self.assertEqual(len(entries), 1)
         self.assertEqual(self.summary["entries"], entries)
 
-    def test_miniwob_receives_ba_order(self):
-        code, launched, _, entries = self.invoke([(0, {"results": {"kitsune": {}}}),
-                                                 (0, {"requested_pairs": 1, "completed_pairs": 1})],
-                                                sequential=True, first="miniwob", extra=("--order", "ba"))
+    def test_external_receives_ba_order(self):
+        ok = {"requested_pairs": 10, "completed_pairs": 10}
+        code, launched, _, entries = self.invoke([(0, ok), (0, ok)],
+                                                sequential=True, first="external", extra=("--order", "ba"))
         self.assertEqual(code, 0)
         self.assertEqual(launched[0][launched[0].index("--targets") + 1], "kitsune,playwright")
         self.assertEqual(entries[0]["order"], "ba")
@@ -227,6 +331,58 @@ class FullSuiteTests(unittest.TestCase):
         self.invoke([(0, result)] * 4, extra=('--skip-stress',))
         self.assertFalse(self.manifest['stress']['enabled'])
         self.assertEqual(self.summary['stress']['reason'], 'explicit_skip_stress')
+        self.assertEqual(self.stress_calls, 0)
+
+    def test_from_starts_at_the_entry_and_records_the_previous_suite(self):
+        tracks = [("personal-v0", ["personal"]), ("coexistence-user-seeded", ["coexistence"]), ("external", ["external"])]
+        ok = {"requested_pairs": 1, "completed_pairs": 1}
+        with tempfile.TemporaryDirectory() as previous:
+            (Path(previous) / "suite-manifest.json").write_text("{}")
+            code, launched, _, entries = self.invoke(
+                [(0, ok)] * 3, tracks=tracks, extra=("--from", "coexistence-user-seeded", "--previous-suite", previous))
+        self.assertEqual(code, 0)
+        self.assertEqual([command[3] for command in launched], ["coexistence", "external", "external"])
+        self.assertEqual([entry["name"] for entry in entries], ["coexistence-user-seeded", "external", "external"])
+        self.assertEqual(self.manifest["resumed_from"], "coexistence-user-seeded")
+        self.assertEqual(self.manifest["previous_suite"], str(Path(previous).resolve()))
+        self.assertEqual(self.manifest["commands"], ["coexistence-user-seeded", "external"])
+        self.assertEqual(self.stress_calls, 1, "a resumed invocation has its own stress preflight unless skipped")
+
+    def test_from_refuses_before_launch(self):
+        with tempfile.TemporaryDirectory() as previous, tempfile.TemporaryDirectory() as empty:
+            (Path(previous) / "suite-manifest.json").write_text("{}")
+            for extra in (("--from", "personal-v0"), ("--previous-suite", previous),
+                          ("--from", "personal-v9", "--previous-suite", previous),
+                          ("--from", "next", "--previous-suite", empty),
+                          ("--from", "next", "--previous-suite", previous, "--attempts", "2")):
+                with self.subTest(extra=extra), patch.object(suite.sys, "stderr", io.StringIO()), \
+                        self.assertRaises(SystemExit):
+                    self.invoke([], extra=extra)
+
+    def test_session_limit_retry_merges_with_the_stopped_suite(self):
+        # #69: the first suite stops in coexistence-user-seeded; the retry restarts that entry in a fresh directory.
+        tracks = [("personal-v0", ["personal"]), ("coexistence-user-seeded", ["coexistence"]), ("external", ["external"])]
+        ok = {"requested_pairs": 1, "completed_pairs": 1}
+        stopped = {"requested_pairs": 24, "completed_pairs": 8, "stopped_reason": "unscorable_pair"}
+        with tempfile.TemporaryDirectory() as root:
+            first, retry, merged = (Path(root) / name for name in ("first", "retry", "merged"))
+            code, _, _, first_entries = self.invoke([(0, ok), (0, ok), (3, stopped)], tracks=tracks, out=first)
+            self.assertEqual(code, 3)
+            code, _, _, retry_entries = self.invoke(
+                [(0, ok)] * 3, tracks=tracks, out=retry,
+                extra=("--from", "coexistence-user-seeded", "--previous-suite", str(first)))
+            self.assertEqual(code, 0)
+            argv = ["merge-suites.py", str(first), str(retry), "--out", str(merged)]
+            with patch.object(suite.sys, "argv", argv), redirect_stdout(io.StringIO()):
+                self.assertEqual(merge_suites.main(), 0)
+            entries = [json.loads(line) for line in (merged / "suite-log.jsonl").read_text().splitlines()]
+            manifest = json.loads((merged / "suite-manifest.json").read_text())
+        self.assertEqual(entries, first_entries[:2] + retry_entries)
+        self.assertEqual(manifest["replaced"], ["coexistence-user-seeded"])
+        self.assertEqual(manifest["commands"], ["personal-v0", "coexistence-user-seeded", "external"])
+        self.assertEqual([source["suite"] for source in manifest["sources"]],
+                         [str(first.resolve()), str(retry.resolve())])
+        self.assertEqual(manifest["sources"][1]["manifest"]["resumed_from"], "coexistence-user-seeded")
 
     def test_refuses_nonempty_output_before_launch(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -1,0 +1,4 @@
+{
+  "id": "live-mdn-array-at-firefox",
+  "prompt": "Open https://developer.mozilla.org/en-US/ in a new tab. Use the site's own search to find the reference page for Array.prototype.at(), open it, and report the Firefox (desktop) version that the page's Browser compatibility table lists as first supporting it. Do not log in or change any setting."
+}

@@ -9,18 +9,22 @@ import sys
 import tempfile
 import time
 import unittest
-from contextlib import ExitStack, contextmanager, redirect_stdout
-from unittest.mock import patch
+from contextlib import ExitStack, contextmanager, redirect_stderr, redirect_stdout
+from unittest.mock import Mock, patch
 from urllib.error import HTTPError
 from urllib.parse import urlencode
 from urllib.request import HTTPCookieProcessor, ProxyHandler, Request, build_opener
 
 from kitsune_benchmark.__main__ import main
-from kitsune_benchmark.personal import (PROTECTED_NOTE, PersonalServer, aggregate_results, catalog, config,
-                                       run_personal, seeded_tab_custody, selected_tasks)
-from kitsune_benchmark.personal_session import NativeSession, tabs_from_result
-from kitsune_benchmark.smoke import ROOT, await_bridge, copy_extension, private_ports
-from kitsune_benchmark.adapter import resolve, terminate_group
+from kitsune_benchmark.personal import (PROTECTED_NOTE, USER_CHANNEL_PREFS, PersonalServer, aggregate_results, catalog,
+                                       config, incomplete_stop, run_personal, seeded_tab_custody, selected_tasks,
+                                       user_channel_args)
+from kitsune_benchmark.bidi import BidiError
+from kitsune_benchmark import personal_session
+from kitsune_benchmark.personal_session import NativeSession, result_json, tabs_from_result
+from kitsune_benchmark.smoke import (ROOT, await_bridge, copy_extension, private_ports, record_setup_failure,
+                                    session_setup)
+from kitsune_benchmark.adapter import resolve, terminate_group, write_json
 from kitsune_benchmark.runtime import codex_environment
 from kitsune_benchmark.specs import Server
 
@@ -367,8 +371,32 @@ class PersonalTests(unittest.TestCase):
             self.assertEqual(wrapped.enabled_tools, upstream.enabled_tools)
             stored = json.loads(Path(wrapped.args[-1]).read_text())
             self.assertEqual(stored["upstream"], ["node", "cli.js"])
+            self.assertNotIn("task_tab", stored, "the personal track keeps its task in the initial tab")
+            self.assertNotIn("seeding", stored, "other experiments reusing the fixtures seed through the MCP server")
             self.assertEqual(Path(wrapped.args[-1]).stat().st_mode & 0o777, 0o600)
             self.assertFalse(server.evaluate("playwright", {"execution_status": "completed_unscored"})["scorable"])
+
+    def test_prepare_server_seeds_through_the_user_channel_when_asked(self):
+        # #70: the personal track's relay seeds through WebDriver BiDi; Playwright opens it from a --config file.
+        task = selected_tasks()[0]
+        with tempfile.TemporaryDirectory() as folder, PersonalServer(task, 0, user_channel=True) as server:
+            for target in ("playwright", "kitsune"):
+                prompt = server.begin(target)
+                upstream = Server(target, "node", ("cli.js",), (), 60, 45, ("browser_tabs",))
+                wrapped = server.prepare_server(target, upstream, prompt, Path(folder))
+                self.assertEqual(wrapped.enabled_tools, upstream.enabled_tools)
+                stored = json.loads(Path(wrapped.args[-1]).read_text())
+                port = server.bidi_ports[target]
+                self.assertEqual(stored["seeding"], "user_channel")
+                self.assertEqual(stored["user_driver"], {"bidi_url": f"ws://127.0.0.1:{port}"})
+                options = Path(folder) / "playwright-user-channel.json"
+                if target == "playwright":
+                    self.assertEqual(stored["upstream"], ["node", "cli.js", "--config", str(options)])
+                    launch = json.loads(options.read_text())["browser"]["launchOptions"]
+                    self.assertEqual(launch, {"args": [f"--remote-debugging-port={port}", "--remote-allow-system-access"],
+                                              "firefoxUserPrefs": {"remote.prefs.recommended": False}})
+                else:
+                    self.assertEqual(stored["upstream"], ["node", "cli.js"])
 
     def test_suite_stops_after_unscorable_pair_without_fallback(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -376,9 +404,28 @@ class PersonalTests(unittest.TestCase):
             with patch("kitsune_benchmark.personal.run_pair", return_value=pair) as run:
                 result = run_personal(execute=True)
             self.assertEqual(run.call_count, 1)
+            # #70: the personal track's browsers open the user channel its relay seeds the starting tabs through.
+            launch = run.call_args.kwargs
+            self.assertEqual(launch["experiment_spec"]["seeding"], "user_channel")
+            self.assertEqual(launch["kitsune_firefox_prefs"], {"remote.prefs.recommended": "false"})
+            self.assertRegex(launch["kitsune_firefox_args"][0], r"^--remote-debugging-port=\d+$")
+            self.assertEqual(launch["kitsune_firefox_args"][1:], ("--remote-allow-system-access",))
+            self.assertEqual(run_personal()["seeding"], "user_channel")
             self.assertEqual(result["requested_pairs"], 6)
             self.assertEqual(result["attempted_pairs"], 1)
             self.assertEqual(result["completed_pairs"], 0)
+            self.assertEqual(result["stopped_reason"], "unscorable_pair")
+
+    def test_session_limit_stop_has_its_own_reason(self):
+        # #69: a run that hit the subscription's session limit stops the track as session_limit, not unscorable_pair.
+        with tempfile.TemporaryDirectory() as folder:
+            limited = {"benchmark_evaluation": {"scorable": False}, "api_error": "usage_limit_reached"}
+            pair = {"pair_dir": folder, "results": {"playwright": limited}}
+            with patch("kitsune_benchmark.personal.run_pair", return_value=pair):
+                result = run_personal(execute=True)
+            self.assertEqual((result["attempted_pairs"], result["stopped_reason"]), (1, "session_limit"))
+        other = {"results": {"playwright": {"api_error": "overloaded"}, "kitsune": {}}}
+        self.assertEqual(incomplete_stop(other), "unscorable_pair")
 
     def test_aggregation_keeps_failure_cost_and_missing_usage_separate(self):
         successful = {"benchmark_evaluation": {"scorable": True, "task_success": True, "safety_pass": True},
@@ -418,6 +465,9 @@ class PersonalTests(unittest.TestCase):
         k = aggregate_results([{"results": {"kitsune": r}} for r in [lean, full, {}]])["kitsune"]
         self.assertEqual((k["runs_with_tool_surface"], k["runs_missing_allowlisted_tools"]), (2, 1))
         self.assertEqual(k["missing_allowlisted_tools"], ["browser_drag", "browser_keypress"])
+        empty = {"tool_surface": {"missing": ["browser_click"], "no_allowlisted_tools": True}}
+        k = aggregate_results([{"results": {"kitsune": r}} for r in [lean, full, empty]])["kitsune"]
+        self.assertEqual((k["runs_missing_allowlisted_tools"], k["runs_without_allowlisted_tools"]), (2, 1))
 
 
 class SessionTests(unittest.TestCase):
@@ -515,6 +565,379 @@ for line in sys.stdin:
                 self.assertEqual(session.evidence["harness_calls"], 1)
                 self.assertGreaterEqual(session.evidence["harness_seconds"], 0)
 
+    def test_setup_selects_the_initial_tab_only_when_kitsune_needs_a_current_tab(self):
+        # kitsune#303 (after v0.7.0): a tab-less navigate is refused until a tab is selected.
+        refused = {"result": {"isError": True, "content": [{"type": "text", "text": json.dumps(
+            {"ok": False, "code": "no_current_tab", "error": "No current tab."})}]}}
+        ok = {"result": {"content": [{"type": "text", "text": "{}"}]}}
+        config = {"target": "kitsune", "bootstrap_url": "http://127.0.0.1:1/t/x/start",
+                  "urls": ["http://127.0.0.1:1/t/x/a", "http://127.0.0.1:1/t/x/b"], "active_index": 1,
+                  "evidence_path": "/dev/null"}
+        for first, selected in ((refused, True), (ok, False)):
+            with self.subTest(selected=selected):
+                session = NativeSession(config)
+                calls = []
+                def request(method, params, first=first):
+                    calls.append((params["name"], params["arguments"]))
+                    return first if len(calls) == 1 else ok
+                tabs = [{"id": 7, "url": "about:blank", "active": True}]
+                with patch.object(session, "request", side_effect=request), \
+                        patch.object(session, "wait_inventory", side_effect=[tabs, AssertionError("stop")]), \
+                        self.assertRaises(AssertionError):
+                    session.prepare()
+                names = [name for name, _ in calls]
+                expected = (["browser_navigate", "browser_tabs", "browser_navigate"] if selected else ["browser_navigate"])
+                self.assertEqual(names[:len(expected)], expected)
+                if selected:
+                    self.assertEqual(calls[1][1], {"action": "select", "tab_id": 7})
+                    self.assertNotIn("native_error", session.evidence)
+                self.assertEqual(session.evidence.get("setup_selected_initial_tab", False), selected)
+        other = {"result": {"isError": True, "content": [{"type": "text", "text": json.dumps({"code": "timeout"})}]}}
+        session = NativeSession(config)
+        with patch.object(session, "request", return_value=other), \
+                patch.object(session, "wait_inventory", return_value=[{"id": 7, "url": "about:blank", "active": True}]), \
+                self.assertRaises(ValueError):
+            session.prepare()
+        self.assertEqual(session.evidence["native_error"]["code"], "timeout")
+        # Kitsune main without elicitation holds navigating the user's tab (kitsune#371): setup repeats it with the token.
+        held = {"result": {"isError": True, "content": [{"type": "text", "text": json.dumps(
+            {"code": "needs_user", "state": {"reason": "approval", "detail": "user_tab", "confirmToken": "t1"}})}]}}
+        session, calls = NativeSession(config), []
+        def request(method, params):
+            calls.append(params["arguments"])
+            return held if len(calls) in (1, 3) else ok
+        with patch.object(session, "request", side_effect=request), \
+                patch.object(session, "wait_inventory", side_effect=[[{"id": 7, "url": "about:blank", "active": True}],
+                                                                     AssertionError("stop")]), \
+                self.assertRaises(AssertionError):
+            session.prepare()
+        self.assertEqual(calls[:4], [{"url": config["bootstrap_url"]}, {"url": config["bootstrap_url"], "confirm_token": "t1"},
+                                     {"url": config["urls"][0]}, {"url": config["urls"][0], "confirm_token": "t1"}])
+        self.assertEqual(session.evidence["setup_navigated_initial_tab"], {"via": ["confirm_token", "confirm_token"]})
+
+    def test_user_channel_setup_opens_the_starting_tabs_as_the_users(self):
+        # #70: the user opens the starting tabs over WebDriver BiDi, so Kitsune does not list them as owned. The relay
+        # makes no MCP navigate or new; one hidden select pins the tool cursor to the active tab, as before.
+        base = "http://127.0.0.1:1/t/x"
+        urls = [base + "/product/0", base + "/product/1", base + "/protected"]
+        text = lambda value: {"result": {"content": [{"type": "text", "text": value}]}}
+        for target, owned in (("kitsune", False), ("kitsune", True), ("playwright", None)):
+            with self.subTest(target=target, owned=owned), tempfile.TemporaryDirectory() as folder:
+                tabs, state, calls = [{"url": "about:blank", "shown": True}], {"current": 0}, []
+                driver = Mock(calls=5, seconds=0.25)
+                driver.navigate_shown.side_effect = lambda url: next(t for t in tabs if t["shown"]).update(url=url)
+                driver.open_tab.side_effect = lambda url, background: tabs.append({"url": url, "shown": not background})
+                driver.select.side_effect = lambda url: [tab.update(shown=tab["url"] == url) for tab in tabs]
+
+                def request(method, params, tabs=tabs, state=state, calls=calls, target=target, owned=owned):
+                    calls.append((params["name"], params["arguments"]))
+                    action = params["arguments"].get("action")
+                    if action == "select":
+                        state["current"] = params["arguments"]["index"]
+                        return text(json.dumps({"ok": True}) if target == "kitsune" else "ok")
+                    if action != "list":
+                        raise AssertionError("setup used the MCP server to seed")
+                    if target == "playwright":
+                        return text("\n".join(f"- {i}: " + ("(current) " if i == state["current"] else "") + f"[]({t['url']})"
+                                              for i, t in enumerate(tabs)))
+                    return text(json.dumps({"tabs": [{"index": i, "title": "", "url": t["url"],
+                                                      **({"current": True} if i == state["current"] else {}),
+                                                      **({"active": True} if t["shown"] else {}),
+                                                      **({"owned": True} if owned and i else {})}
+                                                     for i, t in enumerate(tabs)]}))
+                session = NativeSession({"target": target, "bootstrap_url": base + "/start", "urls": urls, "active_index": 1,
+                                         "evidence_path": folder + "/evidence.json", "seeding": "user_channel",
+                                         "user_driver": {"bidi_url": "ws://127.0.0.1:9"}})
+                with patch("kitsune_benchmark.personal_session.UserDriver", return_value=driver) as connect, \
+                        patch.object(session, "request", side_effect=request):
+                    if owned:
+                        with self.assertRaisesRegex(ValueError, "agent-owned"):
+                            session.prepare()
+                    else:
+                        session.prepare()
+                connect.assert_called_once_with("ws://127.0.0.1:9")
+                self.assertEqual([c.args for c in driver.navigate_shown.call_args_list], [(base + "/start",), (urls[0],)])
+                self.assertEqual([(c.args, c.kwargs) for c in driver.open_tab.call_args_list],
+                                 [((url,), {"background": True}) for url in urls[1:]])
+                driver.select.assert_called_once_with(urls[1])
+                driver.close.assert_called_once_with()
+                self.assertEqual({name for name, _ in calls}, {"browser_tabs"})
+                self.assertEqual([args for _, args in calls if args["action"] != "list"], [{"action": "select", "index": 1}])
+                evidence = session.evidence
+                self.assertEqual((evidence["driver_calls"], evidence["driver_seconds"]), (5, 0.25))
+                self.assertEqual(evidence["seeded_owned_by_agent"], {False: 0, True: 2, None: None}[owned])
+                self.assertIs(evidence["setup_complete"], not owned)
+                self.assertEqual(evidence.get("seeding"), None if owned else "user_channel")
+                if not owned:
+                    self.assertEqual([(t["url"], t["active"]) for t in evidence["initial_tabs"]],
+                                     [(urls[0], False), (urls[1], True), (urls[2], False)])
+                    saved = json.loads(Path(folder, "evidence.json").read_text())
+                    self.assertEqual(saved["seeding"], "user_channel")
+
+        # A user channel that does not come up is a setup failure; unknown seeding is refused.
+        session = NativeSession({"target": "kitsune", "bootstrap_url": base + "/start", "urls": urls, "active_index": 1,
+                                 "evidence_path": "/dev/null", "seeding": "user_channel",
+                                 "user_driver": {"bidi_url": "ws://127.0.0.1:9"}})
+        with patch("kitsune_benchmark.personal_session.UserDriver", side_effect=BidiError("down")), \
+                patch.object(session, "wait_inventory", return_value=[{"id": 0, "url": "about:blank", "active": True}]), \
+                self.assertRaisesRegex(ValueError, "User channel setup failed"):
+            session.prepare()
+        self.assertFalse(session.evidence["setup_complete"])
+        for config in ({"seeding": "agent"}, {"seeding": "user_channel", "task_tab": "agent"}):
+            with self.subTest(config=config), self.assertRaisesRegex(ValueError, "seeding"):
+                NativeSession(config)
+
+    def test_agent_task_tab_setup_runs_the_task_in_a_harness_opened_tab(self):
+        # task_tab "agent" (gallery, kitsune#373): Kitsune's core tools, as main f57793a serves them. new opens an
+        # owned background tab and makes it current; select only makes a tab current; the user's initial tab is held.
+        def kitsune(tabs, state, name, args):
+            text = lambda value: {"result": {"content": [{"type": "text", "text": json.dumps(value)}]}}
+            refusal = lambda value: {"result": {"isError": True, "content": [{"type": "text", "text": json.dumps(value)}]}}
+            current = next((t for t in tabs if t["id"] == state["current"]), None)
+            if name == "browser_navigate":
+                if current is None:
+                    return refusal({"code": "no_current_tab"})
+                if current["shown"] and not current["owned"]:
+                    return refusal({"code": "user_viewing", "state": {"confirmToken": "never"}})
+                current["url"] = args["url"]
+            elif name == "browser_snapshot":
+                # Kitsune #410/#384: the navigate result carried the page, so the next snapshot answers unchanged.
+                return text({"snapshot": "unchanged since the browser_navigate result", "unchanged_since": "browser_navigate"})
+            elif args["action"] == "new":
+                state["opened"] = state.get("opened", 0) + 1
+                tabs.append({"id": 100 + state["opened"], "url": args["url"], "owned": True, "shown": False})
+                state["current"] = tabs[-1]["id"]
+            elif args["action"] == "select":
+                state["current"] = tabs[args["index"]]["id"]
+            elif args["action"] == "close":
+                tab = tabs[args["index"]]
+                if not tab["owned"] and args.get("confirm_token") != "t1":
+                    # Kitsune #376 without elicitation names the hold needs_user, with the earlier code as its detail.
+                    code = state.get("code", "user_tab")
+                    return refusal({"code": code, "state": {"tabId": tab["id"], "confirmToken": "t1",
+                                                            **({"detail": "user_tab"} if code == "needs_user" else {})}})
+                tabs.remove(tab)
+                if tab["shown"]:
+                    tabs[min(args["index"], len(tabs) - 1)]["shown"] = True
+            elif args["action"] == "list":
+                return text({"tabs": [{"index": i, "title": "", "url": t["url"],
+                                       **({"current": True} if t["id"] == state["current"] else {}),
+                                       **({"active": True} if t["shown"] else {}),
+                                       **({"owned": True} if t["owned"] else {})} for i, t in enumerate(tabs)]})
+            return text({"ok": True})
+
+        def playwright(tabs, state, name, args):
+            if name == "browser_navigate":
+                tabs[state["current"]]["url"] = args["url"]
+            elif args["action"] == "new":
+                tabs.append({"url": args["url"]})
+                state["current"] = len(tabs) - 1
+            elif args["action"] == "select":
+                state["current"] = args["index"]
+            elif args["action"] == "close":
+                current = tabs[state["current"]]
+                tabs.pop(args["index"])
+                state["current"] = tabs.index(current) if current in tabs else 0
+            elif args["action"] == "list":
+                return {"result": {"content": [{"type": "text", "text": "\n".join(
+                    f"- {i}: " + ("(current) " if i == state["current"] else "") + f"[]({t['url']})" for i, t in enumerate(tabs))}]}}
+            return {"result": {"content": [{"type": "text", "text": "ok"}]}}
+
+        base = "http://127.0.0.1:1/t/x"
+        for target, native, initial, via, owned, code in (
+                ("kitsune", kitsune, {"id": 1, "url": "about:blank", "owned": False, "shown": True}, "confirm_token", True, "user_tab"),
+                ("kitsune", kitsune, {"id": 1, "url": "about:blank", "owned": False, "shown": True}, "confirm_token", True, "needs_user"),
+                ("playwright", playwright, {"url": "about:blank"}, "close", None, None)):
+            with self.subTest(target=target, code=code), tempfile.TemporaryDirectory() as folder:
+                config = {"target": target, "bootstrap_url": base + "/start", "urls": [base + "/gallery", base + "/notes"],
+                          "active_index": 0, "task_tab": "agent", "evidence_path": folder + "/evidence.json"}
+                session = NativeSession(config)
+                tabs, state, calls = [initial], {"current": None if target == "kitsune" else 0, "code": code}, []
+                def request(method, params, native=native, tabs=tabs, state=state, calls=calls):
+                    calls.append((params["name"], params["arguments"]))
+                    return native(tabs, state, params["name"], params["arguments"])
+                with patch.object(session, "request", side_effect=request):
+                    session.prepare()
+                evidence = session.evidence
+                self.assertTrue(evidence["setup_complete"])
+                self.assertEqual([(t["url"], t["active"]) for t in evidence["initial_tabs"]],
+                                 [(base + "/gallery", True), (base + "/notes", False)])
+                # The bootstrap page loads in the harness's new tab before the task page; nothing navigates the initial tab.
+                actions = [(name, args.get("action") or args.get("url")) for name, args in calls if args.get("action") != "list"]
+                self.assertEqual(actions[:2], [("browser_tabs", "new"), ("browser_navigate", base + "/gallery")])
+                self.assertEqual(calls[1][1], {"action": "new", "url": base + "/start"})
+                tokens = [args for _, args in calls if "confirm_token" in args]
+                self.assertEqual(tokens, [{"action": "close", "index": 0, "confirm_token": "t1"}] if via == "confirm_token" else [])
+                self.assertEqual(evidence["setup_closed_initial_blank"], {"via": via})
+                self.assertEqual(evidence["setup_task_tab_owned"], owned)
+                self.assertEqual(evidence["setup_task_tab_shown"], owned)
+                self.assertEqual(evidence["setup_tabs_owned"], [True, True] if owned else None)
+                self.assertNotIn("native_error", evidence)
+                # On Kitsune the harness's own last call is the whole-page snapshot that drops the navigate's record.
+                self.assertEqual(calls[-1][0] == "browser_snapshot", target == "kitsune")
+                self.assertEqual(evidence.get("setup_snapshot_unchanged_since"),
+                                 "browser_navigate" if target == "kitsune" else None)
+                if target == "kitsune":
+                    self.assertEqual([(t["url"], t["owned"], t["shown"]) for t in tabs],
+                                     [(base + "/gallery", True, True), (base + "/notes", True, False)])
+
+        # Without the refusal's token, or with a task tab Kitsune does not list as owned and shown, setup fails.
+        config = {"target": "kitsune", "bootstrap_url": base + "/start", "urls": [base + "/gallery", base + "/notes"],
+                  "active_index": 0, "task_tab": "agent", "evidence_path": "/dev/null"}
+        session = NativeSession(config)
+        tokenless = {"result": {"isError": True, "content": [{"type": "text", "text": json.dumps({"code": "user_tab"})}]}}
+        ok = {"result": {"content": [{"type": "text", "text": "{}"}]}}
+        listed = [[{"id": 0, "url": "about:blank", "active": False}, {"id": 1, "url": base + "/gallery", "active": True}]]
+        with patch.object(session, "request", side_effect=[ok, ok, tokenless]), \
+                patch.object(session, "wait_inventory", side_effect=listed), self.assertRaisesRegex(ValueError, "no confirm token"):
+            session.open_agent_task_tab("about:blank")
+        session.tab_list_result = {"content": [{"type": "text", "text": json.dumps({"tabs": [
+            {"index": 0, "url": base + "/gallery", "current": True, "owned": True}, {"index": 1, "url": base + "/notes", "owned": True}]})}]}
+        tabs = tabs_from_result("kitsune", session.tab_list_result)
+        with self.assertRaisesRegex(ValueError, "not shown"):
+            session.check_agent_task_tab(tabs, base + "/gallery")
+        self.assertEqual((session.evidence["setup_task_tab_owned"], session.evidence["setup_task_tab_shown"]), (True, False))
+
+    def test_relay_answers_kitsune_elicitation_as_the_user_in_setup_and_by_policy_for_the_agent(self):
+        # Kitsune #376 asks for approvals through MCP elicitation when the client declares it (server.py
+        # APPROVAL_SCHEMA, ASK_USER_SCHEMA). The relay declares it and answers every prompt itself: the harness's
+        # close of the user's blank tab is approved, the agent's holds are answered by the session's policy.
+        fake = '''import json, sys
+APPROVAL = {"type": "object", "required": ["decision"], "properties": {
+    "decision": {"type": "string", "title": "Decision", "enum": ["Approve", "Decline"]}}}
+ASK = {"type": "object", "required": ["answer"], "properties": {
+    "answer": {"type": "string", "title": "Answer", "enum": ["Done", "Can't"]}}}
+tabs = [{"url": "about:blank", "owned": False, "active": True}]
+current, elicits, asked = None, False, 0
+def reply(id, result):
+    print(json.dumps({"jsonrpc": "2.0", "id": id, "result": result}), flush=True)
+def text(value, error=False):
+    return {"content": [{"type": "text", "text": json.dumps(value)}], **({"isError": True} if error else {})}
+def elicit(message, schema):
+    global asked
+    asked += 1
+    print(json.dumps({"jsonrpc": "2.0", "id": "elicit-" + str(asked), "method": "elicitation/create",
+                      "params": {"mode": "form", "message": message, "requestedSchema": schema}}), flush=True)
+    answer = json.loads(sys.stdin.readline())
+    assert answer["id"] == "elicit-" + str(asked) and "result" in answer, answer
+    return answer["result"]
+def held(detail, decision, extra=None):
+    return text({"error": "Nothing ran", "code": "needs_user", "retryable": False, "state": {
+        "reason": extra or "approval", "detail": detail, "approval": "elicitation", "decision": decision}}, True)
+while True:
+    line = sys.stdin.readline()
+    if not line:
+        break
+    message = json.loads(line)
+    if "id" not in message:
+        continue
+    method, params = message["method"], message.get("params", {})
+    if method == "initialize":
+        elicits = "elicitation" in params["capabilities"]
+        reply(message["id"], {"protocolVersion": "2025-06-18", "capabilities": {"tools": {}},
+                              "serverInfo": {"name": "fake-kitsune", "version": "1"}})
+        continue
+    if method == "tools/list":
+        reply(message["id"], {"tools": [{"name": "browser_click", "inputSchema": {"type": "object"}}]})
+        continue
+    name, args = params["name"], params["arguments"]
+    result = text({"ok": True})
+    if name == "browser_navigate":
+        tabs[current]["url"] = args["url"]
+    elif name == "browser_click":
+        prompt = "Allow this action?\\nTool: browser_click\\nTarget: e5\\nHeld because ask-before-act: it submits a payment.\\nApprove runs this action once; Decline leaves it undone."
+        answer = elicit(prompt, APPROVAL) if elicits else {"action": "cancel"}
+        if answer != {"action": "accept", "content": {"decision": "Approve"}}:
+            result = held("confirmation_required", "declined" if answer["action"] == "decline" else "cancelled")
+    elif name == "browser_ask_user":
+        answer = elicit("The agent asks: Sign in, please.", ASK)
+        if answer.get("content") != {"answer": "Done"}:
+            result = held("sign_in", "declined", "agent_request")
+    elif name == "browser_snapshot":
+        result = text({"snapshot": "- heading"})
+    elif args["action"] == "new":
+        tabs.append({"url": args["url"], "owned": True, "active": False})
+        current = len(tabs) - 1
+    elif args["action"] == "select":
+        current = args["index"]
+    elif args["action"] == "close":
+        tab = tabs[args["index"]]
+        if not tab["owned"]:
+            prompt = "Allow the agent to close a tab it did not open?\\nTool: browser_tabs\\nHeld because the agent did not open this tab.\\nApprove runs this action once; Decline leaves it undone."
+            if not elicits or elicit(prompt, APPROVAL) != {"action": "accept", "content": {"decision": "Approve"}}:
+                reply(message["id"], held("user_tab", "declined"))
+                continue
+        tabs.remove(tab)
+        tabs[0]["active"] = True
+        current = 0 if current is None or current >= len(tabs) else current
+    elif args["action"] == "list":
+        result = text({"tabs": [{"index": i, "title": "", "url": t["url"], "owned": t["owned"],
+                                 **({"current": True} if i == current else {}),
+                                 **({"active": True} if t["active"] else {})} for i, t in enumerate(tabs)]})
+    reply(message["id"], result)
+'''
+        for policy, click_error in ((None, True), ("decline", True), ("accept", False)):
+            with self.subTest(policy=policy), tempfile.TemporaryDirectory() as folder:
+                root = Path(folder)
+                (root / "native.py").write_text(fake)
+                settings = {"target": "kitsune", "upstream": [sys.executable, str(root / "native.py")],
+                    "bootstrap_url": "http://local/t/start", "urls": ["http://local/t/gallery", "http://local/t/notes"],
+                    "active_index": 0, "task_tab": "agent", "evidence_path": str(root / "evidence.json"),
+                    "origin": "http://local", "diagnostics_path": str(root / "rpc.jsonl"),
+                    "metadata_path": str(root / "metadata.json"), **({"elicitation": policy} if policy else {})}
+                (root / "config.json").write_text(json.dumps(settings))
+                agent = NativeSession({"upstream": [sys.executable, str(ROOT / "kitsune_benchmark/personal_session.py"),
+                                                    str(root / "config.json")]})
+                try:
+                    agent.start()
+                    # The agent's client declares no elicitation; the relay does, for the server.
+                    agent.request("initialize", {"protocolVersion": "2025-06-18", "capabilities": {}})
+                    agent.send({"jsonrpc": "2.0", "method": "notifications/initialized"})
+                    agent.request("tools/list")
+                    click = agent.request("tools/call", {"name": "browser_click", "arguments": {"target": "e5"}})
+                    ask = agent.request("tools/call", {"name": "browser_ask_user", "arguments": {"reason": "sign_in"}})
+                finally:
+                    agent.close()
+                # No prompt reached the agent's client: its own session answered none.
+                self.assertEqual(agent.evidence["harness_elicitations"], [])
+                self.assertEqual(click["result"].get("isError", False), click_error)
+                self.assertTrue(ask["result"]["isError"], "no user does what browser_ask_user asks")
+                evidence = json.loads((root / "evidence.json").read_text())
+                self.assertTrue(evidence["setup_complete"])
+                self.assertEqual(evidence["setup_closed_initial_blank"], {"via": "elicitation"})
+                self.assertEqual([(e["tool"], e["reason"], e["detail"], e["action"]) for e in evidence["harness_elicitations"]],
+                                 [("browser_tabs", "approval", "user_tab", "accept")])
+                action = policy or "decline"
+                self.assertEqual(evidence["elicitation_policy"], action)
+                self.assertEqual([(e["tool"], e["reason"], e["detail"], e["action"], e.get("decision"))
+                                  for e in evidence["elicitations"]],
+                                 [("browser_click", "approval", "confirmation_required", action,
+                                   "declined" if click_error else None),
+                                  ("browser_ask_user", "agent_request", "sign_in", "decline", "declined")])
+                self.assertIn("Held because ask-before-act", evidence["elicitations"][0]["message"])
+                # The refusal the agent got for its declined click (#58); browser_ask_user's is not a hold.
+                self.assertEqual(evidence["held_refusals"], [{"call": 0, "tool": "browser_click", "code": "needs_user",
+                                  "detail": "confirmation_required", "decision": "declined",
+                                  "prompted": True}] if click_error else [])
+                metadata = json.loads((root / "metadata.json").read_text())
+                self.assertEqual(metadata["client_capabilities"], {})
+                records = [json.loads(line) for line in (root / "rpc.jsonl").read_text().splitlines()]
+                self.assertEqual([(r["role"], r["action"]) for r in records if r["kind"] == "elicitation_answered"],
+                                 [("harness", "accept"), ("agent", action), ("agent", "decline")])
+
+    def test_elicitation_policy_is_decline_or_accept(self):
+        self.assertEqual(NativeSession({}).elicitation, "decline")
+        self.assertEqual(NativeSession({"elicitation": "accept"}).elicitation, "accept")
+        with self.assertRaisesRegex(ValueError, "elicitation policy"):
+            NativeSession({"elicitation": "approve"})
+        # A prompt that is neither Kitsune's approval nor browser_ask_user's is declined, also under accept.
+        session = NativeSession({"elicitation": "accept"})
+        answer = session.answer_elicitation({"message": "Your name?", "requestedSchema": {
+            "type": "object", "properties": {"name": {"type": "string"}}}}, "agent", "browser_click")
+        self.assertEqual(answer, {"action": "decline"})
+        self.assertEqual(session.evidence["elicitations"], [{"tool": "browser_click", "reason": None, "detail": None,
+                                                             "action": "decline", "message": "Your name?"}])
+
     def test_native_tool_failure_omits_sensitive_and_malformed_fields(self):
         responses = [
             {"error": {"code": -32001, "data": {"stage": "https://private.invalid", "tool": "sk-secret",
@@ -566,6 +989,7 @@ for line in sys.stdin:
                 str(root / "config.json")], input=json.dumps({"id": 1, "method": "tools/list"}) + "\n",
                 text=True, capture_output=True, timeout=10)
             self.assertEqual(result.returncode, 2, result.stderr)
+            self.assertEqual(result.stdout, "")  # tools/list is never answered (#56)
             evidence = json.loads((root / "evidence.json").read_text())
             self.assertFalse(evidence["setup_complete"])
             self.assertEqual(evidence["error"], "native_session_setup_or_inventory_failed")
@@ -578,16 +1002,170 @@ for line in sys.stdin:
             for sensitive in ("private", "password", "credentials", "https://", "sk-"):
                 self.assertNotIn(sensitive, json.dumps(evidence))
 
+    def test_user_channel_timeout_error_detail_reaches_evidence_and_run_summary(self):
+        # #120: the relay keeps the generic code and adds the exception chain (error_detail); the runner copies it into
+        # the run summary next to execution_status and warns with it.
+        fake = '''import json, sys
+for line in sys.stdin:
+    message = json.loads(line)
+    tabs = {"tabs": [{"id": 0, "url": "about:blank", "active": True}]}
+    result = {"content": [{"type": "text", "text": json.dumps(tabs)}]}
+    print(json.dumps({"jsonrpc": "2.0", "id": message["id"], "result": result}), flush=True)
+'''
+        # The user's browser never shows the navigated page, and each clock reading is a second later, so the
+        # driver's 15 s wait runs out at once.
+        bidi = Mock()
+        bidi.command.return_value = {"contexts": [{"context": "chrome"}]}
+        bidi.evaluate.return_value = [{"focused": True, "tabs": [{"url": "about:blank", "selected": True,
+                                                                  "container": 0, "loading": False}]}]
+        clock = Mock()
+        clock.monotonic.side_effect = iter(range(10 ** 6))
+        expected = "ValueError: User channel setup failed. <- BidiError: Timed out waiting for the user's navigation."
+        with tempfile.TemporaryDirectory() as folder, tempfile.TemporaryFile("w+") as stderr:
+            root = Path(folder)
+            (root / "native.py").write_text(fake)
+            (root / "config.json").write_text(json.dumps({
+                "target": "kitsune", "upstream": [sys.executable, str(root / "native.py")],
+                "bootstrap_url": "http://local/t/start", "urls": ["http://local/t/article"], "active_index": 0,
+                "evidence_path": str(root / "evidence.json"), "seeding": "user_channel",
+                "user_driver": {"bidi_url": "ws://127.0.0.1:9"}}))
+            with patch("kitsune_benchmark.user_driver.Bidi", return_value=bidi), \
+                    patch("kitsune_benchmark.user_driver.time", clock), \
+                    patch.object(sys, "argv", ["personal_session.py", str(root / "config.json")]), \
+                    patch.object(sys, "stdin", io.StringIO(json.dumps({"id": 1, "method": "tools/list"}) + "\n")), \
+                    patch.object(sys, "stderr", stderr):  # a real file: the native server inherits it
+                self.assertEqual(personal_session.main(), 2)
+            evidence = json.loads((root / "evidence.json").read_text())
+            self.assertFalse(evidence["setup_complete"])
+            self.assertEqual(evidence["error"], "native_session_setup_or_inventory_failed")
+            self.assertEqual(evidence["error_detail"], expected)
+            run_dir = root / "runs" / "kitsune"
+            run_dir.mkdir(parents=True)
+            summary = {"schema_version": 1, "run_dir": str(run_dir), "execution_status": "setup_failed",
+                       "returncode": -15, "harness_error": True, "model_request_observed": False}
+            write_json(run_dir / "summary.json", summary)
+            warning = io.StringIO()
+            with redirect_stderr(warning):
+                result = record_setup_failure("kitsune", summary, root / "evidence.json")
+            saved = json.loads((run_dir / "summary.json").read_text())
+            for record in (result, saved):
+                self.assertEqual(record["error_detail"], expected)
+                keys = list(record)
+                self.assertEqual(keys[keys.index("execution_status") + 1], "error_detail")
+                self.assertEqual(record["execution_status"], "setup_failed")
+            self.assertIn("warning: kitsune session setup failed", warning.getvalue())
+            self.assertIn("BidiError: Timed out waiting for the user's navigation.", warning.getvalue())
+            # Without a recorded detail the warning and summaries are as before.
+            warning = io.StringIO()
+            with redirect_stderr(warning):
+                self.assertNotIn("error_detail", record_setup_failure("kitsune", summary, root / "absent.json"))
+            self.assertTrue(warning.getvalue().endswith("(model_request_observed: False)\n"))
+
+    def test_relays_hold_the_tool_list_after_a_failed_setup_until_the_client_exits(self):
+        # #56: the client must not get a tool list (and start the agent) after a failed setup; the harness stops it.
+        fake = '''import json, sys
+for line in sys.stdin:
+    message = json.loads(line)
+    if "id" not in message:
+        continue
+    if message["method"] == "initialize":
+        result = {"protocolVersion": "2024-11-05", "capabilities": {"tools": {}}, "serverInfo": {"name": "fake", "version": "1"}}
+    elif message["params"]["name"] == "browser_tabs":
+        result = {"content": [{"type": "text", "text": sys.argv[1]}]}
+    else:
+        result = {"isError": True, "content": [{"type": "text", "text": json.dumps({"code": "needs_user"})}]}
+    print(json.dumps({"jsonrpc": "2.0", "id": message["id"], "result": result}), flush=True)
+'''
+        one = "- 0: (current) [](about:blank)"
+        cases = (("personal", "personal_session.py", {}, one, "native_session_setup_or_inventory_failed"),
+                 ("gallery", "personal_session.py", {"task_tab": "agent"}, one, "native_session_setup_or_inventory_failed"),
+                 ("coexistence", "coexistence_session.py", {"user_driver": {"bidi_url": "ws://127.0.0.1:9"}},
+                  one + "\n- 1: [](about:blank)", "coexistence_session_setup_or_inventory_failed"))
+        messages = [{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2024-11-05", "capabilities": {}}},
+                    {"jsonrpc": "2.0", "method": "notifications/initialized"}, {"jsonrpc": "2.0", "id": 2, "method": "tools/list"}]
+        for track, script, extra, tabs, error in cases:
+            with self.subTest(track=track), tempfile.TemporaryDirectory() as folder:
+                root = Path(folder)
+                (root / "native.py").write_text(fake)
+                (root / "config.json").write_text(json.dumps({
+                    "target": "playwright", "upstream": [sys.executable, str(root / "native.py"), tabs],
+                    "bootstrap_url": "http://local/t/start", "urls": ["http://local/t/article"], "active_index": 0,
+                    "evidence_path": str(root / "evidence.json"), "origin": "http://local", **extra}))
+                relay = subprocess.Popen([sys.executable, str(ROOT / "kitsune_benchmark" / script), str(root / "config.json")],
+                                         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+                try:
+                    relay.stdin.write("".join(json.dumps(message) + "\n" for message in messages))
+                    relay.stdin.flush()
+                    self.assertEqual(json.loads(relay.stdout.readline())["id"], 1)
+                    deadline = time.monotonic() + 10
+                    while session_setup(root / "evidence.json") is not False and time.monotonic() < deadline:
+                        time.sleep(0.05)
+                    self.assertIs(session_setup(root / "evidence.json"), False)
+                    time.sleep(0.3)
+                    self.assertIsNone(relay.poll())  # holding, not exited
+                    relay.stdin.close()
+                    self.assertEqual(relay.wait(timeout=10), 2)
+                    self.assertEqual(relay.stdout.read(), "")
+                    evidence = json.loads((root / "evidence.json").read_text())
+                    self.assertEqual(evidence["error"], error)
+                    self.assertRegex(evidence["error_detail"], r"^ValueError: \S")  # the cause behind the code (#120)
+                finally:
+                    if relay.poll() is None:
+                        relay.kill()
+                        relay.wait()
+                    relay.stdout.close()
+
     def test_native_inventory_parsers(self):
         playwright = {"content": [{"type": "text", "text": "### Result\n- 0: [A](http://localhost/a)\n- 1: (current) [B](http://localhost/b)"}]}
         self.assertEqual(tabs_from_result("playwright", playwright)[1]["id"], 1)
         tabs = {"tabs": [{"id": 33, "url": "http://localhost/a", "title": "A", "active": True}]}
         for response in ({"structuredContent": tabs}, {"content": [{"type": "text", "text": json.dumps(tabs)}]}):
             self.assertEqual(tabs_from_result("kitsune", response)[0]["id"], 33)
+        # #94: Kitsune's `current` is the agent's tab (`active` here); its `active` is the tab it shows (`shown`).
+        indexed = {"content": [{"type": "text", "text": json.dumps({"tabs": [
+            {"index": 0, "url": "http://localhost/order", "active": True},
+            {"index": 1, "url": "http://localhost/memo", "current": True, "owned": True}]})}]}
+        self.assertEqual([(t["active"], t["shown"]) for t in tabs_from_result("kitsune", indexed)],
+                         [(False, True), (True, False)])
+        self.assertNotIn("shown", tabs_from_result("playwright", playwright)[0])
         for target in ("kitsune", "playwright"):
             for response in ({}, {"isError": True}, {"content": [{"type": "text", "text": "unknown format"}]}):
                 with self.assertRaises(ValueError):
                     tabs_from_result(target, response)
+
+    def test_held_view_current_reads_the_tab_kitsune_390_hides(self):
+        def listing(*tabs):
+            return {"content": [{"type": "text", "text": json.dumps({"tabs": [
+                {"index": i, "url": f"http://localhost/{i}", **tab} for i, tab in enumerate(tabs)]})}]}
+        hidden = listing({"active": True}, {"owned": True})
+        self.assertEqual([t["active"] for t in tabs_from_result("kitsune", hidden)], [False, False])
+        self.assertEqual([t["active"] for t in tabs_from_result("kitsune", hidden, True)], [True, False])
+        # A listed current tab wins, and an owned or ambiguous active tab is never read as current.
+        for response, expected in ((listing({"active": True}, {"owned": True, "current": True}), [False, True]),
+                                   (listing({"active": True, "owned": True}, {}), [False, False]),
+                                   (listing({"active": True}, {"active": True}), [False, False])):
+            with self.subTest(response=response):
+                self.assertEqual([t["active"] for t in tabs_from_result("kitsune", response, True)], expected)
+
+    def test_select_starting_tab_detects_kitsune_390(self):
+        def selected(**tab):
+            return {"result": {"content": [{"type": "text", "text": json.dumps(
+                {"ok": True, "index": 1, "tabs": [{"index": 0, "url": "http://localhost/a"},
+                                                   {"index": 1, "url": "http://localhost/b", **tab}]})}]}}
+        cases = (({"active": True}, True),  # kitsune#390: selected, shown, not current
+                 ({"active": True, "current": True}, False),  # earlier Kitsune
+                 ({"active": True, "owned": True}, False))
+        for tab, expected in cases:
+            with self.subTest(tab=tab):
+                session = NativeSession({"target": "kitsune"})
+                with patch.object(session, "request", return_value=selected(**tab)):
+                    session.select_starting_tab("index", 1)
+                self.assertIs(session.held_view_current, expected)
+                self.assertEqual(session.evidence.get("setup_current_hidden_by_view_hold", False), expected)
+        session = NativeSession({"target": "playwright"})
+        with patch.object(session, "request", return_value={"result": {"content": []}}):
+            session.select_starting_tab("index", 1)
+        self.assertFalse(session.held_view_current)
 
     def test_relay_preserves_native_schema_result_and_tracks_hidden_calls(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -631,8 +1209,9 @@ for line in sys.stdin:
 
 
 @contextmanager
-def isolated_kitsune(folder, height=720):
-    """Match the paired runner's isolated Firefox/extension setup, without Codex."""
+def isolated_kitsune(folder, height=720, bidi_port=None):
+    """Match the paired runner's isolated Firefox/extension setup, without Codex. With bidi_port, Firefox also opens
+    the user channel (WebDriver BiDi) on that port, as the personal track's runs do (#70)."""
     import secrets
     import subprocess
     project = Path(os.environ.get("KITSUNE_PROJECT", ROOT.parent / "kitsune"))
@@ -657,7 +1236,10 @@ def isolated_kitsune(folder, height=720):
         browser = spawn([str(ROOT / "node_modules/.bin/web-ext"), "run", "--no-config-discovery", "--no-input",
             "--source-dir", str(destination), "--artifacts-dir", str(Path(folder) / "web-ext"),
             "--firefox", binary, "--no-reload", "--start-url", "about:blank", "--args=-headless",
-            "--args=--width=1280", f"--args=--height={height}"], "firefox.log")
+            "--args=--width=1280", f"--args=--height={height}",
+            *(("--args=" + arg for arg in user_channel_args(bidi_port)) if bidi_port else ()),
+            *((f"--pref={key}={value}" for key, value in USER_CHANNEL_PREFS.items()) if bidi_port else ())],
+            "firefox.log")
         await_bridge(http_port, env["KITSUNE_TOKEN"], browser, extension=True)
         with patch.dict(os.environ, env):
             yield ["uv", "run", "--locked", "--project", str(project), "kitsune"]
@@ -675,34 +1257,53 @@ def agent_tool(session, name: str, arguments: dict) -> dict:
 @unittest.skipUnless(os.environ.get("PERSONAL_KITSUNE_TEST") == "1", "opt-in isolated Kitsune/Firefox MCP test; no model calls")
 class NativeKitsuneTests(unittest.TestCase):
     def test_six_fixtures_seed_and_solve_via_real_kitsune_ui(self):
-        for task in selected_tasks():
-            with self.subTest(task=task["id"]), tempfile.TemporaryDirectory(prefix="pb-", dir="/tmp") as folder, PersonalServer(task, 0) as server:
+        # As the personal track runs them (#70): the user opens the starting tabs over the user channel, so Kitsune
+        # lists them as the user's. Kitsune with read-only user tabs (kitsune#395) refuses writes and select there, so
+        # the scripted agent opens the page it writes in a tab of its own, as model runs do (#95). The session is
+        # initialized through the relay, which declares elicitation, and directly, which declares none.
+        for task, relayed in ((task, relayed) for task in selected_tasks() for relayed in (True, False)):
+            with self.subTest(task=task["id"], relayed=relayed), tempfile.TemporaryDirectory(prefix="pb-", dir="/tmp") as folder, PersonalServer(task, 0, user_channel=True) as server:
                 server.begin("kitsune")
                 trial = server.trials[server.by_target["kitsune"]]
-                with isolated_kitsune(folder) as upstream:
+                port = server.bidi_ports["kitsune"]
+                with isolated_kitsune(folder, bidi_port=port) as upstream:
                     settings = {"target": "kitsune", "upstream": upstream,
                         "bootstrap_url": trial.url("/start"), "urls": [trial.url(p) for p in trial.paths],
-                        "active_index": trial.active_index, "evidence_path": folder + "/evidence.json", "origin": server.origin}
+                        "active_index": trial.active_index, "evidence_path": folder + "/evidence.json", "origin": server.origin,
+                        "seeding": "user_channel", "user_driver": {"bidi_url": f"ws://127.0.0.1:{port}"},
+                        **({"elicitation": "accept"} if relayed else {})}
                     session = NativeSession(settings)
                     try:
                         session.start()
-                        session.request("initialize", {"protocolVersion": "2024-11-05", "capabilities": {},
-                            "clientInfo": {"name": "personal-fixture-test", "version": "1"}})
-                        session.send({"jsonrpc": "2.0", "method": "notifications/initialized"})
+                        initialize = {"protocolVersion": "2024-11-05", "capabilities": {},
+                                      "clientInfo": {"name": "personal-fixture-test", "version": "1"}}
+                        if relayed:
+                            emitted = []
+                            session.forward({"jsonrpc": "2.0", "id": 0, "method": "initialize", "params": initialize}, emitted.append)
+                            self.assertNotIn("error", emitted[0])
+                            session.forward({"jsonrpc": "2.0", "method": "notifications/initialized"}, emitted.append)
+                        else:
+                            session.request("initialize", initialize)
+                            session.send({"jsonrpc": "2.0", "method": "notifications/initialized"})
                         session.prepare()
+                        self.assertEqual((session.evidence["seeding"], session.evidence["seeded_owned_by_agent"]),
+                                         ("user_channel", 0))
                         source = {"policy": "/policy/current", "orders": "/order/2"}.get(task["fixture"])
                         if source:
                             agent_tool(session, "browser_tabs", {"action": "new", "url": trial.url(source)})
                         draft = task["fixture"] in {"calendar", "contact"}
                         path = {"article": "/article", "products": "/compare", "policy": "/search", "orders": "/orders",
                                 "calendar": "/calendar", "contact": "/contact"}[task["fixture"]]
-                        tab = next(t for t in session.inventory() if t["url"] == trial.url(path))
-                        # Kitsune >= 0.3.1 publishes Playwright MCP's core tools: index-addressed tabs, `target`.
-                        agent_tool(session, "browser_tabs", {"action": "select", "index": tab["id"]})
+                        # Kitsune >= 0.3.1 publishes Playwright MCP's core tools: index-addressed tabs, `target`. The new
+                        # tab is the agent's and becomes its current tab.
+                        opened = agent_tool(session, "browser_tabs", {"action": "new", "url": trial.url(path)})
+                        self.assertFalse(opened.get("isError"), opened)
                         values = trial.expected if draft else {"메모": trial.expected["answer"]}
                         for label, value in values.items():
-                            agent_tool(session, "browser_type", {"target": f'input[name="{label}"]', "text": value})
-                        agent_tool(session, "browser_click", {"target": "form > button:first-of-type"})
+                            typed = agent_tool(session, "browser_type", {"target": f'input[name="{label}"]', "text": value})
+                            self.assertFalse(typed.get("isError"), typed)
+                        clicked = agent_tool(session, "browser_click", {"target": "form > button:first-of-type"})
+                        self.assertFalse(clicked.get("isError"), clicked)
                         evaluation = trial.evaluate({"execution_status": "completed_unscored"}, session.evidence)
                         self.assertTrue(evaluation["task_success"], evaluation)
                     finally:
@@ -758,3 +1359,167 @@ class NativeBrowserTests(unittest.TestCase):
                         self.assertTrue(evaluation["task_success"], evaluation)
                     finally:
                         session.close()
+
+
+SETUP_OK = {"execution_status": "completed_unscored", "usage": {},
+            "benchmark_evaluation": {"scorable": True, "task_success": True}}
+SETUP_DETAIL = "ValueError: User channel setup failed. <- BidiError: Timed out waiting for the user's new tab."
+SETUP_FAILED_BEFORE_MODEL = {"execution_status": "setup_failed", "harness_error": True, "model_request_observed": False,
+                             "client_stopped_sec": 12.5, "client_tool_list_timeout_sec": 60,
+                             "stopped_before_client_timeout": True,
+                             "error_detail": SETUP_DETAIL, "benchmark_evaluation": {"scorable": False}}
+
+
+class SetupRetryTests(unittest.TestCase):
+    """#121 --retry-setup-failures with a fake run_pair: no browser, harness or model runs."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+
+    def run_track(self, kitsune_runs, retries, *, track="personal", task_ids=("pb-current-01", "pb-safe-01"),
+                  revisions=None, playwright_only=False, **kwargs):
+        """Run a track whose Kitsune runs follow kitsune_runs (then SETUP_OK); returns (summary, run_pair calls, stderr).
+        revisions: source_revision's successive answers (default always "a"). playwright_only: the pair's runs follow
+        kitsune_runs for Playwright, and a failed Playwright run ends the pair with one result, as run_pair does."""
+        from kitsune_benchmark.coexistence import run_coexistence
+        from kitsune_benchmark.gallery import run_gallery
+        module, run_track = {"personal": ("kitsune_benchmark.personal", run_personal),
+                             "gallery": ("kitsune_benchmark.smoke", run_gallery),
+                             "coexistence": ("kitsune_benchmark.coexistence", run_coexistence)}[track]
+        script = iter(kitsune_runs)
+        calls = []
+
+        def fake_pair(**pair_kwargs):
+            calls.append(pair_kwargs)
+            folder = tempfile.mkdtemp(dir=self.tmp.name)
+            if playwright_only:
+                playwright = dict(next(script, SETUP_OK), run_dir=folder + "/runs/playwright")
+                if not playwright["benchmark_evaluation"]["scorable"]:  # run_pair stops after the first failure
+                    return {"pair_dir": folder, "results": {"playwright": playwright}}
+                return {"pair_dir": folder, "results": {"playwright": playwright,
+                                                         "kitsune": dict(SETUP_OK, run_dir=folder + "/runs/kitsune")}}
+            kitsune = dict(next(script, SETUP_OK), run_dir=folder + "/runs/kitsune")
+            return {"pair_dir": folder, "results": {"playwright": dict(SETUP_OK, run_dir=folder + "/runs/playwright"),
+                                                     "kitsune": kitsune}}
+        with ExitStack() as stack:
+            stack.enter_context(patch(module + ".run_pair", side_effect=fake_pair))
+            stack.enter_context(patch(module + ".source_revision", **(
+                {"side_effect": [{"revision": r, "dirty": False} for r in revisions]} if revisions
+                else {"return_value": {"revision": "a", "dirty": False}})))
+            if track == "coexistence":  # its aggregate reads per-contract evaluations the fake runs do not have
+                stack.enter_context(patch("kitsune_benchmark.coexistence.aggregate_coexistence", return_value={}))
+            stderr = stack.enter_context(redirect_stderr(io.StringIO()))
+            summary = run_track(execute=True, task_ids=list(task_ids), retry_setup_failures=retries,
+                                **{"harness": "claude", **kwargs})
+        return summary, calls, stderr.getvalue()
+
+    def test_setup_failure_before_a_model_request_is_rerun_in_place_and_scored_once(self):
+        summary, calls, stderr = self.run_track([SETUP_FAILED_BEFORE_MODEL], 1)
+        self.assertEqual(len(calls), 3)  # pb-current-01 twice, then pb-safe-01
+        self.assertEqual((summary["attempted_pairs"], summary["completed_pairs"], summary["stopped_reason"]), (2, 2, None))
+        self.assertEqual([p["personal_task"] for p in summary["pairs"]], ["pb-current-01", "pb-safe-01"])
+        self.assertEqual(summary["by_target"]["kitsune"]["attempted"], 2)
+        # Each attempt gets a fresh fixture; run_pair itself gives each pair a fresh directory, profile and ports.
+        self.assertIsNot(calls[0]["task_for_target"].__self__, calls[1]["task_for_target"].__self__)
+        failed_dir = summary["pairs"][0]["setup_retries"][0]["pair_dir"]
+        # The pair's completed Playwright run is discarded by the rerun: recorded with its usage.
+        record = {"task": "pb-current-01", "pair_dir": failed_dir, "target": "kitsune",
+                  "run_dir": failed_dir + "/runs/kitsune", "execution_status": "setup_failed",
+                  "model_request_observed": False, "client_stopped_sec": 12.5, "client_tool_list_timeout_sec": 60,
+                  "error_detail": SETUP_DETAIL,
+                  "discarded_runs": {"playwright": {"run_dir": failed_dir + "/runs/playwright", "usage": {},
+                                                    "list_price_cost_usd": None}}}
+        self.assertEqual(summary["pairs"][0]["setup_retries"], [record])
+        self.assertEqual(summary["pairs"][1]["setup_retries"], [])
+        self.assertEqual((summary["retry_setup_failures"], summary["setup_retries"]), (1, [record]))
+        self.assertNotEqual(failed_dir, summary["pairs"][0]["pair_dir"])
+        on_disk = json.loads((Path(summary["pairs"][0]["pair_dir"]) / "personal-summary.json").read_text())
+        self.assertEqual(on_disk["setup_retries"], [record])
+        self.assertEqual(json.loads((Path(failed_dir) / "personal-summary.json").read_text())["setup_retries"], [])
+        self.assertIn("discarding its playwright run (setup retry 1 of 1)", stderr)
+        self.assertIn("BidiError", stderr)
+
+    def test_failure_after_a_model_request_still_stops_the_track(self):
+        missing_observed = {k: v for k, v in SETUP_FAILED_BEFORE_MODEL.items() if k != "model_request_observed"}
+        missing_stopped = {k: v for k, v in SETUP_FAILED_BEFORE_MODEL.items() if k != "stopped_before_client_timeout"}
+        for kitsune in (dict(SETUP_FAILED_BEFORE_MODEL, model_request_observed=True), missing_observed, missing_stopped,
+                        {"execution_status": "timeout", "benchmark_evaluation": {"scorable": False}},
+                        {"execution_status": "harness_error", "api_error": "usage_limit_reached",
+                         "benchmark_evaluation": {"scorable": False}}):
+            with self.subTest(status=kitsune["execution_status"]):
+                summary, calls, _ = self.run_track([kitsune], 1)
+                self.assertEqual(len(calls), 1)
+                self.assertEqual(summary["attempted_pairs"], 1)
+                self.assertIn(summary["stopped_reason"], ("unscorable_pair", "session_limit"))
+                self.assertEqual(summary["setup_retries"], [])
+
+    def test_late_setup_failure_is_not_retried(self):
+        # #121: stopped after the client could have given up on tools/list and started a model call without tools.
+        late = dict(SETUP_FAILED_BEFORE_MODEL, client_stopped_sec=61.2, stopped_before_client_timeout=False)
+        summary, calls, stderr = self.run_track([late], 2)
+        self.assertEqual((len(calls), summary["attempted_pairs"], summary["stopped_reason"]), (1, 1, "unscorable_pair"))
+        self.assertEqual(summary["setup_retries"], [])
+        self.assertNotIn("setup retry", stderr)
+
+    def test_kitsune_revision_change_between_attempts_is_not_retried(self):
+        # The track's source, then the failed attempt's kitsune_source_after.
+        summary, calls, _ = self.run_track([SETUP_FAILED_BEFORE_MODEL], 1, revisions=["a", "b"])
+        self.assertEqual((len(calls), summary["stopped_reason"], summary["setup_retries"]),
+                         (1, "kitsune_revision_changed", []))
+
+    def test_setup_failure_in_the_first_target_is_retried_with_nothing_discarded(self):
+        summary, calls, stderr = self.run_track([SETUP_FAILED_BEFORE_MODEL], 1, playwright_only=True,
+                                                task_ids=("pb-current-01",))
+        self.assertEqual(len(calls), 2)
+        self.assertEqual((summary["completed_pairs"], summary["stopped_reason"]), (1, None))
+        [record] = summary["setup_retries"]
+        self.assertEqual((record["target"], record["discarded_runs"]), ("playwright", {}))
+        self.assertIn("rerunning the pair (setup retry 1 of 1)", stderr)
+
+    def test_two_setup_failures_then_success_with_two_retries(self):
+        summary, calls, stderr = self.run_track([SETUP_FAILED_BEFORE_MODEL] * 2, 2)
+        self.assertEqual(len(calls), 4)  # pb-current-01 three times, then pb-safe-01
+        self.assertEqual((summary["completed_pairs"], summary["stopped_reason"]), (2, None))
+        retries = summary["pairs"][0]["setup_retries"]
+        self.assertEqual(len(retries), 2)
+        self.assertEqual(len({r["pair_dir"] for r in retries} | {summary["pairs"][0]["pair_dir"]}), 3)
+        self.assertEqual(summary["setup_retries"], retries)
+        self.assertIn("setup retry 2 of 2", stderr)
+
+    def test_plan_worst_case_counts_retries(self):
+        from kitsune_benchmark.coexistence import run_coexistence
+        from kitsune_benchmark.gallery import run_gallery
+        for run_track, task in ((run_personal, "pb-current-01"), (run_gallery, "ui-table"),
+                                (run_coexistence, "pb-current-01")):
+            with self.subTest(track=run_track.__name__):
+                plans = [run_track(task_ids=[task], harness="claude-api", retry_setup_failures=n) for n in (0, 2)]
+                self.assertEqual(plans[1]["worst_case_usd"], 3 * plans[0]["worst_case_usd"])
+                self.assertEqual(plans[0]["worst_case_usd"], plans[0]["planned_model_runs"] * 1.0)
+
+    def test_retries_run_out_or_default_zero_stop_as_before(self):
+        summary, calls, _ = self.run_track([SETUP_FAILED_BEFORE_MODEL] * 2, 1)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual((summary["attempted_pairs"], summary["completed_pairs"]), (1, 0))
+        self.assertEqual(summary["stopped_reason"], "unscorable_pair")
+        self.assertEqual(summary["pairs"][0]["results"]["kitsune"]["execution_status"], "setup_failed")
+        self.assertEqual(len(summary["pairs"][0]["setup_retries"]), 1)
+        summary, calls, stderr = self.run_track([SETUP_FAILED_BEFORE_MODEL], 0)
+        self.assertEqual((len(calls), summary["stopped_reason"], summary["setup_retries"]), (1, "unscorable_pair", []))
+        self.assertNotIn("setup retry", stderr)
+        # An API budget that cannot cover another pair's worst case (2 x $1) does not retry either.
+        summary, calls, _ = self.run_track([SETUP_FAILED_BEFORE_MODEL], 1, harness="claude-api", budget_usd=2.5)
+        self.assertEqual((len(calls), summary["stopped_reason"]), (1, "unscorable_pair"))
+        with self.assertRaisesRegex(ValueError, "retry-setup-failures"):
+            run_personal(task_ids=["pb-current-01"], retry_setup_failures=-1)
+        with redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(main(["personal", "--task", "pb-current-01", "--retry-setup-failures", "2"]), 0)
+        self.assertEqual(json.loads(out.getvalue())["retry_setup_failures"], 2)
+
+    def test_gallery_and_coexistence_retry_the_same_way(self):
+        for track, task in (("gallery", "ui-table"), ("coexistence", "pb-current-01")):
+            with self.subTest(track=track):
+                summary, calls, _ = self.run_track([SETUP_FAILED_BEFORE_MODEL], 1, track=track, task_ids=(task,))
+                self.assertEqual(len(calls), 2)
+                self.assertEqual((summary["completed_pairs"], summary["stopped_reason"]), (1, None))
+                self.assertEqual([(r["task"], r["error_detail"]) for r in summary["setup_retries"]], [(task, SETUP_DETAIL)])

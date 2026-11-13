@@ -6,6 +6,7 @@ from contextlib import ExitStack
 from collections.abc import Callable
 from dataclasses import replace
 from datetime import datetime, timezone
+from functools import partial
 import hashlib
 import json
 import os
@@ -31,6 +32,10 @@ from .specs import Server, Task, identifier, load_task, positive_int
 
 ROOT = Path(__file__).resolve().parent.parent
 TARGETS = ("playwright", "kitsune")
+# Exhibition arms (external MiniWoB track only): other vendors' code-execution browser tools, driving their own
+# installed browser app and profile rather than a private Firefox. Reported apart from the head-to-head.
+EXHIBITION_TARGETS = ("aside", "ego")
+ALL_TARGETS = TARGETS + EXHIBITION_TARGETS
 WS_SETTING = "const WS_URL = 'ws://127.0.0.1:47652';"
 
 
@@ -105,9 +110,57 @@ def tool_surface(metadata_path: Path, enabled_tools: tuple[str, ...]) -> dict | 
     published = sorted({tool["name"] for page in metadata.get("tools_pages", []) if isinstance(page, dict)
                         for tool in page.get("tools", []) if isinstance(tool, dict) and "name" in tool})
     enabled = sorted(enabled_tools)
-    return {"enabled": enabled, "published_count": len(published),
-            "exposed": [name for name in enabled if name in published],
-            "missing": [name for name in enabled if name not in published]}
+    exposed = [name for name in enabled if name in published]
+    return {"enabled": enabled, "published_count": len(published), "exposed": exposed,
+            "missing": [name for name in enabled if name not in published],
+            "no_allowlisted_tools": not exposed}
+
+
+def session_setup(evidence_path: Path) -> bool | None:
+    """A session relay's setup from its evidence (#56): True once complete, False once failed, None while pending."""
+    try:
+        evidence = json.loads(evidence_path.read_text())
+    except (OSError, ValueError):
+        return None
+    if evidence.get("setup_complete") is True:
+        return True
+    return False if evidence.get("error") else None
+
+
+def with_error_detail(summary: dict, detail: str) -> dict:
+    """The run summary with error_detail right after its execution_status."""
+    items = list(summary.items())
+    after = list(summary).index("execution_status") + 1
+    return dict(items[:after] + [("error_detail", detail)] + items[after:])
+
+
+def record_setup_failure(target: str, result: dict, evidence_path: Path | None) -> dict:
+    """A setup_failed run (#56): copy the relay's evidence error_detail (#120: the setup exception and its cause chain)
+    into the run summary (the result and the run's summary.json) and warn with it. Returns the updated result."""
+    try:
+        detail = json.loads(evidence_path.read_text()).get("error_detail") if evidence_path is not None else None
+    except (OSError, ValueError, AttributeError):
+        detail = None
+    detail = detail if isinstance(detail, str) else None
+    if detail is not None:
+        result = with_error_detail(result, detail)
+        run_summary = Path(result["run_dir"]) / "summary.json"
+        rewrite_json(run_summary, with_error_detail(json.loads(run_summary.read_text()), detail))
+    print(f"warning: {target} session setup failed; the harness was stopped "
+          f"(model_request_observed: {result.get('model_request_observed')})"
+          + (f": {detail}" if detail is not None else ""), file=sys.stderr)
+    return result
+
+
+def relay_evidence_path(server: Server) -> Path:
+    """The evidence file a session relay records its setup in, from the relay config prepare_server wrote (#56)."""
+    try:
+        path = json.loads(Path(server.args[-1]).read_text()).get("evidence_path")
+    except (IndexError, OSError, ValueError, AttributeError) as error:
+        raise ValueError("Session relay config not readable; setup failures could not be detected.") from error
+    if not isinstance(path, str) or not path:
+        raise ValueError("Session relay config lacks evidence_path; setup failures could not be detected.")
+    return Path(path)
 
 
 def rewrite_json(path: Path, value: dict) -> None:
@@ -152,8 +205,8 @@ def run_pair(*, execute: bool = False, kitsune_project: str | None = None,
     channel). viewport_reports returns a target's fixture page viewport reports after its run;
     equalize_kitsune_viewport adds Firefox's chrome height to the Kitsune window so its content
     viewport matches Playwright's. The defaults leave every existing track's launch unchanged."""
-    if not targets or len(set(targets)) != len(targets) or set(targets) - set(TARGETS):
-        raise ValueError("targets must be a non-empty subset of playwright, kitsune.")
+    if not targets or len(set(targets)) != len(targets) or set(targets) - set(ALL_TARGETS):
+        raise ValueError("targets must be a non-empty subset of " + ", ".join(ALL_TARGETS) + ".")
     if kitsune_preset is not None and not re.fullmatch(r"[a-z][a-z0-9_-]{0,31}", kitsune_preset):
         raise ValueError("Invalid Kitsune tool preset name.")
     reserved = {"KITSUNE_HOME", "KITSUNE_HTTP_PORT", "KITSUNE_WS_PORT", "KITSUNE_TOKEN", "KITSUNE_TOOL_PRESET"}
@@ -167,6 +220,13 @@ def run_pair(*, execute: bool = False, kitsune_project: str | None = None,
         if not re.fullmatch(r"[a-z][a-zA-Z0-9_.-]{1,80}", key) or not re.fullmatch(r"true|false|[0-9]{1,9}", value):
             raise ValueError("Unsupported Firefox preference.")
     spec = experiment() if experiment_spec is None else experiment_spec
+    exhibition = set(targets) & set(EXHIBITION_TARGETS)
+    if exhibition:
+        if artifact_scope != "external" or spec.get("selected_task", {}).get("kind") != "miniwob":
+            raise ValueError("Exhibition targets support only external MiniWoB tasks.")
+        from .miniwob import EXHIBITION_TOOLS
+        if any((enabled_tools or {}).get(target) != EXHIBITION_TOOLS[target] for target in exhibition):
+            raise ValueError("Exhibition targets require their code-tool allowlist.")
     model, effort = harness_pins(spec, harness)
     max_budget_usd = claude_budget(spec, harness)
     if not execute:
@@ -223,6 +283,10 @@ def run_pair(*, execute: bool = False, kitsune_project: str | None = None,
             ("PLAYWRIGHT_BROWSERS_PATH", "PLAYWRIGHT_SKIP_BROWSER_GC", "PWTEST_SOCKETS_DIR"), 60, 45),
         "kitsune": Server("kitsune", "uv", ("run", "--locked", "--project", str(project), "kitsune"),
             kitsune_vars, 60, 45),
+        # Code-execution tools: one call may run a whole script, so the per-call limit is each vendor's own 120s.
+        "aside": Server("aside", str(Path.home() / ".local/bin/aside"), ("mcp",), (), 60, 130),
+        "ego": Server("ego", sys.executable, (str(ROOT / "kitsune_benchmark/ego_mcp.py"),),
+            ("EGO_BROWSER_BIN",) if "EGO_BROWSER_BIN" in os.environ else (), 60, 130),
     }
     specs = {target: specs[target] for target in targets}
     if enabled_tools is not None:
@@ -299,10 +363,15 @@ def run_pair(*, execute: bool = False, kitsune_project: str | None = None,
                 resources.set_phase("task_" + target)
                 external = (ResourceRoot(bridge.pid, "bridge", "kitsune", True),
                             ResourceRoot(browser.pid, "browser_launcher", "kitsune", True)) if target == "kitsune" else ()
+                # Session relays (prepare_server) set up lazily and record it in their evidence file.
+                evidence = relay_evidence_path(server) if prepare_server is not None else None
                 result = run(server, task, model, executable=path, timeout=timeout,
                              output_root=str(pair_dir / "runs"), confirm_isolated_browser=True,
                              resource_roots=external, resource_observer=resources, viewport=viewports[target],
-                             harness=harness, effort=effort, max_budget_usd=max_budget_usd)
+                             harness=harness, effort=effort, max_budget_usd=max_budget_usd,
+                             session_setup=partial(session_setup, evidence) if evidence is not None else None)
+                if result["execution_status"] == "setup_failed":
+                    result = record_setup_failure(target, result, evidence)
                 result["viewport"] = observed_viewport(viewports[target],
                                                        viewport_reports(target) if viewport_reports else None)
                 run_manifest = Path(result["run_dir"]) / "manifest.json"
@@ -317,7 +386,9 @@ def run_pair(*, execute: bool = False, kitsune_project: str | None = None,
                     surface = tool_surface(pair_dir / (target + "-native-metadata.json"), server.enabled_tools)
                     if surface is not None:
                         result["tool_surface"] = surface
-                        if surface["missing"]:
+                        if surface["no_allowlisted_tools"]:
+                            print(f"warning: {target} published none of the allowlisted tools", file=sys.stderr)
+                        elif surface["missing"]:
                             print(f"warning: {target} did not publish allowlisted tools: "
                                   + ", ".join(surface["missing"]), file=sys.stderr)
                 results[target] = result

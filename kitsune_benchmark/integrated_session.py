@@ -32,6 +32,7 @@ def main():
     except (OSError,ValueError,KeyError,TypeError):
         session.evidence['error']='blank_session_setup_or_inventory_failed';session.save()
         print('Blank-session setup/inventory failed; inspect private artifacts.',file=sys.stderr)
+        session.hold_failed_setup()
         return 2
     finally:
         session.close()

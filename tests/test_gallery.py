@@ -15,6 +15,7 @@ from urllib.request import HTTPCookieProcessor, ProxyHandler, Request, build_ope
 from kitsune_benchmark.gallery import (BY_ID, LAYOUTS, PUZZLES, STATIC, TASKS, GalleryServer, GalleryTrial, config, failure_class,
                                       select)
 from kitsune_benchmark.smoke import ROOT
+from kitsune_benchmark.specs import Server
 
 MEDIA_TOOLS = all(shutil.which(t) for t in ("ffmpeg", "espeak"))
 VALID = {"execution_status": "completed_unscored"}
@@ -107,6 +108,18 @@ class GalleryTests(unittest.TestCase):
         again = trial("mm-label", 1)
         again.page("/c/mm-label")
         self.assertEqual(next(iter(again.media_files.values()))[1], data)  # deterministic per variant
+
+    def test_modal_shows_saved_settings_outside_the_dialog(self):
+        # #115: the saved state is real text outside the hidden dialog, not only CSS ::after on the switches.
+        labels = {"email": "이메일 알림", "push": "푸시 알림", "sms": "문자 알림", "digest": "주간 요약"}
+        for variant in range(3):
+            for layout in LAYOUTS:
+                t = trial("ui-modal", variant, layout)
+                own = t.page(t.paths[0]).split('id="sec-notify-settings"')[1].split("</section>")[0]
+                line = " · ".join(f"{labels[k]} {'켜짐' if on else '꺼짐'}" for k, on in t.mine["initial"].items())
+                expected = f'<p class="saved-settings">저장된 설정: {line}</p>'
+                self.assertIn(expected, own, f"variant {variant}, {layout}")
+                self.assertLess(own.index(expected), own.index('class="dialog-backdrop"'), "line sits outside the dialog")
 
     def test_failure_classes_keep_refusal_wrong_answer_tool_and_invalid_apart(self):
         valid = dict(VALID, failed_mcp_calls=0)
@@ -227,6 +240,16 @@ class GalleryTests(unittest.TestCase):
             with client.open(t.url("/api/cities?q=" + quote("부"))) as response:
                 self.assertIn("부천", json.load(response))
             self.assertEqual(t.state, {"shipping-country": "일본"})
+
+    def test_prepare_server_runs_the_task_in_a_harness_opened_tab(self):
+        # kitsune#373: an agent-owned task tab is exempt from Kitsune's hold on the tab the user views.
+        with tempfile.TemporaryDirectory() as folder, GalleryServer(BY_ID["mm-audio"], 0, "crowded") as server:
+            for target in ("playwright", "kitsune"):
+                server.begin(target)
+                wrapped = server.prepare_server(target, Server(target, "node", ("cli.js",)), None, Path(folder))
+                stored = json.loads(Path(wrapped.args[-1]).read_text())
+                self.assertEqual((stored["task_tab"], stored["active_index"]), ("agent", 0))
+                self.assertEqual(stored["urls"][0], server.trials[server.by_target[target]].url("/gallery"))
 
 
 @unittest.skipUnless(os.environ.get("PERSONAL_BROWSER_TEST") == "1" and MEDIA_TOOLS, "opt-in real Firefox reference solutions; no model calls")

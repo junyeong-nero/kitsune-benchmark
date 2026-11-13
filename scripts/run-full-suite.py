@@ -1,4 +1,5 @@
-"""Run every graded track (personal 28×3 variants, gallery 21×3×2 layouts, MiniWoB) under one total budget.
+"""Run every track (personal 28×3 variants, gallery 21×3×2 layouts, coexistence, external 7 MiniWoB + 3 live) under one
+total budget.
 
 Each track command gets the remaining budget via --budget-usd, so the suite as a whole never starts a pair
 whose worst case would exceed it. A failed, stopped, malformed or incomplete track stops the suite
@@ -8,7 +9,20 @@ By default the personal and gallery tracks run Playwright and Kitsune as two con
 playwright / --targets kitsune), each with its own fixture server, ports, profiles and half the remaining budget.
 Both targets then share the machine, so elapsed time and CPU/RSS are measured under that contention.
 --sequential restores one process per track with paired runs, Playwright-first unless --order selects otherwise.
-MiniWoB (one pair) is sequential.
+The external track runs like the others; its three live tasks are recorded, never graded.
+Coexistence (coexistence-local-v2) follows its frozen plan: the 28 personal tasks user-seeded on variant 0,
+co-typing-01 on variants 0-2, then the Kitsune unprotected-user-tabs arm (user tabs writable) on variant 0. Its
+entries always run paired in one process (the user channel was validated that way), in the attempt's order.
+
+--elicitation (decline by default, or accept) sets how the relay answers Kitsune's approval prompts on every
+personal, gallery and coexistence entry, and is recorded in suite-manifest.json. External does not use the relay.
+Suites run under different policies are not comparable.
+
+--retry-setup-failures N (default 0: no retry) passes the same option to every personal, gallery and coexistence entry:
+a pair whose run failed in session setup while its client was provably still waiting for its tool list (setup_failed,
+model_request_observed false, stopped_before_client_timeout true) is rerun whole, in place, with a fresh profile and
+ports, up to N times. Each retry is in the pair summary and the entry's suite-log line as setup_retries, with the failed
+run's error_detail and the discarded runs of the pair's other target. Any other failure still stops the suite.
 
 Before graded tracks, the separate model-free stress-v1/release-v1 track runs once,
 without concurrent model/track work. --stress-comparison selects paired
@@ -20,10 +34,16 @@ The default harness is `claude`: Claude Code on the claude.ai subscription login
 credit and has no dollar cap. API-key harnesses (`claude-api`, `claude-api-full`) bill ANTHROPIC_API_KEY
 credit and need --allow-api-billing plus --budget-usd and --max-budget-usd-per-run.
 
+--from ENTRY --previous-suite DIR starts the plan at ENTRY (for example after a session limit stopped DIR there), in a
+fresh --out, and records both in suite-manifest.json as resumed_from and previous_suite. Single attempts only.
+scripts/merge-suites.py then combines DIR and the retry into one directory for analyze-release.py.
+
 usage: uv run --locked python scripts/run-full-suite.py \
            --kitsune-project artifacts/vendor/kitsune-pinned --out artifacts/opus-full
        uv run --locked python scripts/run-full-suite.py --harness claude-api --allow-api-billing \
            --budget-usd 60 ...   # per-run cap follows the model: opus $1, sonnet $0.5, haiku $0.1
+       uv run --locked python scripts/run-full-suite.py --from coexistence-user-seeded \
+           --previous-suite artifacts/opus-full --out artifacts/opus-full-retry ...
 """
 
 from __future__ import annotations
@@ -36,12 +56,29 @@ import time
 from pathlib import Path
 
 
-def commands() -> list[tuple[str, list[str]]]:
-    items = [(f"personal-v{v}", ["personal", "--all", "--variant", str(v)]) for v in range(3)]
+# Variants per track. "lite" keeps every personal and gallery task and both gallery layouts with fewer data
+# variants: personal 28 x v0-v1 + gallery 21 x 2 layouts x v0 = 98 units (196 paired runs) instead of 210.
+PLANS = {"full": {"personal": (0, 1, 2), "gallery": (0, 1, 2)},
+         "lite": {"personal": (0, 1), "gallery": (0,)}}
+ELICITATION_POLICIES = ("decline", "accept")  # kitsune_benchmark/personal_session.py
+RELAY_TRACKS = ("personal", "gallery", "coexistence")  # track commands that take --elicitation, --retry-setup-failures
+
+
+def commands(plan: str = "full") -> list[tuple[str, list[str]]]:
+    variants = PLANS[plan]
+    items = [(f"personal-v{v}", ["personal", "--all", "--variant", str(v)]) for v in variants["personal"]]
     items += [(f"gallery-{layout}-v{v}", ["gallery", "--layout", layout, "--variant", str(v)])
-              for layout in ("crowded", "isolated") for v in range(3)]
-    items.append(("miniwob", ["benchmark"]))
+              for layout in ("crowded", "isolated") for v in variants["gallery"]]
+    items.append(("coexistence-user-seeded", ["coexistence", "--all-personal", "--variant", "0"]))
+    items += [(f"coexistence-typing-v{v}", ["coexistence", "--task", "co-typing-01", "--variant", str(v)]) for v in range(3)]
+    items.append(("coexistence-unprotected", ["coexistence", "--all-personal", "--variant", "0", "--unprotected-user-tabs",
+                                              "--targets", "kitsune"]))
+    items.append(("external", ["external"]))
     return items
+
+
+def always_sequential(name: str) -> bool:
+    return name.startswith("coexistence")
 
 
 def attempt_plan(attempts: int, order: str | None, sequential: bool) -> list[dict]:
@@ -119,17 +156,45 @@ def main() -> int:
     stress_selection.add_argument("--skip-stress", action="store_true", help="Explicitly omit model-free stress")
     stress_selection.add_argument("--stress-comparison", action="store_true",
                                   help="Use paired stress-compare-v1 instead of the Kitsune-only stress-v1 track")
+    parser.add_argument("--plan", choices=tuple(PLANS), default="full",
+                        help="full: every data variant; lite: personal v0-v1 and gallery v0 (both layouts), "
+                             "coexistence and external unchanged")
     parser.add_argument("--spent-usd", type=float, default=0.0, help="Already spent toward the budget")
     parser.add_argument("--sequential", action="store_true",
                         help="One process per track running paired targets in turn, instead of the two in parallel")
     parser.add_argument("--attempts", type=int, default=1, help="Fresh attempts per track/variant/layout unit")
     parser.add_argument("--order", choices=("ab", "ba", "abba"),
                         help="A=Playwright, B=Kitsune; abba alternates AB and BA across even attempts; needs --sequential")
+    parser.add_argument("--elicitation", choices=ELICITATION_POLICIES, default="decline",
+                        help="How the relay answers Kitsune's approval prompts on personal, gallery and coexistence "
+                             "entries; recorded in suite-manifest.json")
+    parser.add_argument("--retry-setup-failures", type=int, default=0, metavar="N",
+                        help="Rerun a personal, gallery or coexistence pair in place up to N times while its run failed "
+                             "in setup before its client could give up on its tool list; recorded as setup_retries "
+                             "(default 0: no retry)")
+    parser.add_argument("--from", dest="from_entry", metavar="ENTRY",
+                        help="Start the plan at this entry, resuming --previous-suite; recorded as resumed_from")
+    parser.add_argument("--previous-suite", metavar="DIR",
+                        help="The suite directory --from resumes; recorded as previous_suite")
     args = parser.parse_args()
     try:
         plan = attempt_plan(args.attempts, args.order, args.sequential)
     except ValueError as exc:
         parser.error(str(exc))
+    if args.retry_setup_failures < 0:
+        parser.error("--retry-setup-failures must be 0 or more.")
+    planned = commands(args.plan)
+    if (args.from_entry is None) != (args.previous_suite is None):
+        parser.error("--from and --previous-suite go together.")
+    if args.from_entry is not None:
+        names = [name for name, _ in planned]
+        if args.from_entry not in names:
+            parser.error(f"--from {args.from_entry} is not an entry of the {args.plan} plan: {', '.join(names)}")
+        if args.attempts != 1:
+            parser.error("--from resumes a single-attempt suite; --attempts must be 1.")
+        if not (Path(args.previous_suite) / "suite-manifest.json").is_file():
+            parser.error(f"--previous-suite {args.previous_suite} has no suite-manifest.json.")
+        planned = planned[names.index(args.from_entry):]
     api = args.harness in ("claude-api", "claude-api-full")
     if args.model is None:
         if args.harness == "codex":
@@ -165,8 +230,11 @@ def main() -> int:
                 "taskset": git_identity(Path(__file__).resolve().parent.parent, "taskset-*"),
                 "started": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
                 "targets_in_parallel": not args.sequential, "attempts": args.attempts,
-                "order_policy": args.order, "attempt_plan": plan,
-                "order_key": {"a": "playwright", "b": "kitsune"}, "commands": [name for name, _ in commands()],
+                "order_policy": args.order, "attempt_plan": plan, "elicitation": args.elicitation,
+                "retry_setup_failures": args.retry_setup_failures,
+                "order_key": {"a": "playwright", "b": "kitsune"}, "plan": args.plan, "commands": [name for name, _ in planned],
+                "resumed_from": args.from_entry,
+                "previous_suite": str(Path(args.previous_suite).resolve()) if args.previous_suite else None,
                 "stress": {"protocol": "stress-compare-v1" if args.stress_comparison else "stress-v1",
                            "profile": "shared-browser-v1" if args.stress_comparison else "release-v1", "enabled": not args.skip_stress,
                            "placement": "once_before_graded_tracks", "included_in_task_scores": False}}
@@ -182,7 +250,7 @@ def main() -> int:
     for attempt in plan:
         attempt_dir = out if args.attempts == 1 else out / f"attempt-{attempt['attempt']:03d}"
         attempt_dir.mkdir(exist_ok=True)
-        for name, argv in commands():
+        for name, argv in planned:
             remaining = args.budget_usd - spent if api else None
             worst_pair = 2 * args.max_budget_usd_per_run if api else 0.0
             if api and remaining < worst_pair:
@@ -191,8 +259,12 @@ def main() -> int:
                 base = [sys.executable, "-m", "kitsune_benchmark", *argv, "--harness", args.harness,
                         *(["--claude-model", args.model] if args.harness != "codex" else ["--codex-model", args.model]),
                         *(["--max-budget-usd-per-run", str(args.max_budget_usd_per_run), "--allow-api-billing"] if api else []),
+                        *(["--elicitation", args.elicitation] if argv[0] in RELAY_TRACKS else []),
+                        *(["--retry-setup-failures", str(args.retry_setup_failures)]
+                          if argv[0] in RELAY_TRACKS and args.retry_setup_failures else []),
                         "--kitsune-project", args.kitsune_project, "--execute"]
-                parallel = not args.sequential and name != "miniwob"
+                parallel = not args.sequential and not always_sequential(name)
+                fixed_targets = "--targets" in argv
                 def budget(amount):
                     return ["--budget-usd", str(round(amount, 6))] if api else []
                 if parallel:
@@ -201,9 +273,9 @@ def main() -> int:
                     jobs = [(f"{name}-{target}", base + ["--targets", target, *budget(share)])
                             for target in ("playwright", "kitsune")]
                 else:
-                    jobs = [(name, base + ["--targets", "kitsune,playwright" if attempt["order"] == "ba"
-                                      else "playwright,kitsune"]
-                         + (budget(remaining) if name != "miniwob" else []))]
+                    order = [] if fixed_targets else ["--targets", "kitsune,playwright" if attempt["order"] == "ba"
+                                                      else "playwright,kitsune"]
+                    jobs = [(name, base + order + budget(remaining))]
                 started = time.time()
                 print(f"[{time.strftime('%H:%M:%S')}] {name}: "
                       + (f"remaining ${remaining:.2f}" if api else "subscription harness, no dollar cap")
@@ -224,8 +296,6 @@ def main() -> int:
                     if not isinstance(result, dict):
                         result = {}
                     cost = result.get("estimated_cost_usd")
-                    if cost is None and name == "miniwob" and api:
-                        cost = worst_pair  # not reported by the MiniWoB runner; count its worst case
                     spent += cost or 0.0
                     entries.append({"name": name, **({"target": label.rsplit("-", 1)[1]} if parallel else {}),
                                     "exit": code, "summary_valid": bool(result),
@@ -235,23 +305,24 @@ def main() -> int:
                                     "requested_pairs": result.get("requested_pairs"),
                                     "completed_pairs": result.get("completed_pairs"),
                                     "stopped_reason": result.get("stopped_reason"),
+                                    "setup_retries": result.get("setup_retries"),
                                     "suite_summary_path": result.get("suite_summary_path"),
                                     "by_target": result.get("by_target", result.get("results")),
                                     "output_path": str(attempt_dir / f"{label}.json")})
             for entry in entries:
-                entry.update(attempt=attempt["attempt"], order=attempt["order"] if name != "miniwob" else attempt["order"] or "ab")
+                entry.update(attempt=attempt["attempt"],
+                             order=attempt["order"] or ("ab" if always_sequential(name) else None))
                 all_entries.append(entry)
                 print(json.dumps(entry), flush=True)
                 with log.open("a") as handle:
                     handle.write(json.dumps(entry) + "\n")
             (out / "suite-summary.json").write_text(json.dumps({**suite_summary(all_entries), "stress": stress}, indent=2) + "\n")
             # Wait for the active track's peers above, but never consume more model
-            # usage on later tracks after an invalid execution. MiniWoB reports a
-            # single pair (no suite counts); its nonzero exit signals unscorability.
+            # usage on later tracks after an invalid execution.
             failed = [entry for entry in entries if not entry.get("skipped") and (
                 entry.get("exit") != 0 or not entry.get("summary_valid") or entry.get("stopped_reason") or
-                (name != "miniwob" and (entry.get("requested_pairs") is None or
-                 entry.get("completed_pairs") != entry.get("requested_pairs"))))]
+                entry.get("requested_pairs") is None or
+                entry.get("completed_pairs") != entry.get("requested_pairs"))]
             if failed:
                 print(f"stopped: incomplete track {name}; no later tracks started", flush=True)
                 return 3
