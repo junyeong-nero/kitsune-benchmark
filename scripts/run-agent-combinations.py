@@ -1,4 +1,4 @@
-"""Bounded subscription-only pilot: freeze, first-nine audit, at most 27 CLI starts.
+"""Bounded subscription-only cohorts: pilot (27 CLI) or authorized expanded (207).
 
 No historical cohorts, automatic retries, paid fallback, native-agent inference,
 or automated attachment to the operator's Chrome profile.
@@ -10,19 +10,21 @@ from dataclasses import replace
 import hashlib
 import json
 from pathlib import Path
+import shutil
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from kitsune_benchmark import adapter
-from kitsune_benchmark.agent_combinations import CLI_SURFACES, CONDITIONS, FIRST_CLI_AUDIT_SIZE, KITSUNE_SHA, baselines, plan
-from kitsune_benchmark.agent_combinations_fixture import await_relay_close, prepared_fixture, relay_server
+from kitsune_benchmark.agent_combinations import CLI_SURFACES, FIRST_CLI_AUDIT_SIZE, KITSUNE_SHA, baselines, plan
+from kitsune_benchmark.agent_combinations_expanded import conditions, plan as scoped_plan
+from kitsune_benchmark.agent_combinations_fixture import await_relay_close, prepared_fixture, probe_native_catalog, relay_server
 from kitsune_benchmark.agent_combinations_runtime import digest, runtime_pins as pins, validation_fingerprint
 from kitsune_benchmark.cost_metrics import run_timing
-from kitsune_benchmark.personal_session import NativeSession
 from kitsune_benchmark.smoke import session_setup, source_revision
 
 PROTOCOL = ROOT / "docs/experiments/2026-11-13-agent-browsing-combinations.md"
+EXPANDED_PROTOCOL = ROOT / "docs/experiments/2026-11-13-agent-browsing-combinations-expanded.md"
 POLICY = (
     " Use only the prepared local fixture tabs and native browser observation/input APIs. "
     "Browser-side JavaScript/CDP may read rendered DOM text, element geometry and visible UI state, "
@@ -62,48 +64,31 @@ def observed_catalog(path, surface):
 
 
 def probe_catalog(config, path, surface):
-    session = NativeSession({"target": config["target"], "upstream": config["upstream"], "metadata_path": str(path)})
-    try:
-        session.start(env=config["upstream_env"])
-        response = session.request("initialize", {"protocolVersion": "2024-11-05", "capabilities": {},
-            "clientInfo": {"name": "combinations-catalog-check", "version": "1"}})
-        if "error" in response:
-            raise ValueError("Catalog initialization failed")
-        session.send({"jsonrpc": "2.0", "method": "notifications/initialized"})
-        params, seen = {}, set()
-        while True:
-            response = session.request("tools/list", params)
-            if "error" in response:
-                raise ValueError("Catalog listing failed")
-            cursor = response["result"].get("nextCursor")
-            if cursor is None:
-                break
-            if not isinstance(cursor, str) or not cursor or cursor in seen:
-                raise ValueError("Repeated/invalid catalog cursor")
-            seen.add(cursor)
-            params = {"cursor": cursor}
-    finally:
-        session.close()
+    probe_native_catalog(config, path)
     return native_catalog(path, surface)
 
 
-def freeze(preflight, out, project, *, start_cap=27):
-    if type(start_cap) is not int or not 1 <= start_cap <= 27:
-        raise ValueError("Authorized CLI start cap must be between 1 and 27")
+def freeze(preflight, out, project, *, start_cap=None, scope="pilot"):
+    treatment = scoped_plan(scope)
+    maximum = sum(r["execution"] == "cli" for r in treatment["attempts"])
+    start_cap = maximum if start_cap is None else start_cap
+    if type(start_cap) is not int or not 1 <= start_cap <= maximum:
+        raise ValueError(f"Authorized CLI start cap must be between 1 and {maximum}")
     report = json.loads(preflight.read_text())
-    expected = {c["unit"] + "--" + s for c in CONDITIONS for s in CLI_SURFACES}
+    expected = {c["unit"] + "--" + s for c in conditions(scope) for s in CLI_SURFACES}
     if (report.get("model_invoked") is not False or set(report.get("checks", {})) != expected
+            or report.get("plan") != json.loads(json.dumps(treatment))
             or report.get("status") != "fixture_setup_images_noncompletion_passed_remaining_gates_pending"
             or report.get("source_sha256") != validation_fingerprint()
             or set(report.get("interfaces", {})) != set(CLI_SURFACES)):
-        raise ValueError("Require complete, passing 21-cell no-inference evidence from the unchanged sources")
+        raise ValueError(f"Require complete, passing {len(expected)}-cell no-inference evidence from the unchanged sources")
     if report.get("pins") != pins():
         raise ValueError("Runtime pins changed since preflight")
     revision = source_revision(ROOT)
     if revision["dirty"] or source_revision(project) != {"revision": KITSUNE_SHA, "dirty": False}:
         raise ValueError("Freeze only clean benchmark and pinned Kitsune checkouts")
     catalogs = {}
-    for condition in CONDITIONS:
+    for condition in conditions(scope):
         for surface in CLI_SURFACES:
             key = condition["unit"] + "--" + surface
             check = report["checks"][key]
@@ -120,21 +105,27 @@ def freeze(preflight, out, project, *, start_cap=27):
                 if not (cleanup.get("owned_chrome_stopped") or cleanup.get("owned_launchers_stopped")):
                     raise ValueError("Owned runtime did not stop: " + key)
             catalog = native_catalog(folder / (target + "-native-metadata.json"), surface)
+            if any(native_catalog(folder / (phase + "-catalog.json"), surface) != catalog for phase in ("before", "after")):
+                raise ValueError("Preflight catalog-probe sequence drift: " + key)
             if surface in catalogs and catalogs[surface] != catalog:
                 raise ValueError("Catalog differs between preflight fixtures: " + surface)
             catalogs[surface] = catalog
     for surface, interface in report["interfaces"].items():
+        folder = preflight.parent / ("interface--" + surface)
         if (interface.get("model_invoked") is not False or interface.get("session_closed") is not True
                 or not interface.get("images")
-                or observed_catalog(preflight.parent / ("interface--" + surface) / "catalog-metadata.jsonl", surface) != catalogs[surface]):
+                or observed_catalog(folder / "catalog-metadata.jsonl", surface) != catalogs[surface]
+                or any(native_catalog(folder / (phase + "-catalog.json"), surface) != catalogs[surface] for phase in ("before", "after"))):
             raise ValueError("Actual stdio/image/catalog/cleanup interface not validated: " + surface)
-    manifest = {"benchmark": plan()["benchmark"], "benchmark_sha": revision["revision"],
-        "kitsune_project": str(project.resolve()), "kitsune_sha": KITSUNE_SHA, "plan": plan(),
+    manifest = {"benchmark": treatment["benchmark"], "scope": scope, "benchmark_sha": revision["revision"],
+        "kitsune_project": str(project.resolve()), "kitsune_sha": KITSUNE_SHA, "plan": treatment,
         "cli_ready": True, "authorized_cli_starts": start_cap,
+        "synthetic_safety_failure_policy": "record_and_continue" if scope == "expanded" else "stop",
         "manual_chrome": "pending_operator_manual_setup", "api_budget_usd": 0,
         "preflight": str(preflight.resolve()), "preflight_sha256": digest(preflight),
         "source_sha256": validation_fingerprint(), "runner_sha256": digest(__file__),
-        "protocol_sha256": digest(PROTOCOL), "pins": pins(), "catalogs": catalogs, "policy": POLICY,
+        "protocol_sha256": digest(EXPANDED_PROTOCOL if scope == "expanded" else PROTOCOL),
+        "pins": pins(), "catalogs": catalogs, "policy": POLICY,
         "limits": {"kitsune": 45, "playwright": 45, "other_mcp": 130, "personal": 180, "gallery": 240}}
     out.mkdir(mode=0o700, parents=True, exist_ok=False)
     adapter.write_json(out / "manifest.json", manifest)
@@ -145,7 +136,8 @@ def verify(manifest):
     if (source_revision(ROOT) != {"revision": manifest["benchmark_sha"], "dirty": False}
             or source_revision(Path(manifest["kitsune_project"])) != {"revision": KITSUNE_SHA, "dirty": False}
             or validation_fingerprint() != manifest["source_sha256"] or digest(__file__) != manifest["runner_sha256"]
-            or digest(PROTOCOL) != manifest["protocol_sha256"] or pins() != manifest["pins"]
+            or digest(EXPANDED_PROTOCOL if manifest.get("scope") == "expanded" else PROTOCOL) != manifest["protocol_sha256"]
+            or pins() != manifest["pins"]
             or digest(manifest["preflight"]) != manifest["preflight_sha256"]):
         raise ValueError("Frozen source/runtime/evidence drift; no automatic new cohort")
 
@@ -194,6 +186,8 @@ def run_one(row, manifest, folder):
             "execution_status": result["execution_status"],
             "scorable": grade.get("scorable"), "success": grade.get("task_success"),
             "functional_success": grade.get("functional_success"), "safety_pass": grade.get("safety_pass"),
+            "grade_violations": grade.get("violations", grade.get("forbidden_actions", [])),
+            "custody": grade.get("seeded_tab_custody"),
             "input": usage.get("input_tokens"), "cached_input": usage.get("cached_input_tokens"),
             "output": usage.get("output_tokens"), "calls": result.get("mcp_calls"), "elapsed": raw,
             "adjusted_elapsed": adjusted, "timing": timing, "post_call_inventory_sec": inventory,
@@ -209,7 +203,7 @@ def run_one(row, manifest, folder):
         return metrics
 
 
-def stop_reason(row):
+def stop_reason(row, scope="pilot"):
     expected_harness = "claude_code" if row["baseline"].startswith("claude-") else "codex"
     if row.get("harness") != expected_harness or row.get("reported_model") != row.get("model"):
         return "wrong harness or requested model"
@@ -219,7 +213,8 @@ def stop_reason(row):
         return "required usage/grade/timing evidence unavailable"
     if row["adjusted_elapsed"] < 0:
         return "invalid adjusted time"
-    if row.get("safety_pass") is False or row.get("outside_navigation") or row.get("violations") or row.get("teardown_error"):
+    if ((scope == "pilot" and row.get("safety_pass") is False)
+            or row.get("outside_navigation") or row.get("violations") or row.get("teardown_error")):
         return "out-of-scope action, harness violation or cleanup failure"
     return None
 
@@ -233,18 +228,21 @@ def do_run(out, limit):
     if (out / "stopped.json").exists():
         raise ValueError("Prior stop requires operator review; do not retry/replace attempts")
     manifest = json.loads((out / "manifest.json").read_text())
-    if manifest.get("plan") != json.loads(json.dumps(plan())) or manifest.get("cli_ready") is not True or manifest.get("api_budget_usd") != 0:
-        raise ValueError("Frozen matrix differs from the authorized subscription-only pilot")
+    scope = manifest.get("scope", "pilot")
+    treatment = scoped_plan(scope)
+    if manifest.get("plan") != json.loads(json.dumps(treatment)) or manifest.get("cli_ready") is not True or manifest.get("api_budget_usd") != 0:
+        raise ValueError("Frozen matrix differs from the authorized subscription-only scope")
+    maximum = sum(r["execution"] == "cli" for r in treatment["attempts"])
     cap = manifest.get("authorized_cli_starts")
-    if type(cap) is not int or not 1 <= cap <= 27:
+    if type(cap) is not int or not 1 <= cap <= maximum:
         raise ValueError("Missing/invalid explicit CLI authorization cap")
     verify(manifest)
     wanted = [r for r in manifest["plan"]["attempts"] if r["execution"] == "cli"]
     rows = load_rows(out)
-    if len(rows) > cap or len(wanted) != 27:
+    if len(rows) > cap or len(wanted) != maximum:
         raise ValueError("Invalid bounded matrix")
     for row, expected in zip(rows, wanted):
-        if any(row.get(k) != v for k, v in expected.items()) or stop_reason(row):
+        if any(row.get(k) != v for k, v in expected.items()) or stop_reason(row, scope):
             raise ValueError("Prior row is failed/incompatible; no automatic continuation")
     starts = list(out.glob("attempt-*/started.json"))
     if len(starts) != len(rows):
@@ -262,17 +260,19 @@ def do_run(out, limit):
         end = cap
     for row in wanted[len(rows):min(end, len(rows) + limit)]:
         verify(manifest)
+        if shutil.disk_usage(out).free < 2 * 1024 ** 3:
+            raise ValueError("Less than 2 GiB free; stopping before another counted start")
         folder = out / f"attempt-{row['seq']:03d}"
         # Count the start before provisioning or invoking an agent; never overwrite it.
         folder.mkdir(mode=0o700)
         adapter.write_json(folder / "started.json", row)
-        print(f"[{row['seq']}/27] {row['baseline']} {row['unit']}", flush=True)
+        print(f"[{row['seq']}/{cap}] {row['baseline']} {row['unit']}", flush=True)
         result = run_one(row, manifest, folder / "work")
         with (out / "runs.jsonl").open("a") as stream:
             stream.write(json.dumps(result, ensure_ascii=False) + "\n")
         (out / "runs.jsonl").chmod(0o600)
         print(f"  success={result['success']} input={result['input']} elapsed={result['elapsed']}", flush=True)
-        reason = stop_reason(result)
+        reason = stop_reason(result, scope)
         verify(manifest)
         if reason:
             adapter.write_json(out / "stopped.json", {"seq": row["seq"], "reason": reason})
@@ -286,20 +286,21 @@ def main():
     parser.add_argument("--out", required=True, type=Path)
     parser.add_argument("--preflight", type=Path)
     parser.add_argument("--kitsune-project", type=Path, default=ROOT.parent / "kitsune")
-    parser.add_argument("--limit", type=int, default=27,
-        help="freeze: total authorized CLI starts; run: max starts in this invocation")
+    parser.add_argument("--scope", choices=("pilot", "expanded"), default="pilot", help="freeze only; run uses its manifest")
+    parser.add_argument("--limit", type=int,
+        help="freeze: authorized total (default: scope cap); run: max this invocation (default: authorized remaining)")
     args = parser.parse_args()
-    if args.limit <= 0 or args.limit > 27:
-        parser.error("--limit must be between 1 and 27")
+    if args.limit is not None and not 1 <= args.limit <= 207:
+        parser.error("--limit must be between 1 and 207; freeze also enforces its scope cap")
     if args.action == "freeze":
         if args.preflight is None:
             parser.error("freeze requires --preflight")
-        manifest = freeze(args.preflight, args.out, args.kitsune_project, start_cap=args.limit)
+        manifest = freeze(args.preflight, args.out, args.kitsune_project, start_cap=args.limit, scope=args.scope)
         print(json.dumps({"cli_ready": True, "authorized_cli_starts": manifest["authorized_cli_starts"],
             "catalog_sizes": {s: len(c["tools"]) for s, c in manifest["catalogs"].items()}}))
         return 0
     try:
-        return do_run(args.out, args.limit)
+        return do_run(args.out, 207 if args.limit is None else args.limit)
     except Exception as error:
         if (args.out / "manifest.json").exists() and not (args.out / "stopped.json").exists():
             adapter.write_json(args.out / "stopped.json", {"reason": type(error).__name__ + ": " + str(error)})

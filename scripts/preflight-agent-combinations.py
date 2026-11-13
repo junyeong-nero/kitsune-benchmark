@@ -1,4 +1,4 @@
-"""Validate the pilot's 21 distinct runtime/fixture cells without model calls.
+"""Validate pilot (21) or expanded (161) runtime/fixture cells without model calls.
 
 Checks subscription login metadata, native catalogs, initial tabs, real image
 transport, noncompletion grading, three independent UI reference controls and
@@ -22,8 +22,9 @@ from PIL import Image
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from kitsune_benchmark.adapter import harness_environment, harness_preflight, resolve, write_json
-from kitsune_benchmark.agent_combinations import CLI_SURFACES, CONDITIONS, KITSUNE_TOOLS, MODELS, plan
-from kitsune_benchmark.agent_combinations_fixture import await_relay_close, prepared_fixture, reference_control, relay_server, screenshot
+from kitsune_benchmark.agent_combinations import CLI_SURFACES, CONDITIONS, KITSUNE_TOOLS, MODELS
+from kitsune_benchmark.agent_combinations_expanded import conditions, plan as scoped_plan
+from kitsune_benchmark.agent_combinations_fixture import await_relay_close, prepared_fixture, probe_native_catalog, reference_control, relay_server, screenshot
 from kitsune_benchmark.agent_combinations_runtime import runtime_pins, validation_fingerprint
 from kitsune_benchmark.agent_combinations_session import CombinationsSession
 from kitsune_benchmark.personal_session import NativeSession, error_detail
@@ -71,6 +72,7 @@ def image_evidence(result):
 
 def probe_fixture(out, condition, surface, project):
     with prepared_fixture(condition, surface, out, project) as (fixture, task, config, _):
+        probe_native_catalog(config, out / "before-catalog.json")
         session = CombinationsSession(config)
         try:
             session.start()
@@ -111,11 +113,14 @@ def probe_fixture(out, condition, surface, project):
             session.close()
             if session.evidence.get("teardown_error"):
                 raise ValueError("Fixture cleanup failed; inspect session-evidence.json")
+            if not session.evidence.get("error"):
+                probe_native_catalog(config, out / "after-catalog.json")
 
 
 def probe_interface(out, surface, project):
     """Replay the actual model-facing stdio/filter/image/EOF path with no model."""
     with prepared_fixture(CONDITIONS[2], surface, out, project) as (_, _, config, path):
+        probe_native_catalog(config, out / "before-catalog.json")
         server = relay_server(config, path, Path(os.path.relpath(out)))
         workspace = out / "cli-workspace"
         workspace.mkdir(mode=0o700)
@@ -139,6 +144,7 @@ def probe_interface(out, surface, project):
         evidence = json.loads(Path(config["evidence_path"]).read_text())
         if evidence.get("error") or evidence.get("teardown_error") or evidence.get("session_closed") is not True:
             raise ValueError("Model-facing relay setup/cleanup failed")
+        probe_native_catalog(config, out / "after-catalog.json")
         return {"model_invoked": False, "images": images, "session_closed": True, "tools": [t["name"] for t in tools]}
 
 
@@ -147,17 +153,19 @@ def main():
     parser.add_argument("--out", required=True, type=Path)
     parser.add_argument("--surface", choices=tuple(CLI_SURFACES), help="Debug one adapter; partial checks never approve inference")
     parser.add_argument("--kitsune-project", type=Path, default=ROOT.parent / "kitsune")
+    parser.add_argument("--scope", choices=("pilot", "expanded"), default="pilot")
     args = parser.parse_args()
     out = args.out.resolve()
     out.mkdir(parents=True, mode=0o700, exist_ok=False)
-    report = {"model_invoked": False, "execution_ready": False, "plan": plan(), "checks": {}, "interfaces": {},
+    report = {"model_invoked": False, "execution_ready": False, "plan": scoped_plan(args.scope), "scope": args.scope,
+              "checks": {}, "interfaces": {},
               "source_sha256": validation_fingerprint()}
     try:
         report["pins"] = runtime_pins()
         report["auth"] = {h: harness_preflight(h, resolve(h, h),
             harness_environment(h, resolve(h, h)), model=m) for h, m in MODELS.items()}
         write_json(out / "auth.json", report["auth"])
-        for condition in CONDITIONS:
+        for condition in conditions(args.scope):
             for surface in ((args.surface,) if args.surface else CLI_SURFACES):
                 key = condition["unit"] + "--" + surface
                 print("No-model fixture: " + key, flush=True)

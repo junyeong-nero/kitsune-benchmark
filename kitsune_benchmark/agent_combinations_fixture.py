@@ -14,6 +14,7 @@ import psutil
 from . import gallery, personal
 from .adapter import write_json
 from .agent_combinations_runtime import ROOT, chrome_runtime, zen_runtime
+from .personal_session import NativeSession
 from .runtime import BASE_ENV
 from .specs import Server
 
@@ -92,6 +93,31 @@ def relay_server(config, config_path, folder):
     return Server(target, sys.executable, command, (), 60, 45 if target in {"kitsune", "playwright"} else 130)
 
 
+def probe_native_catalog(config, path):
+    session = NativeSession({"target": config["target"], "upstream": config["upstream"], "metadata_path": str(path)})
+    try:
+        session.start(env=config["upstream_env"])
+        response = session.request("initialize", {"protocolVersion": "2024-11-05", "capabilities": {},
+            "clientInfo": {"name": "combinations-catalog-check", "version": "1"}})
+        if "error" in response:
+            raise ValueError("Catalog initialization failed")
+        session.send({"jsonrpc": "2.0", "method": "notifications/initialized"})
+        params, seen = {}, set()
+        while True:
+            response = session.request("tools/list", params)
+            if "error" in response:
+                raise ValueError("Catalog listing failed")
+            cursor = response["result"].get("nextCursor")
+            if cursor is None:
+                break
+            if not isinstance(cursor, str) or not cursor or cursor in seen:
+                raise ValueError("Repeated/invalid catalog cursor")
+            seen.add(cursor)
+            params = {"cursor": cursor}
+    finally:
+        session.close()
+
+
 def await_relay_close(config, folder):
     deadline = time.monotonic() + 15
     while time.monotonic() < deadline:
@@ -129,25 +155,52 @@ def reference_control(session, condition, trial):
     """
     if session.config["target"] != "playwright":
         raise ValueError("Reference controls use the explicit private Playwright path")
-    if condition["task"] == "pb-longpage-01":
-        code = (f"const p=page.context().pages().find(p=>p.url()==={json.dumps(trial.url('/memo'))}); await p.bringToFront(); "
-                f"for(const [name,value] of Object.entries({json.dumps(trial.impl.expected, ensure_ascii=False)})) "
+    if condition["track"] == "personal":
+        kind = trial.task["fixture"]
+        destination, button = {"article": ("/article", "저장"), "products": ("/compare", "저장"),
+            "policy": ("/search", "저장"), "orders": ("/orders", "저장"),
+            "calendar": ("/calendar", "초안 저장"), "contact": ("/contact", "임시저장")}.get(kind, ("/memo", "저장"))
+        values = {"메모": trial.expected["answer"]} if "answer" in trial.expected else trial.expected
+        source = {"policy": "/policy/current", "orders": "/order/2"}.get(kind)
+        code = (f"const p=page.context().pages().find(p=>p.url()==={json.dumps(trial.url(destination))}); "
+                + (f"const source=await page.context().newPage(); await source.goto({json.dumps(trial.url(source))}); " if source else "")
+                + "await p.bringToFront(); "
+                + f"for(const [name,value] of Object.entries({json.dumps(values, ensure_ascii=False)})) "
                 "await p.getByLabel(name,{exact:true}).fill(value); "
-                "await p.getByRole('button',{name:'저장',exact:true}).click();")
-    elif condition["task"] == "ui-table":
-        data = json.dumps(trial.mine, ensure_ascii=False)
-        code = ("await page.getByRole('button',{name:'필수만 허용'}).click(); "
-                f"const d={data}; const names=Object.fromEntries(d.rows.map(r=>[r.id,r.name])); "
+                f"await p.getByRole('button',{{name:{json.dumps(button)},exact:true}}).click();")
+    else:
+        steps = {
+            "ui-table": "const names=Object.fromEntries(d.rows.map(r=>[r.id,r.name])); "
                 "const pages=await page.locator('#sec-stock-table .pager button').count(); "
                 "for(let i=0;i<pages;i++){await page.locator('#sec-stock-table .pager button').nth(i).click(); "
                 "for(const id of d.expected){const box=page.getByRole('checkbox',{name:names[id]+' 선택',exact:true}); "
-                "if(await box.count()) await box.check();}}")
-    elif condition["task"] == "mm-chart":
-        answer = json.dumps(trial.mine["answer"], ensure_ascii=False)
-        code = (f"await page.locator('#sec-mm-chart input[value='+JSON.stringify({answer})+']').check(); "
-                "await page.locator('#sec-mm-chart .puzzle-submit').click();")
-    else:
-        raise ValueError("No reference control for an unapproved task")
+                "if(await box.count()) await box.check();}}",
+            "ui-infinite": "const b=page.getByRole('button',{name:d.target+' 저장',exact:true}); "
+                "for(let i=0;i<20 && !(await b.count());i++){await page.locator('.sentinel').scrollIntoViewIfNeeded(); "
+                "await page.waitForTimeout(600);} await b.click();",
+            "ui-sortable": "await page.getByRole('button',{name:new RegExp('^'+d.target+' 순서 변경')}).focus(); "
+                "await page.keyboard.press(' '); for(let i=0;i<d.items.indexOf(d.target);i++) await page.keyboard.press('ArrowUp'); "
+                "await page.keyboard.press(' ');",
+            "ui-datepicker": "await page.getByLabel('체크인').click(); await page.getByRole('button',{name:'다음 달'}).click(); "
+                "await page.getByRole('button',{name:'2027년 7월 '+Number(d.target.slice(8))+'일',exact:true}).click();",
+            "ui-autocomplete": "await page.getByRole('combobox').pressSequentially(d.target,{delay:60}); "
+                "await page.getByRole('option',{name:d.target,exact:true}).click();",
+            "ui-shadow": "const h=page.locator('newsletter-signup'); await h.getByLabel('이메일').fill(d.email); "
+                "await h.getByLabel('주간 소식').check(); await h.getByRole('button',{name:'구독 신청'}).click();",
+            "ui-iframe": "const f=page.frameLocator('iframe[title=\"배송지 편집\"]'); await f.getByLabel('우편번호').fill(d.zip); "
+                "await f.getByLabel('상세주소').fill(d.detail); await f.getByRole('button',{name:'저장'}).click();",
+            "ui-editor": "await page.getByRole('textbox',{name:'메모 본문'}).click(); await page.keyboard.press('Meta+ArrowDown'); "
+                "await page.keyboard.press('End'); await page.keyboard.press('Enter'); await page.keyboard.type(d.sentence); "
+                "await page.locator('#sec-memo-editor').getByRole('button',{name:'저장',exact:true}).click();",
+            "ui-toast": "await page.getByRole('button',{name:'보고서 생성'}).click(); const toast=page.locator('.toast'); "
+                "await toast.waitFor({timeout:8000}); const code=(await toast.textContent()).split('확인 코드: ')[1].trim(); "
+                "await page.getByLabel('확인 코드').fill(code); await page.getByRole('button',{name:'제출'}).click();",
+            "mm-chart": "await page.locator('#sec-mm-chart input[value='+JSON.stringify(d.answer)+']').check(); "
+                "await page.locator('#sec-mm-chart .puzzle-submit').click();",
+        }
+        code = (("await page.getByRole('button',{name:'필수만 허용'}).click(); " if condition["layout"] == "crowded" else "")
+                + f"await page.locator('#sec-{trial.task.component}').scrollIntoViewIfNeeded(); "
+                + f"const d={json.dumps(trial.mine, ensure_ascii=False)}; " + steps[condition["task"]])
     result = session.tool("browser_run_code_unsafe", {"code": "async (page) => {" + code + " await page.waitForTimeout(500); }"})
     session.evidence["snapshots"].append(session.inventory())
     session.evidence["tab_calls"].append({"tool": "browser_run_code_unsafe", "error": False})

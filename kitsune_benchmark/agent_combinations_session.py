@@ -82,6 +82,8 @@ class CombinationsSession(ExpandedSession):
     def request(self, method, params=None, *, notify=None, role="harness"):
         started = time.time_ns()
         response = super().request(method, params, notify=notify, role=role)
+        if role == "harness" and method == "tools/call" and not self.evidence["setup_complete"]:
+            self.evidence.setdefault("setup_rpc", []).append({"request": params, "response": response})
         if (self.config["target"] == "browser-harness" and method == "tools/call"
                 and (params or {}).get("name") == "browser_screenshot"
                 and "error" not in response and not response.get("result", {}).get("isError")):
@@ -117,6 +119,7 @@ class CombinationsSession(ExpandedSession):
                     raise ValueError("agent-browser inventory failed")
                 tabs = [{"id": t["targetId"], "tab_id": t["tabId"], "url": t["url"],
                          "title": t.get("title", ""), "active": t["active"]} for t in response["data"]["tabs"]]
+            self.evidence["last_native_tabs"] = tabs
             if (not tabs or len({t["id"] for t in tabs}) != len(tabs)
                     or sum(t["active"] is True for t in tabs) != 1):
                 raise ValueError("Invalid native tab inventory/selection")
@@ -141,6 +144,17 @@ class CombinationsSession(ExpandedSession):
             "browser-harness": ("browser_goto", {"url": url}),
             "agent-browser": ("agent_browser_open", {"url": url})}[target]
         self.tool(name, args)
+        if target == "browser-harness":
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline:
+                observed = text_json(self.tool("browser_current_tab", {}))
+                if observed.get("targetId") == tab["id"] and observed.get("url") == url:
+                    remaining = deadline - time.monotonic()
+                    if remaining > 0 and text_json(self.tool("browser_wait_for_load", {"timeout": remaining})).get("ok") is True:
+                        return
+                    break
+                time.sleep(0.05)
+            raise ValueError("Browser Harness setup navigation did not settle: " + url)
 
     def user_closes_initial_tab(self, initial_url, task):
         if initial_url != "about:blank":
@@ -199,16 +213,28 @@ class CombinationsSession(ExpandedSession):
         self.select_tab(current)
         self.navigate(self.config["bootstrap_url"], current)
         self.navigate(self.config["urls"][0], current)
+        known_ids = {t["id"] for t in tabs}
         for url in self.config["urls"][1:]:
             name = {"devtools": "new_page", "browser-harness": "browser_new_tab",
                     "agent-browser": "agent_browser_tab_new"}[target]
-            self.tool(name, {"url": url})
+            if target == "browser-harness":
+                # Native new_tab(nonblank) can reuse a stale blank target. Force
+                # distinct creation, then navigate and wait for that exact target.
+                created = text_json(self.tool(name, {"url": "about:blank"}))["targetId"]
+                if created in known_ids:
+                    raise ValueError("Browser Harness reused a fixture target")
+                known_ids.add(created)
+                self.navigate(url, {"id": created})
+            else:
+                self.tool(name, {"url": url})
         tabs = self.inventory()
+        self.evidence["fixture_tabs_before_validation"] = tabs
         if sorted(t["url"] for t in tabs) != sorted(self.config["urls"]):
             raise ValueError("Fixture starting tabs do not match")
         desired = self.config["urls"][self.config["active_index"]]
         self.select_tab(next(t for t in tabs if t["url"] == desired))
         tabs = self.inventory()
+        self.evidence["fixture_selection_before_validation"] = tabs
         if not any(t["url"] == desired and t["active"] for t in tabs):
             raise ValueError("Fixture starting selection does not match")
         self.evidence.update(setup_complete=True, initial_tabs=tabs, snapshots=[tabs], tab_ids="stable",
