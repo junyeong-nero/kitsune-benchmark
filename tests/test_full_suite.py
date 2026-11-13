@@ -7,6 +7,7 @@ import tempfile
 import unittest
 from contextlib import redirect_stdout
 from unittest.mock import patch
+from types import SimpleNamespace
 
 SPEC = importlib.util.spec_from_file_location(
     "run_full_suite", Path(__file__).resolve().parents[1] / "scripts/run-full-suite.py")
@@ -45,11 +46,13 @@ class FullSuiteTests(unittest.TestCase):
             if sequential:
                 argv.append("--sequential")
             with patch.object(suite.sys, "argv", argv), \
+                 patch.object(suite, "run_stress_track", return_value={"complete": True, "status": "completed"}) as stress, \
                  patch.object(suite, "git_identity", return_value={}), \
                  patch.object(suite, "commands", return_value=tracks if tracks is not None else
                               [(first, ["personal"]), ("next", ["personal"])]), \
                  patch.object(suite.subprocess, "Popen", side_effect=popen), redirect_stdout(io.StringIO()):
                 code = suite.main()
+            self.stress_calls = stress.call_count
             entries = [json.loads(line) for line in (out / "suite-log.jsonl").read_text().splitlines()]
             self.manifest = json.loads((out / "suite-manifest.json").read_text())
             self.summary = json.loads((out / "suite-summary.json").read_text())
@@ -222,6 +225,7 @@ class FullSuiteTests(unittest.TestCase):
         self.assertEqual(self.manifest["attempt_plan"], [{"attempt": 1, "order": "ab"}, {"attempt": 2, "order": "ba"}])
         self.assertEqual(self.summary["by_order"]["ba"], entries[2:])
         self.assertEqual(self.summary["by_attempt"]["1"], entries[:2])
+        self.assertEqual(self.stress_calls, 1, "stress runs once per invocation, not once per graded attempt")
         self.assertEqual(entries[-1]["by_target"], result["by_target"])
 
     def test_lite_plan_counterbalanced_cohort_end_to_end(self):
@@ -273,6 +277,62 @@ class FullSuiteTests(unittest.TestCase):
         self.assertEqual(launched[0][launched[0].index("--targets") + 1], "kitsune,playwright")
         self.assertEqual(entries[0]["order"], "ba")
 
+    def test_stress_failure_prevents_model_launch(self):
+        with tempfile.TemporaryDirectory() as directory:
+            argv = ["suite", "--kitsune-project", directory, "--out", directory]
+            with patch.object(suite.sys, "argv", argv), patch.object(suite, "git_identity", return_value={}), \
+                 patch.object(suite, "run_stress_track", return_value={"complete": False, "status": "stopped"}), \
+                 patch.object(suite.subprocess, "Popen") as launch, redirect_stdout(io.StringIO()):
+                self.assertEqual(suite.main(), 3)
+            launch.assert_not_called()
+            result = json.loads((Path(directory) / 'suite-summary.json').read_text())
+            self.assertEqual(result['entries'], [])
+            self.assertEqual(result['stress']['status'], 'stopped')
+
+    def test_stress_evidence_validation(self):
+        from kitsune_benchmark.stress import stress_plan
+        plan = stress_plan('release-v1')
+        good = {**plan, 'status': 'completed', 'completed_levels': 18,
+                'levels': [{**s, 'valid': True} for s in plan['schedule']]}
+        for result, expected in ((good, True), ({}, False),
+                                 ({**good, 'levels': []}, False),
+                                 ({**good, 'model_invoked': True}, False)):
+            with self.subTest(expected=expected), tempfile.TemporaryDirectory() as directory:
+                def execute(command, stdout, stderr):
+                    self.assertIn('stress', command)
+                    self.assertIn('release-v1', command)
+                    stdout.write(json.dumps(result))
+                    return SimpleNamespace(returncode=0)
+                with patch.object(suite.subprocess, 'run', side_effect=execute):
+                    self.assertEqual(suite.run_stress_track(directory, Path(directory))['complete'], expected)
+
+    def test_stress_comparison_selection(self):
+        result = {'requested_pairs': 1, 'completed_pairs': 1}
+        self.invoke([(0, result)] * 4, extra=('--stress-comparison',))
+        self.assertEqual(self.manifest['stress']['protocol'], 'stress-compare-v1')
+        self.assertEqual(self.manifest['stress']['profile'], 'shared-browser-v1')
+
+    def test_stress_comparison_evidence_and_command(self):
+        from kitsune_benchmark.stress_compare import comparison_plan
+        plan = comparison_plan('shared-browser-v1')
+        result = {**plan, 'status': 'completed', 'completed_levels': 24,
+                  'levels': [{**s, 'valid': True} for s in plan['schedule']]}
+        with tempfile.TemporaryDirectory() as directory:
+            def execute(command, stdout, stderr):
+                self.assertIn('stress-compare', command)
+                self.assertIn('shared-browser-v1', command)
+                stdout.write(json.dumps(result))
+                return SimpleNamespace(returncode=0)
+            with patch.object(suite.subprocess, 'run', side_effect=execute):
+                self.assertTrue(suite.run_stress_track(directory, Path(directory), comparison=True)['complete'])
+
+    def test_explicit_skip_stress_is_recorded(self):
+        result = {'requested_pairs': 1, 'completed_pairs': 1}
+        self.invoke([(0, result)] * 4, extra=('--skip-stress',))
+        self.assertFalse(self.manifest['stress']['enabled'])
+        self.assertEqual(self.summary['stress']['reason'], 'explicit_skip_stress')
+        self.assertEqual(self.stress_calls, 0)
+
     def test_from_starts_at_the_entry_and_records_the_previous_suite(self):
         tracks = [("personal-v0", ["personal"]), ("coexistence-user-seeded", ["coexistence"]), ("external", ["external"])]
         ok = {"requested_pairs": 1, "completed_pairs": 1}
@@ -286,6 +346,7 @@ class FullSuiteTests(unittest.TestCase):
         self.assertEqual(self.manifest["resumed_from"], "coexistence-user-seeded")
         self.assertEqual(self.manifest["previous_suite"], str(Path(previous).resolve()))
         self.assertEqual(self.manifest["commands"], ["coexistence-user-seeded", "external"])
+        self.assertEqual(self.stress_calls, 1, "a resumed invocation has its own stress preflight unless skipped")
 
     def test_from_refuses_before_launch(self):
         with tempfile.TemporaryDirectory() as previous, tempfile.TemporaryDirectory() as empty:

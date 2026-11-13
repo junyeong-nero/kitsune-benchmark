@@ -75,6 +75,30 @@ By default runs use Claude Code on the subscription: they count against your pla
 back to an API key. API billing (`--harness claude-api --allow-api-billing`) and Codex (`--harness codex`) are opt-in.
 The [running guide](docs/running.md) covers every track, budgets, stopping and exit codes.
 
+## Model-free concurrency benchmark
+
+```sh
+uv run --locked python -m kitsune_benchmark stress --profile release-v1          # plan only
+uv run --locked python -m kitsune_benchmark stress --profile release-v1 --execute
+```
+
+One private shared browser, 1–32 MCP clients, three repeats; **no agent/model calls**.
+The full-suite script includes this separate track before model work (`--skip-stress`
+is the recorded opt-out). It does not change graded task scores or the frozen
+taskset. See [protocol and safety limits](docs/stress.md) and the
+[first published observation](docs/results/2026-10-26-kitsune-stress-v1.md).
+
+For a fresh, counter-ordered **Kitsune vs Playwright shared-browser comparison**:
+
+```sh
+uv run --locked python -m kitsune_benchmark stress-compare --profile shared-browser-v1 --execute
+```
+
+This is separate `stress-compare-v1` evidence, not pooled with the standalone
+Kitsune track. In a full suite, `--stress-comparison` selects it instead of the
+Kitsune-only prelude. See [protocol](docs/stress-comparison.md) and
+[paired results](docs/results/2026-10-26-shared-browser-stress-comparison.md).
+
 ## Tests
 
 ```sh

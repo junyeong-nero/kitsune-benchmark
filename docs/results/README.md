@@ -8,6 +8,16 @@ tool policies and instrumentation are not a single comparable leaderboard.
 For the same reports grouped by Kitsune revision, see
 [results by Kitsune version](kitsune-versions.md).
 
+## Model-free stress reports
+
+| Date | Report | Model | Scope and outcome |
+| --- | --- | --- | --- |
+| 2026-10-28 | [Kitsune #298/#299 candidate vs main, shared-browser A/B](2026-10-28-kitsune-298-299-ab.md) | None | `stress-compare-v1`, predeclared A-B-B-A, 4 full runs, 96 arms, 1,747,864 requests, 0 errors. Candidate (one cached TLS context, quieter per-call logs, first extension connection kept) cut MCP CPU per request from 12.0–12.1 to 0.74–0.76 ms at one client and below every baseline arm at every level; Kitsune/Playwright throughput 0.17–0.56× → 1.37–2.87×. Startup kept generation 1 in 24/24 candidate arms. Unmerged branch; tab-list workload only |
+| 2026-10-26 | [Kitsune vs Playwright shared-browser stress](2026-10-26-shared-browser-stress-comparison.md) | None | `stress-compare-v1`, fresh KP/PK pairs, 1–32 clients × 2 repeats per target: 280,008 requests, 0 errors. Playwright 1.91–6.14× median throughput on tab-list load; Kitsune CPU dominated by MCP processes. Not a general automation ranking; startup readiness failures excluded and disclosed |
+| 2026-10-26 | [Shared-browser stress-v1](2026-10-26-kitsune-stress-v1.md) | None | Kitsune `v0.7.0-4-g5425050`, `release-v1`, single-table probe: 1–32 clients × 3 repeats, 77,334 measured requests, no errors. Throughput flattens at 8–16 then falls at 32 on this host; not a release comparison. Pre-publication intrusive-probe run excluded |
+
+## Task and analysis reports
+
 | Date | Report | Model | Scope and outcome |
 | --- | --- | --- | --- |
 | 2026-11-11 | [Kitsune scripting-surface schema text (kitsune#521, PR #523), Kitsune A/B](2026-11-11-kitsune-521-schema-trim-ab.md) | `claude-opus-5-5`, medium (Claude Code subscription) | Both `KITSUNE_SCRIPTING=1`: main `7b089d9` vs PR #523 `695fdd8` (shorter retained-tool parameter descriptions), 80 runs, 40/40 each. First request 7,638 → 6,696; input **0.882**, requests 0.991, cost **0.955**; 0 argument-validation errors in either arm. Cells without Python (31): input 0.902, cost 0.989. Supported |

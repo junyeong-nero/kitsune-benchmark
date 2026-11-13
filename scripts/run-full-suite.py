@@ -24,6 +24,12 @@ model_request_observed false, stopped_before_client_timeout true) is rerun whole
 ports, up to N times. Each retry is in the pair summary and the entry's suite-log line as setup_retries, with the failed
 run's error_detail and the discarded runs of the pair's other target. Any other failure still stops the suite.
 
+Before graded tracks, the separate model-free stress-v1/release-v1 track runs once,
+without concurrent model/track work. --stress-comparison selects paired
+stress-compare-v1/shared-browser-v1 instead; --skip-stress explicitly omits it and
+records that choice. Stress results never enter task success denominators. A stopped or
+invalid stress run stops the suite before model usage.
+
 The default harness is `claude`: Claude Code on the claude.ai subscription login, which spends no API
 credit and has no dollar cap. API-key harnesses (`claude-api`, `claude-api-full`) bill ANTHROPIC_API_KEY
 credit and need --allow-api-billing plus --budget-usd and --max-budget-usd-per-run.
@@ -93,6 +99,36 @@ def suite_summary(entries: list[dict]) -> dict:
     return {"entries": entries, "by_order": group("order"), "by_attempt": group("attempt")}
 
 
+def run_stress_track(project: str, out: Path, *, comparison: bool = False) -> dict:
+    """One bounded, fixed-profile run; do not accept exit zero alone as evidence."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from kitsune_benchmark.stress import stress_plan
+    from kitsune_benchmark.stress_compare import comparison_plan
+    plan = comparison_plan("shared-browser-v1") if comparison else stress_plan("release-v1")
+    command = [sys.executable, "-m", "kitsune_benchmark", "stress-compare" if comparison else "stress", "--execute",
+               "--profile", plan["profile"], "--kitsune-project", project]
+    with (out / "stress.json").open("x") as stdout, (out / "stress.err").open("x") as stderr:
+        done = subprocess.run(command, stdout=stdout, stderr=stderr)
+    try:
+        result = json.loads((out / "stress.json").read_text())
+    except (OSError, ValueError):
+        result = {}
+    if not isinstance(result, dict):
+        result = {}
+    levels = result.get("levels")
+    complete = (done.returncode == 0 and result.get("status") == "completed"
+        and all(result.get(k) == v for k, v in plan.items())
+        and result.get("completed_levels") == len(plan["schedule"])
+        and isinstance(levels, list) and len(levels) == len(plan["schedule"])
+        and all(isinstance(level, dict) and level.get("valid") is True
+                and all(level.get(k) == v for k, v in scheduled.items())
+                for level, scheduled in zip(levels, plan["schedule"])))
+    return {"protocol": plan["protocol"], "profile": plan["profile"], "complete": complete,
+            "status": result.get("status", "invalid_summary"), "exit": done.returncode,
+            "run_dir": result.get("run_dir"), "output_path": str(out / "stress.json"),
+            "stopped_reason": result.get("stopped_reason")}
+
+
 def git_identity(project: str | Path, match: str | None = None) -> dict:
     """Revision and tag-relative name of a checkout, for grouping results by version."""
     def git(*argv: str) -> str | None:
@@ -116,6 +152,10 @@ def main() -> int:
     parser.add_argument("--allow-api-billing", action="store_true",
                         help="Confirm that an API-key harness may spend ANTHROPIC_API_KEY credit")
     parser.add_argument("--out", required=True)
+    stress_selection = parser.add_mutually_exclusive_group()
+    stress_selection.add_argument("--skip-stress", action="store_true", help="Explicitly omit model-free stress")
+    stress_selection.add_argument("--stress-comparison", action="store_true",
+                                  help="Use paired stress-compare-v1 instead of the Kitsune-only stress-v1 track")
     parser.add_argument("--plan", choices=tuple(PLANS), default="full",
                         help="full: every data variant; lite: personal v0-v1 and gallery v0 (both layouts), "
                              "coexistence and external unchanged")
@@ -194,10 +234,19 @@ def main() -> int:
                 "retry_setup_failures": args.retry_setup_failures,
                 "order_key": {"a": "playwright", "b": "kitsune"}, "plan": args.plan, "commands": [name for name, _ in planned],
                 "resumed_from": args.from_entry,
-                "previous_suite": str(Path(args.previous_suite).resolve()) if args.previous_suite else None}
+                "previous_suite": str(Path(args.previous_suite).resolve()) if args.previous_suite else None,
+                "stress": {"protocol": "stress-compare-v1" if args.stress_comparison else "stress-v1",
+                           "profile": "shared-browser-v1" if args.stress_comparison else "release-v1", "enabled": not args.skip_stress,
+                           "placement": "once_before_graded_tracks", "included_in_task_scores": False}}
     (out / "suite-manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
     log = out / "suite-log.jsonl"
     all_entries = []
+    stress = ({"status": "skipped", "reason": "explicit_skip_stress"} if args.skip_stress
+              else run_stress_track(args.kitsune_project, out, comparison=args.stress_comparison))
+    (out / "suite-summary.json").write_text(json.dumps({**suite_summary(all_entries), "stress": stress}, indent=2) + "\n")
+    if not args.skip_stress and not stress["complete"]:
+        print("stopped: stress track incomplete; no model tracks started", flush=True)
+        return 3
     for attempt in plan:
         attempt_dir = out if args.attempts == 1 else out / f"attempt-{attempt['attempt']:03d}"
         attempt_dir.mkdir(exist_ok=True)
@@ -267,7 +316,7 @@ def main() -> int:
                 print(json.dumps(entry), flush=True)
                 with log.open("a") as handle:
                     handle.write(json.dumps(entry) + "\n")
-            (out / "suite-summary.json").write_text(json.dumps(suite_summary(all_entries), indent=2) + "\n")
+            (out / "suite-summary.json").write_text(json.dumps({**suite_summary(all_entries), "stress": stress}, indent=2) + "\n")
             # Wait for the active track's peers above, but never consume more model
             # usage on later tracks after an invalid execution.
             failed = [entry for entry in entries if not entry.get("skipped") and (

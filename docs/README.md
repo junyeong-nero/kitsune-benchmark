@@ -27,6 +27,16 @@ allowlist, and grades them from outside the agent. Pick the guide that matches w
 | [Hostile UI](hostile.md) (draft, no model) | 26 real-web components that resist automation × scripted tool strategies | Kitsune v0.7.1: Playwright 23/26, Kitsune 20/26 |
 | [Personal state](personal-state.md) (specification only) | Tasks that need a personal profile's history, bookmarks or logins | Not implemented |
 
+Separate model-free performance tracks (not part of the task scores above):
+
+- [Model-free stress](stress.md): concurrent MCP clients sharing one private browser, `stress-v1` / `release-v1`.
+  The [2026-10-26 report](results/2026-10-26-kitsune-stress-v1.md) covers 1–32 clients × 3 repeats on Kitsune
+  v0.7.0+4, 77,334 requests and no errors.
+- [Shared-browser stress comparison](stress-comparison.md): fresh Kitsune/Playwright deployments, shared-context
+  proofs, counter-ordered load and response/observer metrics (`stress-compare-v1`). The
+  [2026-10-26 report](results/2026-10-26-shared-browser-stress-comparison.md) covers 24 arms, 280,008 requests
+  and no errors; the [#298/#299 A/B](results/2026-10-28-kitsune-298-299-ab.md) compares two Kitsune revisions.
+
 WebArena-style tasks and real personal accounts are not implemented.
 
 ## Reference
@@ -37,6 +47,8 @@ WebArena-style tasks and real personal accounts are not implemented.
 | [Personal execution config](../configs/benchmarks/personal.json) | Model and version pins, the default pilot tasks, the time budget |
 | [Codex harness](codex-harness.md) | Authentication, isolation, tool policy, process cleanup and trace audit for the Codex harness |
 | [Resource methodology](resources.md) | What the CPU/RSS numbers include and how to read them |
+| [Model-free stress](stress.md) | Independent stress-v1 protocol, release profile, resource safety stops and full-suite integration |
+| [Shared-browser stress comparison](stress-comparison.md) | Independent stress-compare-v1, shared-browser-v1 profile, HTTP sessions, shared-context proof and paired metrics |
 | [Optimization findings](optimization-findings.md) | Cache, observation and schema evidence, native RPC logs, offline analysis |
 | [MCP comparison candidates](comparison-candidates.md) | Other MCP servers and browsers worth adding; none are adapters yet |
 | [Experiment plans](experiments/) | Preregistered A/B plans; their results are in the [results index](results/README.md) |
