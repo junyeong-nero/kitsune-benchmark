@@ -83,6 +83,8 @@ def prepared_fixture(condition, surface, folder, project):
 
 
 def relay_server(config, config_path, folder):
+    # The CLI starts MCP in its own workspace, not the operator's cwd.
+    config_path, folder = config_path.resolve(), folder.resolve()
     target = config["target"]
     command = (str(ROOT / "kitsune_benchmark/mcp_tool_filter.py"),
         json.dumps(config["enabled_tools"] or None), "--metadata", str(folder / "catalog-metadata.jsonl"), "--",

@@ -198,6 +198,8 @@ def run_one(row, manifest, folder):
             "teardown_error": evidence.get("teardown_error"), "run_dir": result["run_dir"],
             "viewport": fixture.viewport_reports(target) if row["track"] == "personal" else None}
         adapter.write_json(folder / "metrics.json", metrics)
+        if result["execution_status"] != "completed_unscored" or grade.get("scorable") is not True:
+            return metrics  # Preserve the primary failure, not a secondary missing catalog.
         after = probe_catalog(config, folder / "after-catalog.json", surface)
         if after != before or observed_catalog(model_catalog, surface) != before:
             raise ValueError("Actual/post-attempt catalog drift; retained agent-result.json and metrics.json")

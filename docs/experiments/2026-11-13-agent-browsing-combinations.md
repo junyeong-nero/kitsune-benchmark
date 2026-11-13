@@ -1,6 +1,9 @@
 # Agent-browsing combinations: token-efficiency comparison
 
-**Status: CLI PREFLIGHT PASSED / CLEAN MANIFEST FREEZE REQUIRED / MANUAL CHROME PENDING.**
+**Status: PILOT V1 STOPPED AT CLI INITIALIZATION / RESTART AUTHORIZATION REQUIRED.**
+The first counted CLI start failed during MCP initialization; no model turn or
+usage was recorded. See the [stopped pilot report](../results/2026-11-13-agent-browsing-combinations-pilot.md).
+Do not resume that manifest or erase its counted start.
 The operator subsequently authorized merging the benchmark work into `main` and
 running this diagnostic **before a separately authorized main comparison**. Local
 merge `527aea0` integrates the preparation scaffold with updated upstream `main`;
@@ -290,12 +293,20 @@ evidence-supported presentation update. The scaffold is now merged into local
   UI controls and all seven actual stdio/image/cleanup replays passed in
   `artifacts/agent-combinations-final-preflight-v2/`. The regression suite ran
   606 tests with 23 opt-in skips and no failures.
-- [ ] Freeze the clean executable manifest before inference.
+- [x] Freeze the clean executable manifest at `90cf839` in
+  `artifacts/agent-combinations-pilot-v1/manifest.json`.
 - [ ] Prepare manual Chrome fixture instructions and observable grading.
 - [x] Implement the bounded runner, failure retention and first-nine CLI audit gate.
-- [ ] Run only the approved pilot starts and retain all failed/partial evidence.
-- [ ] Audit and publish a reviewed pilot report here; decide separately whether
-  further authorized measurement can support a product README figure.
+- [ ] Complete the approved pilot: **stopped after one counted CLI start**;
+  all raw failed/partial evidence is retained, no retry or replacement.
+- [x] Publish the stopped-at-initialization report; it supports no efficiency,
+  completion-rate or product README claim.
+- [x] Correct the cross-working-directory metadata path bug. Post-fix: 608 tests
+  with 23 opt-in skips, plus all 21 fixture cells/three positive controls/seven
+  different-cwd stdio image and cleanup replays passed without models in
+  `artifacts/agent-combinations-postfix-preflight-v1/`.
+- [ ] Obtain restart authorization; preserve the failed start in cumulative
+  accounting and do not automatically replace it.
 
 Plan-only command (no browser/model):
 
@@ -303,14 +314,16 @@ Plan-only command (no browser/model):
 uv run --locked python -m kitsune_benchmark.agent_combinations
 ```
 
-Execution workflow (new evidence directories only; `freeze` invokes no model):
+Execution workflow (**new inference requires restart authorization**; new evidence
+directories only; `freeze` invokes no model):
 
 ```sh
 uv run --locked python scripts/preflight-agent-combinations.py --out artifacts/<preflight>
 uv run --locked python scripts/run-agent-combinations.py freeze \
   --preflight artifacts/<preflight>/preflight.json --out artifacts/<pilot>
 uv run --locked python scripts/run-agent-combinations.py run --out artifacts/<pilot>
-# Stops after the first nine. Review raw evidence before creating the audit approval.
+# pilot-v1 is stopped and must not be retried. A separately authorized new cohort
+# stops after the first nine; review raw evidence before creating its audit approval.
 ```
 
 The offline plan command deliberately remains `execution_ready: false`; only a

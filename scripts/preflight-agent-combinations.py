@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+from contextlib import chdir
 import hashlib
 import io
 import json
@@ -115,10 +116,13 @@ def probe_fixture(out, condition, surface, project):
 def probe_interface(out, surface, project):
     """Replay the actual model-facing stdio/filter/image/EOF path with no model."""
     with prepared_fixture(CONDITIONS[2], surface, out, project) as (_, _, config, path):
-        server = relay_server(config, path, out)
+        server = relay_server(config, path, Path(os.path.relpath(out)))
+        workspace = out / "cli-workspace"
+        workspace.mkdir(mode=0o700)
         client = NativeSession({"target": config["target"], "upstream": [server.command, *server.args]})
         try:
-            client.start(env={k: v for k, v in os.environ.items() if k in BASE_ENV})
+            with chdir(workspace):
+                client.start(env={k: v for k, v in os.environ.items() if k in BASE_ENV})
             tools = initialize(client)  # Includes lazy fixture setup behind the real relay.
             proxy = SimpleNamespace(config=config, tool=client.tool,
                 inventory=lambda: json.loads(Path(config["evidence_path"]).read_text())["initial_tabs"],

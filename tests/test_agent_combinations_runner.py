@@ -1,11 +1,13 @@
 """No model/browser tests for the approved cap, audit latch and failure retention."""
+from contextlib import nullcontext
 import hashlib
 import importlib.util
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location("combinations_runner", ROOT / "scripts/run-agent-combinations.py")
@@ -89,6 +91,38 @@ class RunnerTests(unittest.TestCase):
                 runner.do_run(out, 1)
             verify.assert_not_called()
             run.assert_not_called()
+
+    def test_relative_paths_are_absolute_before_the_cli_changes_cwd(self):
+        with tempfile.TemporaryDirectory() as directory:
+            out = Path(directory).resolve()
+            relative = Path(os.path.relpath(out))
+            server = runner.relay_server({"target": "kitsune", "enabled_tools": []}, relative / "config.json", relative)
+            self.assertEqual(Path(server.args[server.args.index("--metadata") + 1]), out / "catalog-metadata.jsonl")
+            self.assertEqual(Path(server.args[-1]), out / "config.json")
+
+    def test_harness_failure_is_not_masked_by_a_missing_catalog(self):
+        with tempfile.TemporaryDirectory() as directory:
+            out = Path(directory)
+            evidence = out / "evidence.json"
+            evidence.write_text("{}")
+            config = {"target": "kitsune", "enabled_tools": [], "evidence_path": str(evidence)}
+            fixture = MagicMock()
+            fixture.evaluate.return_value = {"scorable": False}
+            fixture.viewport_reports.return_value = []
+            row = runner.plan()["attempts"][0]
+            agent = {"harness": "codex", "model": row["model"], "execution_status": "harness_error", "run_dir": str(out)}
+            with patch.object(runner, "prepared_fixture", return_value=nullcontext((fixture, None, config, out / "config.json"))), \
+                    patch.object(runner, "probe_catalog", return_value={}) as probe, \
+                    patch.object(runner, "observed_catalog", side_effect=FileNotFoundError()) as observed, \
+                    patch.object(runner, "prompt"), patch.object(runner.adapter, "run", return_value=agent), \
+                    patch.object(runner, "await_relay_close"), patch.object(runner, "run_timing", return_value={}):
+                metrics = runner.run_one(row, {"kitsune_project": ".", "catalogs": {"kitsune-zen": {}}}, out)
+            self.assertEqual(metrics["execution_status"], "harness_error")
+            self.assertIn("execution error", runner.stop_reason(metrics))
+            self.assertEqual(probe.call_count, 1)
+            observed.assert_not_called()
+            self.assertTrue((out / "agent-result.json").is_file())
+            self.assertTrue((out / "metrics.json").is_file())
 
     def test_incomplete_preflight_cannot_be_frozen(self):
         with tempfile.TemporaryDirectory() as directory:
