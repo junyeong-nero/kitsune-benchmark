@@ -220,6 +220,13 @@ def run_pair(*, execute: bool = False, kitsune_project: str | None = None,
         if not re.fullmatch(r"[a-z][a-zA-Z0-9_.-]{1,80}", key) or not re.fullmatch(r"true|false|[0-9]{1,9}", value):
             raise ValueError("Unsupported Firefox preference.")
     spec = experiment() if experiment_spec is None else experiment_spec
+    exhibition = set(targets) & set(EXHIBITION_TARGETS)
+    if exhibition:
+        if artifact_scope != "external" or spec.get("selected_task", {}).get("kind") != "miniwob":
+            raise ValueError("Exhibition targets support only external MiniWoB tasks.")
+        from .miniwob import EXHIBITION_TOOLS
+        if any((enabled_tools or {}).get(target) != EXHIBITION_TOOLS[target] for target in exhibition):
+            raise ValueError("Exhibition targets require their code-tool allowlist.")
     model, effort = harness_pins(spec, harness)
     max_budget_usd = claude_budget(spec, harness)
     if not execute:
@@ -278,7 +285,8 @@ def run_pair(*, execute: bool = False, kitsune_project: str | None = None,
             kitsune_vars, 60, 45),
         # Code-execution tools: one call may run a whole script, so the per-call limit is each vendor's own 120s.
         "aside": Server("aside", str(Path.home() / ".local/bin/aside"), ("mcp",), (), 60, 130),
-        "ego": Server("ego", sys.executable, (str(ROOT / "kitsune_benchmark/ego_mcp.py"),), (), 60, 130),
+        "ego": Server("ego", sys.executable, (str(ROOT / "kitsune_benchmark/ego_mcp.py"),),
+            ("EGO_BROWSER_BIN",) if "EGO_BROWSER_BIN" in os.environ else (), 60, 130),
     }
     specs = {target: specs[target] for target in targets}
     if enabled_tools is not None:

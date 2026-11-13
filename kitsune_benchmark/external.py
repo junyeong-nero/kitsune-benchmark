@@ -119,6 +119,8 @@ def run_external(*, execute: bool = False, fetch: bool = False, task_ids: list[s
     targets = tuple(targets)
     if not targets or len(set(targets)) != len(targets) or set(targets) - set(ALL_TARGETS):
         raise ValueError("targets must be a non-empty subset of " + ", ".join(ALL_TARGETS) + ".")
+    if set(targets) & EXHIBITION_TOOLS.keys() and any(task["kind"] != "miniwob" for task in tasks):
+        raise ValueError("Exhibition targets support only external MiniWoB tasks; select --kind miniwob or MiniWoB task IDs.")
     if budget_usd is not None and (per_run is None or isinstance(budget_usd, bool)
                                    or not isinstance(budget_usd, (int, float)) or budget_usd <= 0):
         raise ValueError("--budget-usd needs a positive amount and an API-key harness (claude-api or claude-api-full).")
