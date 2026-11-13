@@ -1,0 +1,7 @@
+[project]
+name = "kitsune-browser-harness-runtime"
+version = "0.1.0"
+requires-python = ">=3.13,<3.14"
+dependencies = [
+    "browser-harness[mcp] @ git+https://github.com/browser-use/browser-harness.git@389d9c08fe83641b5af924a777d390e9b61aace3",
+]
