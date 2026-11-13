@@ -20,7 +20,8 @@ from .personal_session import ELICITATION_POLICIES
 from .coexistence import run_coexistence
 from .stress import run_stress
 from .stress_compare import run_comparison
-from .full_native import run_full_native, units as full_native_units
+from .full_native import (COMPATIBILITY_ERROR, FullNativeCompatibilityError,
+                          run_full_native, units as full_native_units)
 from .hostile import run_hostile
 
 
@@ -62,7 +63,7 @@ def main(argv: list[str] | None = None) -> int:
     smoke.add_argument("--kitsune-project", help="Kitsune source checkout; defaults to sibling directory")
     smoke.add_argument("--timeout", type=int, help="Wall-clock seconds per agent run")
     smoke.add_argument("--task", dest="task_file", help="Task JSON ({id, prompt}) instead of the default read-only smoke task")
-    smoke.add_argument("--ui-tools", action="store_true", help="Expose only the benchmark UI tool allowlist to each MCP")
+    smoke.add_argument("--ui-tools", action="store_true", help="Use the standard 23-tool UI profile (Kitsune legacy opt-out), with a no-model catalog preflight")
     smoke.add_argument("--targets", default="playwright,kitsune", help="Comma-separated MCPs to run")
     benchmark = subparsers.add_parser("external", aliases=["benchmark"], help="External track: 7 MiniWoB++ tasks "
                                       "(upstream reward) + 3 ungraded live public-web tasks; plan by default")
@@ -122,7 +123,7 @@ def main(argv: list[str] | None = None) -> int:
     coexistence.add_argument("--budget-usd", type=float)
     full_native = subparsers.add_parser("full-native", help="Full-native track (#109): Kitsune only, KITSUNE_CAPS=core vs "
                                         "KITSUNE_CAPS=all + KITSUNE_PUBLISH=core on the same units, no allowlist; "
-                                        "reported apart from the head-to-head; plan by default")
+                                        "requires a legacy CAPS/PUBLISH-compatible checkout; plan by default")
     full_native.add_argument("--execute", action="store_true", help="Run the selected units in both arms; consumes "
                              "subscription quota or API credit")
     full_native.add_argument("--unit", action="append", dest="unit_ids",
@@ -294,7 +295,7 @@ def main(argv: list[str] | None = None) -> int:
             result = run_pair(execute=args.execute, kitsune_project=args.kitsune_project,
                               executable=executable, timeout=args.timeout, harness=args.harness,
                               experiment_spec=spec, targets=targets,
-                              enabled_tools=UI_TOOLS if args.ui_tools else None)
+                              enabled_tools=UI_TOOLS if args.ui_tools else None, standard_ui=args.ui_tools)
             print(json.dumps(result, indent=2, ensure_ascii=False))
             if not args.execute:
                 return 0
@@ -313,6 +314,10 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "plan" or result["execution_status"] == "completed_unscored":
             return 0
         return 3
+    except FullNativeCompatibilityError:
+        # Fixed text only; the worker's raw stderr/configuration stays in private evidence.
+        print(COMPATIBILITY_ERROR)
+        return 2
     except (OSError, ValueError, subprocess.SubprocessError):
         # JSON/OS exceptions may include config lines, paths, or secrets.
         # Do not echo raw exception text to automated logs.

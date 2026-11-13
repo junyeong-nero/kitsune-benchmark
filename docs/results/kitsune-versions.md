@@ -167,6 +167,36 @@ the denominator, not the user timeline or grading contracts. The legacy cohort c
    (724 for two counterbalanced lite attempts), including 114 coexistence runs. Keep stress evidence separate.
    Do not reuse the historical v3 release protocol's 530/306-run counts for this preparation.
 
+## Default `47dafa2` vs experimental code-first `f5c7a0f`
+
+Actual 14-tool default versus six-tool code-first, both with Python and unchanged browser/input code.
+The candidate remains unmerged. Separate model cohorts must not be pooled.
+
+| Date | Report | Model / harness | Revision | Result |
+| --- | --- | --- | --- | --- |
+| 2026-11-13 | [Expanded four-way](2026-11-13-expanded-four-way-codex.md) | `gpt-6.1-sol`, medium, ChatGPT subscription | `47dafa2` / `f5c7a0f`, plus Aside/EgoLite | 184 scorable raw successes, 46/46 each. Candidate/default input 0.971, adjusted time 1.048; Aside leads isolated UI, Kitsune is stronger on crowded UI. Native viewport/profile/permission differences disclosed; no model handoff coverage. Existing merge hold retained |
+
+## v0.7.3 → main `79eb955` (pre-release main)
+
+`79eb955` (`v0.7.3-41-g79eb955`), clean pinned remote main: scripting is now the default, CAPS/PUBLISH/MODE
+settings are removed, and tool approvals are extension-configured. Both Kitsune arms use this same source:
+actual default (14 tools) vs explicit `KITSUNE_SCRIPTING=0` legacy (30), neither with a benchmark allowlist.
+This is not a continuation of the old filtered-23-tool baseline or the local `c698d40` experiment.
+
+| Date | Report | Model / harness | Revision | Result |
+| --- | --- | --- | --- | --- |
+| 2026-11-12 | [Latest-main five-way MiniWoB](2026-11-12-five-way-main-79eb955.md) | `claude-opus-5-5`, Claude subscription | `79eb955` for both Kitsune arms, plus PW/ego/Aside | 70 scorable, 69 raw successes; Kitsune legacy/default/PW/Aside 14/14 each, ego 13/14. Default/legacy input **0.669**, requests **1.042**, calls **1.023**, elapsed **0.971**; no Python calls. Full before/actual/after catalogs matched all 70 attempts, distinct vendor contexts observed. Page-JS flags and shared-browser state remain; no broader lite/approval-safety or release verdict |
+
+## v0.7.3 → main `883d80e` (pre-release main)
+
+`883d80e` (`v0.7.3-35-g883d80e`), clean pinned checkout. The standard baseline keeps scripting OFF and the
+historical 23-tool UI allowlist; it does not include the separate `c698d40` CAPS patch.
+
+| Date | Report | Model / harness | Revision | Result |
+| --- | --- | --- | --- | --- |
+| 2026-11-12 | [Five-way MiniWoB exhibition](2026-11-12-five-way-miniwob.md) | `claude-opus-5-5`, Claude subscription | main `883d80e` vs patched scripting `c698d40`, plus PW/ego/Aside | 70 scorable, 69 raw successes; both Kitsune arms 14/14, scripting/main input 0.703 with zero Python calls. Aside/ego use less input and fewer MCP calls than scripting but more model requests/time on primary joint-success sets. Page JS, changing Aside description and ego TaskSpace reuse limit attribution. Separate from the incomplete lite baseline |
+| 2026-11-12 | [Lite baseline — incomplete](2026-11-12-main-883d80e-incomplete.md) | `claude-opus-5-5`, Claude Code subscription | `883d80e` | Stops at the session limit in personal-v1: 98 attempted, 96 successful/scorable, 2 quota errors, 208 unattempted. On 47 joint personal units K/PW input 0.831; Kitsune input +2.6% vs `c0f80a2` on the same units, −15.3% vs v0.7.2 on 45 units excluding changed `pb-tabs-03`. No gallery/coexistence/external or full-suite verdict |
+
 ## v0.7.3 → main `c0f80a2` (pre-release main)
 
 `c0f80a2` (`v0.7.3-24-gc0f80a2`): `85b50d2` plus #493 (#485: a collapsed run is listed when its lines total at most

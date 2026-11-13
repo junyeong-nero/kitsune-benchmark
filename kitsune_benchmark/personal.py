@@ -22,6 +22,7 @@ from urllib.parse import parse_qs, urlsplit
 
 from .cost_metrics import aggregate_costs, normalized_usage
 from .adapter import claude_budget, harness_pins, with_claude_overrides, write_json
+from .catalog import STANDARD_UI_PROFILE
 from .holds import aggregate_holds, hold_metrics
 from .miniwob import UI_TOOLS
 from .personal_fixtures import FIXTURE_CLASSES
@@ -706,6 +707,7 @@ def run_personal(*, execute: bool = False, task_ids: list[str] | None = None, va
     if not execute:
         return {"mode": "personal_plan_only", "model_invoked": False, "config": spec,
                 "harness": harness, "model": model, "targets": list(targets), "kitsune_tool_preset": kitsune_preset,
+                "kitsune_profile": STANDARD_UI_PROFILE if "kitsune" in targets else None,
                 "elicitation": elicitation, "max_budget_usd_per_run": per_run, "suite_budget_usd": budget_usd,
                 "retry_setup_failures": retries,
                 "worst_case_usd": (1 + retries) * runs_per_pair * len(tasks) * per_run if per_run else None,  # with retries (#121)
@@ -738,7 +740,7 @@ def run_personal(*, execute: bool = False, task_ids: list[str] | None = None, va
             with PersonalServer(task, variant, report_viewport=True, elicitation=elicitation, user_channel=True) as fixture:
                 pair = run_pair(execute=True, kitsune_project=kitsune_project, executable=executable,
                     experiment_spec=experiment, artifact_scope="personal", task_for_target=fixture.begin,
-                    prepare_server=fixture.prepare_server, evaluate=fixture.evaluate, enabled_tools=UI_TOOLS,
+                    prepare_server=fixture.prepare_server, evaluate=fixture.evaluate, enabled_tools=UI_TOOLS, standard_ui=True,
                     harness=harness, kitsune_preset=kitsune_preset, targets=targets,
                     kitsune_firefox_args=user_channel_args(fixture.bidi_ports["kitsune"]),
                     kitsune_firefox_prefs=USER_CHANNEL_PREFS,

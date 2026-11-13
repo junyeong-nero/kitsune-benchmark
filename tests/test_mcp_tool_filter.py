@@ -50,12 +50,13 @@ sys.exit(4 if mode == "eof_fail" else 0)
 
 class McpToolFilterTests(unittest.TestCase):
     @contextmanager
-    def relay(self, mode):
+    def relay(self, mode, tools='["browser_snapshot"]', metadata=None):
         with tempfile.TemporaryDirectory() as folder:
             script = Path(folder) / "upstream.py"
             pidfile = Path(folder) / "upstream.pid"
             script.write_text(UPSTREAM)
-            process = subprocess.Popen([sys.executable, str(FILTER), '["browser_snapshot"]', "--",
+            process = subprocess.Popen([sys.executable, str(FILTER), tools,
+                *(["--metadata", str(metadata)] if metadata else []), "--",
                 sys.executable, str(script), mode, str(pidfile)], stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
             pid = None
@@ -137,6 +138,35 @@ class McpToolFilterTests(unittest.TestCase):
             self.assertEqual(self.response(process)["result"]["content"][0]["text"], "browser_snapshot")
             process.stdin.close()
             self.exited(process, pid, 0)
+
+    def test_null_allowlist_records_full_catalog_but_not_tool_calls(self):
+        with tempfile.TemporaryDirectory() as folder:
+            metadata = Path(folder) / "catalog.jsonl"
+            with self.relay("normal", tools="null", metadata=metadata) as (process, pid):
+                self.send(process, "initialize")
+                init = self.response(process)
+                self.send(process, "tools/list", 2)
+                catalog = self.response(process)
+                self.assertEqual(len(catalog["result"]["tools"]), 2)
+                self.send(process, "tools/call", 3, name="browser_navigate", arguments={"secret": "not-recorded"})
+                self.assertEqual(self.response(process)["result"]["content"][0]["text"], "browser_navigate")
+                process.stdin.close()
+                self.exited(process, pid, 0)
+            records = [json.loads(line) for line in metadata.read_text().splitlines()]
+            self.assertEqual(records, [{"method": "initialize", "response": init}, {"method": "tools/list", "response": catalog}])
+            self.assertEqual(metadata.stat().st_mode & 0o777, 0o600)
+            self.assertNotIn("secret", metadata.read_text())
+
+    def test_recorded_catalog_is_the_filtered_model_facing_one(self):
+        with tempfile.TemporaryDirectory() as folder:
+            metadata = Path(folder) / "catalog.jsonl"
+            with self.relay("normal", metadata=metadata) as (process, pid):
+                self.send(process, "tools/list")
+                result = self.response(process)
+                process.stdin.close()
+                self.exited(process, pid, 0)
+            self.assertEqual(json.loads(metadata.read_text())["response"], result)
+            self.assertEqual(result["result"]["tools"], [{"name": "browser_snapshot"}])
 
     def test_client_eof_allows_relay_initiated_stop(self):
         with self.relay("client_stop") as (process, pid):

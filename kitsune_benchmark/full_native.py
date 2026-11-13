@@ -1,7 +1,7 @@
-"""Full-native track (#109): Kitsune's own tool groups, Kitsune only, reported apart from the head-to-head.
+"""Historical full-native track (#109): Kitsune's own groups, reported apart from the head-to-head.
 
-Every other model track runs the 23-tool UI allowlist both servers share, so Kitsune's `automation`, `read`,
-`network` groups and `browser_evaluate` were never measured with a model. This track runs two Kitsune arms on the
+The standard head-to-head tracks run the shared 23-tool UI allowlist, excluding Kitsune's `automation`, `read`,
+`network` groups and `browser_evaluate`. This track runs two Kitsune arms on the
 same units, with no benchmark allowlist (each arm sees what Kitsune publishes) and no Playwright arm:
 
 - `core`: KITSUNE_CAPS=core, Kitsune's default 27 core tools.
@@ -14,7 +14,8 @@ Units are existing tasks where orchestration should pay, unchanged: personal `re
 Kitsune-only pair with a fresh fixture, browser and bridge; the arm order alternates by unit. Graded by the tracks'
 own graders; the analysis adds gateway use, container (batch) steps and capability errors from the run's events.
 
-Plan-only by default. Execution consumes subscription quota or API credit.
+Plan-only by default. Execution first requires legacy CAPS/PUBLISH compatibility, then consumes subscription
+quota or API credit. Unsupported sources are not silently converted to the current product-default treatment.
 `python -m kitsune_benchmark.full_native SUITE_SUMMARY` recomputes the analysis offline, without a model.
 """
 from __future__ import annotations
@@ -24,17 +25,21 @@ from collections import Counter
 from dataclasses import replace
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import statistics
+import subprocess
 import sys
+import tempfile
 
 from . import gallery, personal
 from .adapter import claude_budget, harness_pins, with_claude_overrides, write_json
 from .cost_metrics import normalized_usage
 from .full_native_session import GATEWAY_CALL, OUTSIDE_NAVIGATION, agent_call
 from .personal_session import ELICITATION_POLICIES
-from .smoke import ROOT, run_pair, source_revision
+from .runtime import BASE_ENV
+from .smoke import ROOT, private_ports, run_pair, source_revision
 from .specs import Server, Task
 
 BENCHMARK = "kitsune-full-native-v1"
@@ -44,6 +49,82 @@ ARMS = {"core": {"KITSUNE_CAPS": "core"},
 PERSONAL_CATEGORIES = ("research", "handoff_draft", "long_page_lookup")
 GALLERY_UNITS = (("ui-table", "crowded"), ("ui-table", "isolated"))
 GATEWAY_TOOLS = ("browser_tools_search", GATEWAY_CALL, "browser_tools_publish")
+COMPATIBILITY_CHECK = "legacy-caps-publish-v1"
+COMPATIBILITY_ERROR = (
+    "Full-native preflight failed: this historical protocol requires working KITSUNE_CAPS/KITSUNE_PUBLISH "
+    "and the legacy core/gateway surfaces. Kitsune 79eb955 removed these settings. Use a compatible pinned "
+    "checkout or define a separate current-default experiment; do not silently remove the settings. "
+    "No fixture or model was started. Inspect private artifacts/full-native-preflight/*/preflight.json "
+    "for the source, arm and startup/validation error. No automatic retry or API fallback.")
+
+
+class FullNativeCompatibilityError(ValueError):
+    """A safe CLI diagnostic; raw errors stay in private preflight evidence."""
+
+
+def compatibility_preflight(project: Path, source: dict) -> str:
+    """Check both unchanged arms before any fixture/browser/model, without calling tools.
+
+    Import the selected source in its own environment and inspect its settings and registered
+    initial catalogs. This is not a live MCP/bridge permissions test or a confinement boundary.
+    Unknown/removed configuration contracts fail closed instead of silently changing the experiment.
+    """
+    parent = ROOT / "artifacts/full-native-preflight"
+    parent.mkdir(parents=True, exist_ok=True)
+    folder = Path(tempfile.mkdtemp(prefix="check-", dir=parent))
+    path = folder / "preflight.json"
+    report = {"benchmark": BENCHMARK, "check": COMPATIBILITY_CHECK, "project": str(project),
+              "kitsune_source": source, "model_invoked": False, "compatible": False, "arms": {}}
+    catalogs = {}
+    try:
+        for arm, settings in ARMS.items():
+            home = folder / arm
+            home.mkdir(mode=0o700)
+            http, ws = private_ports()
+            env = {k: v for k, v in os.environ.items() if k in BASE_ENV}
+            env.update(settings, KITSUNE_HOME=str(home / "home"), KITSUNE_HTTP_PORT=str(http),
+                       KITSUNE_WS_PORT=str(ws), KITSUNE_TOKEN="full-native-preflight-only",
+                       KITSUNE_NO_BRIDGE_RESTART="1")
+            row = report["arms"][arm] = {"settings": dict(settings)}
+            command = ["uv", "run", "--locked", "--project", str(project), "python",
+                       str(Path(__file__).with_name("full_native_probe.py"))]
+            try:
+                done = subprocess.run(command, cwd=home, env=env, capture_output=True, text=True, timeout=60)
+            except subprocess.TimeoutExpired as error:
+                for name in ("stdout", "stderr"):
+                    value = getattr(error, name) or ""
+                    row[name] = value.decode(errors="replace") if isinstance(value, bytes) else value
+                raise
+            row.update(returncode=done.returncode, stdout=done.stdout, stderr=done.stderr)
+            if done.returncode:
+                raise ValueError(f"{arm}: Kitsune configuration import failed")
+            observed = json.loads(done.stdout)
+            row["observed"] = observed
+            expected = {"server_file": str((project / "src/kitsune/server.py").resolve()),
+                        "enabled_caps": [settings["KITSUNE_CAPS"]], "published_caps": ["core"], "scripting": False}
+            if not isinstance(observed, dict) or any(observed.get(k) != v for k, v in expected.items()):
+                raise ValueError(f"{arm}: legacy configuration was not applied")
+            tools = observed.get("tools")
+            if not isinstance(tools, list) or not tools or any(
+                    not isinstance(t, dict) or not isinstance(t.get("name"), str) or not t["name"] for t in tools):
+                raise ValueError(f"{arm}: invalid initial catalog")
+            names = [tool["name"] for tool in tools]
+            if len(names) != len(set(names)) or "browser_run_python" in names:
+                raise ValueError(f"{arm}: duplicate or non-legacy initial catalog")
+            catalogs[arm] = set(names)
+            if (arm == "core" and catalogs[arm] & set(GATEWAY_TOOLS)
+                    or arm == "gateway" and catalogs[arm] != catalogs["core"] | set(GATEWAY_TOOLS)):
+                raise ValueError(f"{arm}: expected core vs core-plus-gateway catalogs")
+        report["kitsune_source_after"] = source_revision(project)
+        if report["kitsune_source_after"] != source:
+            raise ValueError("Kitsune source changed during compatibility preflight")
+        report["compatible"] = True
+        return str(path)
+    except (OSError, ValueError, TypeError, KeyError, subprocess.SubprocessError) as error:
+        report["error"] = f"{type(error).__name__}: {error}"
+        raise FullNativeCompatibilityError(COMPATIBILITY_ERROR) from error
+    finally:
+        write_json(path, report)
 
 
 def command_steps(command) -> int:
@@ -124,7 +205,8 @@ def full_native_relay(prepare_server):
     return prepare
 
 
-def run_unit(item: dict, spec: dict, *, variant: int, elicitation: str, kitsune_project, executable, harness) -> dict:
+def run_unit(item: dict, spec: dict, *, variant: int, elicitation: str, kitsune_project, executable, harness,
+             compatibility_path: str) -> dict:
     provenance = {}
     if item["track"] == "personal":
         task = selected = personal.selected_tasks([item["task"]])[0]
@@ -135,7 +217,8 @@ def run_unit(item: dict, spec: dict, *, variant: int, elicitation: str, kitsune_
     experiment = {**spec, **provenance, "selected_task": selected, "variant": variant, "layout": item["layout"],
                   "elicitation": elicitation,
                   "full_native": {"benchmark": BENCHMARK, "unit": item["unit"], "arm": item["arm"],
-                                  "kitsune_env": ARMS[item["arm"]], "tool_policy": "no_benchmark_allowlist"}}
+                                  "kitsune_env": ARMS[item["arm"]], "tool_policy": "no_benchmark_allowlist",
+                                  "compatibility_preflight": compatibility_path}}
     common = dict(execute=True, kitsune_project=kitsune_project, executable=executable, experiment_spec=experiment,
                   artifact_scope="full-native", enabled_tools=None, harness=harness, targets=("kitsune",),
                   kitsune_env=ARMS[item["arm"]], kitsune_firefox_prefs=personal.USER_CHANNEL_PREFS,
@@ -175,14 +258,18 @@ def run_full_native(*, execute: bool = False, unit_ids: list[str] | None = None,
         raise ValueError("--budget-usd needs a positive amount and an API-key harness (claude-api or claude-api-full).")
     header = {"benchmark": BENCHMARK, "harness": harness, "model": model, "variant": variant,
               "elicitation": elicitation, "arms": ARMS, "targets": ["kitsune"],
-              "tool_policy": "no_benchmark_allowlist", "integrity": INTEGRITY}
+              "tool_policy": "no_benchmark_allowlist", "integrity": INTEGRITY, "compatibility_check": COMPATIBILITY_CHECK}
     if not execute:
         return {"mode": "full_native_plan_only", "model_invoked": False, **header, "units": selected,
                 "schedule": plan, "planned_model_runs": len(plan), "max_budget_usd_per_run": per_run,
                 "suite_budget_usd": budget_usd, "worst_case_usd": len(plan) * per_run if per_run else None,
-                "next": "Use full-native --execute explicitly; consumes subscription quota or API credit."}
+                "next": "Execution first checks legacy CAPS/PUBLISH compatibility. Use full-native --execute explicitly; "
+                        "compatible runs consume subscription quota or API credit."}
+    if budget_usd is not None and budget_usd < per_run:
+        raise ValueError("Suite budget is smaller than one run's worst case; nothing was run.")
     project = Path(kitsune_project).expanduser().resolve() if kitsune_project else ROOT.parent / "kitsune"
     source = source_revision(project)
+    compatibility_path = compatibility_preflight(project, source)
     runs, spent, stopped = [], 0.0, None
     for item in plan:
         if budget_usd is not None and spent + per_run > budget_usd:
@@ -192,7 +279,8 @@ def run_full_native(*, execute: bool = False, unit_ids: list[str] | None = None,
             stopped = "kitsune_revision_changed"
             break
         pair = run_unit(item, specs[item["track"]], variant=variant, elicitation=elicitation,
-                        kitsune_project=kitsune_project, executable=executable, harness=harness)
+                        kitsune_project=kitsune_project, executable=executable, harness=harness,
+                        compatibility_path=compatibility_path)
         entry = {**item, "variant": variant, "pair": pair, "kitsune_source_after": source_revision(project)}
         write_json(Path(pair["pair_dir"]) / "full-native-summary.json", entry)
         runs.append(entry)
@@ -210,6 +298,7 @@ def run_full_native(*, execute: bool = False, unit_ids: list[str] | None = None,
         raise ValueError("Suite budget is smaller than one run's worst case; nothing was run.")
     summary_path = Path(runs[0]["pair"]["pair_dir"]) / "suite-summary.json"
     summary = {"mode": "full_native_executed", "model_invoked": True, **header, "kitsune_source": source,
+               "compatibility_preflight": compatibility_path,
                "requested_runs": len(plan), "attempted_runs": len(runs), "stopped_reason": stopped,
                "completed_runs": sum(personal.pair_complete(r["pair"], ("kitsune",)) for r in runs),
                "estimated_cost_usd": round(spent, 6) if per_run is not None else None,

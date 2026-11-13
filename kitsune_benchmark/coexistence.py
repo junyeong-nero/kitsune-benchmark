@@ -25,6 +25,7 @@ import sys
 import time
 
 from .adapter import claude_budget, harness_pins, with_claude_overrides, write_json
+from .catalog import STANDARD_UI_PROFILE
 from .coexistence_fixtures import COEXISTENCE_FIXTURES
 from .miniwob import UI_TOOLS
 from .personal import (USER_CHANNEL_PREFS, PersonalServer, PersonalTrial, aggregate_results, catalog as personal_catalog,
@@ -316,6 +317,7 @@ def run_coexistence(*, execute: bool = False, task_ids: list[str] | None = None,
         return {"mode": "coexistence_plan_only", "model_invoked": False, "harness": harness, "model": model,
                 "benchmark": spec["id"], "tab_permissions": tab_permissions,
                 "targets": list(targets), "variant": variant, "protect_user_tabs": protect_user_tabs,
+                "kitsune_profile": STANDARD_UI_PROFILE if "kitsune" in targets else None,
                 "elicitation": elicitation, "retry_setup_failures": retries,
                 "unprotected_user_tabs": unprotected_user_tabs,
                 "selected_tasks": [t["id"] for t in tasks], "planned_model_runs": len(targets) * len(tasks),
@@ -346,7 +348,7 @@ def run_coexistence(*, execute: bool = False, task_ids: list[str] | None = None,
                 port = fixture.bidi_ports["kitsune"]
                 pair = run_pair(execute=True, kitsune_project=kitsune_project, executable=executable,
                     experiment_spec=experiment, artifact_scope="coexistence", task_for_target=fixture.begin,
-                    prepare_server=fixture.prepare_server, evaluate=fixture.evaluate, enabled_tools=UI_TOOLS,
+                    prepare_server=fixture.prepare_server, evaluate=fixture.evaluate, enabled_tools=UI_TOOLS, standard_ui=True,
                     harness=harness, targets=targets,
                     kitsune_env=(PROTECTED_KITSUNE_ENV if protect_user_tabs
                                  else UNPROTECTED_KITSUNE_ENV if unprotected_user_tabs else None),

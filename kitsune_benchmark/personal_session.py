@@ -149,9 +149,9 @@ class NativeSession:
                          "elicitation_policy": self.elicitation, "elicitations": [], "harness_elicitations": [],
                          "held_refusals": []}
 
-    def start(self):
+    def start(self, *, env=None):
         self.process = subprocess.Popen(self.config["upstream"], stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE, stderr=sys.stderr, bufsize=0)
+            stdout=subprocess.PIPE, stderr=sys.stderr, bufsize=0, env=env)
 
         def read():
             try:

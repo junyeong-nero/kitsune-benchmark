@@ -341,7 +341,9 @@ print({chr(10).join(json.dumps(e) for e in events)!r}.replace('@SOURCE@', source
             calls.append(kwargs["harness"])
             ok = {"benchmark_evaluation": {"scorable": True, "task_success": True}, "list_price_cost_usd": 0.2, "usage": {}}
             return {"pair_dir": folder, "results": {"playwright": dict(ok), "kitsune": dict(ok)}}
-        with patch("kitsune_benchmark.personal.run_pair", side_effect=fake_pair):
+        # Budget logic must not depend on concurrent edits/commits in the operator's Kitsune checkout.
+        with patch("kitsune_benchmark.personal.run_pair", side_effect=fake_pair), \
+                patch("kitsune_benchmark.personal.source_revision", return_value={"revision": "budget-test", "dirty": False}):
             # Worst case per pair is 2 x 1.0 (opus) = 2.0 and each pair really costs 0.4:
             # pairs start at spent 0, 0.4, 0.8; the 4th would risk 1.2 + 2.0 > 3.0.
             result = run_personal(execute=True, harness="claude-api", budget_usd=3.0)
@@ -350,7 +352,9 @@ print({chr(10).join(json.dumps(e) for e in events)!r}.replace('@SOURCE@', source
         self.assertAlmostEqual(result["estimated_cost_usd"], 1.2)
         with self.assertRaises(ValueError):
             run_personal(execute=True, harness="claude", budget_usd=1.0)
-        with patch("kitsune_benchmark.personal.run_pair", side_effect=fake_pair), self.assertRaisesRegex(ValueError, "nothing was run"):
+        with patch("kitsune_benchmark.personal.run_pair", side_effect=fake_pair), \
+                patch("kitsune_benchmark.personal.source_revision", return_value={"revision": "budget-test", "dirty": False}), \
+                self.assertRaisesRegex(ValueError, "nothing was run"):
             run_personal(execute=True, harness="claude-api", budget_usd=0.5)
         with redirect_stdout(io.StringIO()) as out:
             self.assertEqual(main(["personal", "--harness", "claude-api", "--all", "--budget-usd", "30"]), 0)

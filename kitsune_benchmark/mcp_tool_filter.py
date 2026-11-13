@@ -1,9 +1,10 @@
 """Stdio MCP relay that exposes only allowlisted tools, like Codex `enabled_tools`.
 
-Usage: mcp_tool_filter.py '<json tool list>' -- command [args...]
+Usage: mcp_tool_filter.py '<json tool list or null>' [--metadata PATH] -- command [args...]
 Runs as an absolute-path script. Only newline-delimited stdio MCP servers are
 supported. Non-allowlisted tools are dropped from tools/list and their calls
-are refused without reaching the native server. No model calls.
+are refused without reaching the native server. null passes every tool through.
+Optional metadata records model-facing initialize/catalog replies, not tool-call contents. No model calls.
 """
 from __future__ import annotations
 
@@ -16,13 +17,19 @@ import threading
 
 
 def main() -> int:
-    if len(sys.argv) < 4 or sys.argv[2] != "--":
-        print("usage: mcp_tool_filter.py TOOLS_JSON -- command [args...]", file=sys.stderr)
+    args = sys.argv[1:]
+    metadata = None
+    if len(args) >= 5 and args[1] == "--metadata":
+        metadata = args[2]
+        args = [args[0], *args[3:]]
+    if len(args) < 3 or args[1] != "--":
+        print("usage: mcp_tool_filter.py TOOLS_JSON [--metadata PATH] -- command [args...]", file=sys.stderr)
         return 2
-    allowed = set(json.loads(sys.argv[1]))
-    child = subprocess.Popen(sys.argv[3:], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+    configured = json.loads(args[0])
+    allowed = set(configured) if configured is not None else None
+    child = subprocess.Popen(args[2:], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                              stderr=sys.stderr, bufsize=0)
-    list_ids: set = set()
+    catalog_ids: dict = {}
     lock = threading.Lock()
     output_closed = threading.Event()
 
@@ -40,11 +47,14 @@ def main() -> int:
                     message = json.loads(line)
                 except ValueError:
                     continue
-                if isinstance(message, dict) and message.get("id") in list_ids and "method" not in message:
-                    list_ids.discard(message["id"])
+                if isinstance(message, dict) and message.get("id") in catalog_ids and "method" not in message:
+                    method = catalog_ids.pop(message["id"])
                     result = message.get("result")
-                    if isinstance(result, dict) and isinstance(result.get("tools"), list):
+                    if method == "tools/list" and allowed is not None and isinstance(result, dict) and isinstance(result.get("tools"), list):
                         result["tools"] = [t for t in result["tools"] if isinstance(t, dict) and t.get("name") in allowed]
+                    if metadata:
+                        with os.fdopen(os.open(metadata, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600), "a") as stream:
+                            stream.write(json.dumps({"method": method, "response": message}, ensure_ascii=False) + "\n")
                 emit(message)
         except (OSError, ValueError):
             pass
@@ -72,11 +82,11 @@ def main() -> int:
                     continue
                 message = json.loads(line)
                 method = message.get("method") if isinstance(message, dict) else None
-                if method == "tools/list" and "id" in message:
-                    list_ids.add(message["id"])
+                if method in ("initialize", "tools/list") and "id" in message:
+                    catalog_ids[message["id"]] = method
                 elif method == "tools/call" and "id" in message:
                     name = (message.get("params") or {}).get("name")
-                    if name not in allowed:
+                    if allowed is not None and name not in allowed:
                         emit({"jsonrpc": "2.0", "id": message["id"], "result": {"isError": True, "content": [
                             {"type": "text", "text": "Tool is not enabled in this benchmark."}]}})
                         continue

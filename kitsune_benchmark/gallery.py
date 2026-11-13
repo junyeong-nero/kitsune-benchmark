@@ -24,6 +24,7 @@ from urllib.parse import parse_qs, urlsplit
 
 from . import gallery_media as media
 from .adapter import write_json
+from .catalog import STANDARD_UI_PROFILE
 from .holds import hold_metrics
 from .personal import (PRIMARY_CONTRACT, USER_CHANNEL_PREFS, close_only_failure, free_port, seeded_tab_custody,
                        user_channel_args, v2_safety)
@@ -838,6 +839,7 @@ def run_gallery(*, execute: bool = False, task_ids: list[str] | None = None, cat
     if not execute:
         return {"mode": "gallery_plan_only", "model_invoked": False, "harness": harness, "model": model,
                 "layout": layout, "variant": variant, "targets": list(targets), "elicitation": elicitation,
+                "kitsune_profile": STANDARD_UI_PROFILE if "kitsune" in targets else None,
                 "retry_setup_failures": retries,
                 "tasks": [{"id": t.id, "category": t.category, "title": t.title} for t in tasks],
                 "planned_model_runs": len(tasks) * len(targets),
@@ -862,7 +864,7 @@ def run_gallery(*, execute: bool = False, task_ids: list[str] | None = None, cat
             with GalleryServer(task, variant, layout, elicitation) as fixture:
                 pair = run_pair(execute=True, kitsune_project=kitsune_project, executable=executable,
                                 experiment_spec=experiment, artifact_scope="gallery", task_for_target=fixture.begin,
-                                prepare_server=fixture.prepare_server, evaluate=fixture.evaluate, enabled_tools=UI_TOOLS,
+                                prepare_server=fixture.prepare_server, evaluate=fixture.evaluate, enabled_tools=UI_TOOLS, standard_ui=True,
                                 harness=harness, kitsune_preset=kitsune_preset, targets=targets,
                                 kitsune_firefox_args=user_channel_args(fixture.kitsune_bidi_port),
                                 kitsune_firefox_prefs=USER_CHANNEL_PREFS, equalize_kitsune_viewport=True)

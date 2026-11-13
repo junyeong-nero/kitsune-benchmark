@@ -2,8 +2,9 @@
 
 [Project README](../README.md) · [Results](results/README.md)
 
-This project runs the same browser tasks through Playwright MCP and Kitsune MCP, with the same model and tool
-allowlist, and grades them from outside the agent. Pick the guide that matches what you want to do.
+This project measures browser-task completion and resource use with external grading. Paired MCP tracks and
+separate agent/browser experiments declare their own model, tool and browser conditions; their results are not
+interchangeable. Pick the guide that matches what you want to do.
 
 ## Start here
 
@@ -12,6 +13,9 @@ allowlist, and grades them from outside the agent. Pick the guide that matches w
 - **Read results:** the [results index](results/README.md) lists every dated report.
   [Results by Kitsune version](results/kitsune-versions.md) groups them by Kitsune revision and lists the frozen
   taskset tags.
+- **Pilot in preparation:** [Agent-browsing combinations](experiments/2026-11-13-agent-browsing-combinations.md)
+  keeps Kitsune at six tools, adds CLI-backed baseline candidates and a separately reported manual Chrome
+  side-panel track. Scope approved; adapters/preflight incomplete; no model attempts or results yet.
 - **Latest release:** [Kitsune v0.7.2, lite plan](results/2026-11-04-opus-subscription-v0.7.2.md) (2026-11-04).
   Release cohorts follow the [release cohort protocol](experiments/2026-10-29-release-cohort-protocol.md).
 

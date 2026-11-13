@@ -60,7 +60,7 @@ def viewport_record(target: str, server_args=(), firefox_args=(), *, equalized: 
                               "content_size": {"width": CONTENT_WIDTH, "height": CONTENT_HEIGHT},
                               "firefox_chrome_height": FIREFOX_CHROME_HEIGHT} if equalized else None}
     return {"configured": configured,
-            "configured_args": list(server_args if target == "playwright" else firefox_args),
+            "configured_args": list(server_args if target == "playwright" else firefox_args if target == "kitsune" else ()),
             "effective": None,
             "effective_unavailable_reason": "not_observed",
             "content_viewport_equality_asserted": False}

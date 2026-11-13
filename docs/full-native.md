@@ -1,15 +1,52 @@
-# Full-native track (`kitsune-full-native-v1`): Kitsune's own tool groups
+# Historical full-native track (`kitsune-full-native-v1`): Kitsune's own tool groups
 
 [Documentation index](README.md) · [Running guide](running.md) · [Personal browsing](personal-browsing.md) ·
 [Component gallery](gallery.md)
 
 **Scope:** a Kitsune-only track, reported apart from the head-to-head
 ([#109](https://github.com/junyeong-nero/kitsune-benchmark/issues/109), split from
-[#4](https://github.com/junyeong-nero/kitsune-benchmark/issues/4)). Every other model track gives both servers the
-same 23-tool UI allowlist. So Kitsune's own groups have never been measured with a model: `automation` (batches,
-retries, workflows, parallel tabs), `read` (page text, forms, links), `network` and `browser_evaluate`. This track
+[#4](https://github.com/junyeong-nero/kitsune-benchmark/issues/4)). The standard head-to-head tracks give both servers
+the same 23-tool UI allowlist. This separate historical protocol measures Kitsune's own groups: `automation`
+(batches, retries, workflows, parallel tabs), `read` (page text, forms, links), `network` and `browser_evaluate`. This track
 compares two Kitsune configurations on the same units. It has **no Playwright arm**, because Playwright MCP has
 nothing equivalent. Its numbers are never pooled with, or set beside, the Playwright/Kitsune tracks.
+
+## Revision compatibility
+
+This protocol requires **legacy CAPS/PUBLISH support**, not just a recent version number.
+Kitsune `79eb955` has removed `KITSUNE_CAPS`, `KITSUNE_PUBLISH` and `KITSUNE_MODE` and
+rejects their presence. **Do not remove the arm settings or silently substitute the
+14-tool default** to make this track run. Even `KITSUNE_SCRIPTING=0` does not restore
+capability groups on that revision. Use a compatible pinned checkout, or define a
+separate current-product protocol; do not pool those treatments with this one.
+
+Execution now performs `legacy-caps-publish-v1` preflight **before any fixture,
+browser, bridge or model launch**. For each unchanged arm it imports the selected
+Kitsune source in that project's Python environment and lists the registered initial
+tools, without running the MCP entry point, starting a session or calling a tool.
+It checks the imported source path, effective CAPS/PUBLISH values, non-scripting
+surface, and the relation **gateway catalog = core catalog + the three gateway tools**.
+Empty/duplicate catalogs, ignored settings, unknown configuration APIs, import errors,
+timeouts, or an observed revision change fail closed. Both arms must pass before the
+first unit; a failure stops immediately, without retries or replacement runs.
+
+Each worker gets a fresh private home/working directory, unused private ports and
+`KITSUNE_NO_BRIDGE_RESTART=1`. Only base process environment variables are inherited;
+model credentials, runtime injection variables and inherited `KITSUNE_*` overrides
+are not. Arm settings and historical run environments remain unchanged.
+
+Private `artifacts/full-native-preflight/check-*/preflight.json` (mode `0600`, parent
+`0700`) retains source metadata, observed schemas/settings, stdout/stderr and failures,
+with `model_invoked=false`. Successful pair/suite manifests reference that evidence.
+CLI failures return **2** with a fixed compatibility diagnostic, not raw worker errors.
+Plan-only commands still start no process and do not certify compatibility; offline
+analysis of old results does not probe or modify those results.
+
+This is an **import/configuration check**, not an actual model-session catalog lock,
+live capability/approval validation, or a Python sandbox. It adds startup work outside
+agent elapsed time. Reproduce old runs from their recorded harness commits. No-model
+checks verified `883d80e` core **27** / gateway **30**, and rejection of `79eb955` before
+fixture/model entry; these are validation results, not new benchmark grades.
 
 ## Arms
 
@@ -18,10 +55,10 @@ nothing equivalent. Its numbers are never pooled with, or set beside, the Playwr
 | `core` | `KITSUNE_CAPS=core` | Kitsune's default `core` group (27 tools on main `286cfe5`: Playwright MCP's 25, `browser_resume`, `browser_ask_user`) |
 | `gateway` | `KITSUNE_CAPS=all`, `KITSUNE_PUBLISH=core` | The same core tools plus the gateway tools `browser_tools_search`, `browser_tools_call` and `browser_tools_publish`, which reach every other group except `storage` and `history` |
 
-`gateway` is the setup Kitsune's README recommends: a small initial tool list, with discovery through the gateway.
+`gateway` was the setup the compatible Kitsune versions' README recommended: a small initial tool list, with discovery through the gateway.
 Both arms set `KITSUNE_CAPS` explicitly, so neither depends on Kitsune's default. The bridge enforces it too
 (capability errors below). The tool gateway arrived in Kitsune v0.4.0 (kitsune#229), so older Kitsune can run only
-the `core` arm.
+the `core` configuration, not this two-arm protocol.
 
 **No benchmark allowlist.** In both arms the agent sees exactly what Kitsune publishes. That includes
 `browser_evaluate`, which the head-to-head allowlist leaves out, and in `gateway` every automation, read, network
@@ -98,10 +135,10 @@ requests only on units both arms solved in that suite: `ratio_gateway_to_core` d
 ## Run
 
 ```sh
-# Plan: units, arms, schedule, planned runs. No browser or model calls.
+# Plan: units, arms, schedule, planned runs. No processes; compatibility is not checked.
 uv run --locked python -m kitsune_benchmark full-native
 
-# One unit, both arms: two agent runs on your subscription.
+# Compatible legacy pin required. Preflight first; then two agent runs on your subscription.
 uv run --locked python -m kitsune_benchmark full-native --unit pb-longpage-01 \
   --kitsune-project artifacts/vendor/kitsune-pinned --execute
 

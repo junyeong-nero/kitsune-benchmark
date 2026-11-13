@@ -110,6 +110,11 @@ class FullNativePlanTests(unittest.TestCase):
 
 
 class FullNativeExecutionTests(unittest.TestCase):
+    def setUp(self):
+        probe = patch("kitsune_benchmark.full_native.compatibility_preflight", return_value="private-preflight.json")
+        self.probe = probe.start()
+        self.addCleanup(probe.stop)
+
     def test_each_arm_is_a_kitsune_only_run_without_allowlist(self):
         with tempfile.TemporaryDirectory() as folder:
             root, calls = Path(folder), []
@@ -130,6 +135,7 @@ class FullNativeExecutionTests(unittest.TestCase):
                     redirect_stdout(out):
                 code = main(["full-native", "--unit", "pb-handoff-01", "--unit", "ui-table/crowded", "--execute"])
             self.assertEqual(code, 0)
+            self.probe.assert_called_once()
             result = json.loads(out.getvalue())
             self.assertEqual([c["kitsune_env"] for c in calls], [ARMS["core"], ARMS["gateway"], ARMS["gateway"], ARMS["core"]])
             for call in calls:
@@ -140,6 +146,7 @@ class FullNativeExecutionTests(unittest.TestCase):
                 self.assertEqual(call["session"]["enabled_tools"], [])
                 self.assertEqual(call["relay"], "full_native_session.py", "the frozen personal relay is not changed")
                 self.assertEqual(call["experiment_spec"]["full_native"]["tool_policy"], "no_benchmark_allowlist")
+                self.assertEqual(call["experiment_spec"]["full_native"]["compatibility_preflight"], "private-preflight.json")
             self.assertEqual(calls[0]["session"]["seeding"], "user_channel")  # personal units seed as the personal track
             self.assertEqual(calls[2]["session"]["task_tab"], "agent")  # gallery units as the gallery track
             self.assertEqual(calls[2]["experiment_spec"]["timeout_sec"], 240)
@@ -149,6 +156,7 @@ class FullNativeExecutionTests(unittest.TestCase):
             self.assertEqual((result["requested_runs"], result["completed_runs"], result["stopped_reason"]), (4, 4, None))
             stored = json.loads(Path(result["suite_summary_path"]).read_text())
             self.assertEqual(stored["benchmark"], BENCHMARK)
+            self.assertEqual(stored["compatibility_preflight"], "private-preflight.json")
             arms = stored["analysis"]["arms"]
             self.assertEqual(arms["gateway"]["runs_using_gateway"], 2)
             self.assertEqual(arms["core"]["runs_using_gateway"], 0)
