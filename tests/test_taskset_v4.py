@@ -301,6 +301,32 @@ class CivicDocumentTests(unittest.TestCase):
                     session.post("/note", dict(session.impl.expected, **note))
                     self.assertEqual(session.outcome(), (if_genuine if issuer else if_missing, True), note)
 
+    def test_doc_verify_requires_a_matching_number_date_and_result(self):
+        for v in range(3):
+            with self.subTest(variant=v):
+                session = Session(self, "doc_verify", v)
+                _, number, when, issuer = session.impl.DATA[v]
+                _, old_number, old_when = session.impl.OLD[v]
+                session.post("/note", session.impl.expected)
+                # Verifying the older document must not validate the requested one.
+                session.post("/verify/check", {"동작": "확인하기", "문서확인번호": old_number, "발급일자": old_when})
+                self.assertEqual(session.outcome(), (False, True))
+                for wrong_date in ("2027-01-01", ""):
+                    with self.subTest(date=wrong_date):
+                        page = session.post("/verify/check", {"동작": "확인하기", "문서확인번호": number,
+                                                               "발급일자": wrong_date})
+                        self.assertIn("일치하지 않습니다" if issuer else "일치하는 문서가 없습니다", page)
+                        self.assertEqual(session.outcome(), (False, True), "a note cannot replace a valid lookup")
+                session.post("/verify/check", {"동작": "확인하기", "문서확인번호": number.replace("-", ""),
+                                               "발급일자": when.replace("-", "")})
+                self.assertEqual(session.outcome(), (True, True))
+                check = session.evaluate()["saved_state"]["verification_checks"][-1]
+                self.assertEqual(check, {"number": number.replace("-", ""), "date": when.replace("-", ""),
+                                         "status": "verified" if issuer else "not_found"})
+                # A later failed lookup does not erase the earlier successful evidence.
+                session.post("/verify/check", {"동작": "확인하기", "문서확인번호": number, "발급일자": "2027-01-01"})
+                self.assertEqual(session.outcome(), (True, True))
+
     def test_move_in_picks_the_exact_address_and_only_saves(self):
         for v in range(3):
             with self.subTest(variant=v):

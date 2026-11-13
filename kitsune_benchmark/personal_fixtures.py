@@ -1306,7 +1306,7 @@ class DocVerify(ServiceFixture):  # pb-civic-03
 
     def __init__(self, trial):
         super().__init__(trial)
-        self.checks: list[str] = []  # the digits of every number looked up
+        self.checks: list[dict[str, str]] = []  # normalized input and outcome of each lookup
         self.result = ""
 
     @property
@@ -1339,20 +1339,25 @@ class DocVerify(ServiceFixture):  # pb-civic-03
     def act(self, path, data):
         if path == "/verify/check" and set(data) == {"문서확인번호", "발급일자"}:
             number, when = digits(data["문서확인번호"]), digits(data["발급일자"])
-            self.checks.append(number)
             record = self.records.get(number)
             if record is None:
+                status = "not_found"
                 self.result = "일치하는 문서가 없습니다. 번호를 다시 확인하거나 발급 기관에 문의하세요."
             elif digits(record[1]) != when:
+                status = "date_mismatch"
                 self.result = "문서확인번호와 발급일자가 일치하지 않습니다."
             else:
+                status = "verified"
                 self.result = f"정상 발급된 진본 문서입니다. 문서 종류: {record[0]} · 발급일자: {record[1]} · 발급 기관: {record[2]}"
+            self.checks.append({"number": number, "date": when, "status": status})
             return "/verify"
         return super().act(path, data)
 
     def correct(self, evidence):
         doc, number, when, issuer = self.DATA[self.v]
-        if digits(number) not in self.checks:
+        required_check = {"number": digits(number), "date": digits(when),
+                          "status": "verified" if issuer else "not_found"}
+        if required_check not in self.checks:
             return False
         verdict = norm(self.note["진위 여부"])
         negative = any(norm(t) in verdict for t in self.NEGATIVE)
@@ -1364,7 +1369,8 @@ class DocVerify(ServiceFixture):  # pb-civic-03
                 and date_in(self.note["발급일"], when))
 
     def saved_state(self):
-        return {**self.note, "checked_numbers": self.checks}
+        return {**self.note, "checked_numbers": [check["number"] for check in self.checks],
+                "verification_checks": self.checks}
 
     def solution(self):
         _, number, when, _ = self.DATA[self.v]
