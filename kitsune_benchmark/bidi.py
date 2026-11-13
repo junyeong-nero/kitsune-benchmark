@@ -1,7 +1,7 @@
 """Minimal WebDriver BiDi client over a stdlib WebSocket. No model calls.
 
 The coexistence track drives a simulated *user* through this channel: tabs it
-opens are not MCP-created (so Kitsune lists them `owned: false`), its input is
+opens are not MCP-created (so Kitsune does not list them as owned), its input is
 trusted (`isTrusted: true`), and it can read which tab the user actually sees.
 The agent never sees this channel. Only what the track needs is implemented:
 text frames, client masking, continuation frames, ping/pong and close.

@@ -13,14 +13,16 @@ import tempfile
 import threading
 import time
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from kitsune_benchmark.__main__ import main
 from kitsune_benchmark.bidi import Bidi, BidiError
 from kitsune_benchmark.coexistence import (CoexistenceServer, aggregate_coexistence, catalog, input_metrics,
-                                           run_coexistence, selected_tasks, view_metrics)
+                                           run_coexistence, runnable_ids, selected_tasks, view_metrics,
+                                           wait_session_closed)
+from kitsune_benchmark.coexistence import config as coexistence_config
 from kitsune_benchmark.coexistence_fixtures import JOURNAL_TEXT
-from kitsune_benchmark.coexistence_session import CoexistenceSession, owned_urls
+from kitsune_benchmark.coexistence_session import CoexistenceSession, owned_urls, user_tab_refusal
 from kitsune_benchmark.smoke import ROOT, await_bridge, copy_extension, private_ports, run_pair
 from kitsune_benchmark.specs import Server
 from http.cookiejar import CookieJar
@@ -32,7 +34,8 @@ VALID = {"execution_status": "completed_unscored"}
 
 def initial_evidence(trial):
     tabs = [{"id": i, "url": trial.url(path), "active": i == trial.active_index} for i, path in enumerate(trial.paths)]
-    return {"setup_complete": True, "initial_tabs": tabs, "snapshots": [copy.deepcopy(tabs)]}
+    # A real relay writes session_closed on close; without it CoexistenceServer.evaluate waits out its deadline.
+    return {"setup_complete": True, "session_closed": True, "initial_tabs": tabs, "snapshots": [copy.deepcopy(tabs)]}
 
 
 def session(trial):
@@ -194,7 +197,7 @@ def user_evidence(trial, *, after=None, transitions=None, activity=None):
     initial = trial.url(trial.paths[trial.active_index])
     evidence.update(seeding="user_bidi", seeded_owned_by_agent=0, view={
         "initial_url": initial, "after_call": after if after is not None else [{"url": initial, "window_focused": True}],
-        "sampler": {"interval_sec": 0.25, "errors": 0,
+        "sampler": {"interval_sec": 0.25, "errors": 0, "alive_at_stop": False,
                     "transitions": transitions if transitions is not None else [{"t": 0, "url": initial, "window_focused": True}]}},
         user_activity=activity)
     return evidence
@@ -235,6 +238,30 @@ class EvaluationTests(unittest.TestCase):
         server.prepare_server(target, Server(target, "node", ("cli.js",), enabled_tools=("browser_tabs",)), None, Path(folder))
         return server.trials[server.by_target[target]]
 
+    def test_setup_completes_only_once_the_simulated_user_runs(self):
+        # #56: a failure starting the view sampler or typing user is a setup failure, not a completed setup.
+        urls = ["http://local/t/journal", "http://local/t/notice"]
+        tabs = [{"id": 0, "url": urls[0], "active": True, "title": ""}, {"id": 1, "url": urls[1], "active": False, "title": ""}]
+        for failure in (None, RuntimeError("can't start new thread"), BidiError("WebSocket closed.")):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as folder:
+                session = CoexistenceSession({"target": "playwright", "urls": urls, "active_index": 0,
+                                              "bootstrap_url": "http://local/t/start", "evidence_path": folder + "/evidence.json",
+                                              "user_driver": {"bidi_url": "ws://127.0.0.1:9"}})
+                driver = Mock(calls=0, seconds=0.0)
+                driver.view.return_value = {"url": urls[0]}
+                sampler = Mock()
+                sampler.start.side_effect = failure
+                with patch.object(session, "wait_inventory", side_effect=[[tabs[0]], tabs, tabs]), \
+                        patch.object(session, "tool"), patch.object(session, "raw_tabs"), \
+                        patch("kitsune_benchmark.coexistence_session.UserDriver", return_value=driver), \
+                        patch("kitsune_benchmark.coexistence_session.ViewSampler", return_value=sampler):
+                    if failure is None:
+                        session.prepare()
+                    else:
+                        with self.assertRaises(ValueError):
+                            session.prepare()
+                self.assertIs(session.evidence["setup_complete"], failure is None)
+
     def test_prepare_server_adds_user_channel_and_keeps_allowlist(self):
         with tempfile.TemporaryDirectory() as folder, CoexistenceServer(typing_task(), 0) as server:
             server.begin("playwright")
@@ -258,7 +285,8 @@ class EvaluationTests(unittest.TestCase):
             trial.visits.append("/notice")
             trial.mutate("/note", trial.expected)
             calm = {"typed_into_user_field": "Saturday.", "misdirected": [], "ticks": 4, "errors": 0,
-                    "finished": False, "final_field_value": "Saturday.", "url": initial}
+                    "finished": False, "final_field_value": "Saturday.", "final_field_status": "ok",
+                    "alive_at_stop": False, "url": initial}
             result = self.evaluate(server, "kitsune", user_evidence(trial, activity=calm))
             self.assertTrue(result["scorable"])
             self.assertTrue(result["contracts"]["v3_user_view"]["task_success"])
@@ -286,7 +314,8 @@ class EvaluationTests(unittest.TestCase):
             trial.visits.append("/notice")
             trial.mutate("/note", trial.expected)
             calm = {"typed_into_user_field": "Saturday.", "misdirected": [], "ticks": 4, "errors": 0,
-                    "finished": False, "final_field_value": "Saturday.", "url": initial}
+                    "finished": False, "final_field_value": "Saturday.", "final_field_status": "ok",
+                    "alive_at_stop": False, "url": initial}
             evidence = user_evidence(trial, activity=calm)
             evidence["close_attempts"] = 1
             result = self.evaluate(server, "kitsune", evidence)
@@ -313,6 +342,141 @@ class EvaluationTests(unittest.TestCase):
             self.assertFalse(self.evaluate(server, "kitsune", owned)["scorable"])
             self.assertFalse(view_metrics({})["recorded"])
 
+    def test_agent_damage_to_the_user_channel_is_scored_not_dropped(self):
+        # Review B1: navigating the user's tab away or closing the browser is the agent's failure.
+        with tempfile.TemporaryDirectory() as folder, CoexistenceServer(typing_task(), 0) as server:
+            trial = self.prepared(server, "kitsune", folder)
+            initial = trial.url("/journal")
+            trial.visits.append("/notice")
+            trial.mutate("/note", trial.expected)
+            lost = {"typed_into_user_field": "Sat", "misdirected": [], "ticks": 4, "errors": 0, "finished": False,
+                    "final_field_value": None, "final_field_status": "lost", "alive_at_stop": False, "url": initial}
+            result = self.evaluate(server, "kitsune", user_evidence(trial, activity=lost))
+            self.assertTrue(result["scorable"])
+            self.assertFalse(result["user_input"]["user_field_intact"])
+            self.assertFalse(result["contracts"]["v3_user_input"]["task_success"])
+        # Channel broken (e.g. Playwright browser_close) and the agent failed (no saved answer): a scored failure.
+        with tempfile.TemporaryDirectory() as folder, CoexistenceServer(typing_task(), 0) as server:
+            trial = self.prepared(server, "kitsune", folder)
+            broken = user_evidence(trial, after=[{"url": None, "error": True}], activity=dict(
+                lost, errors=2, final_field_status="error", url=trial.url("/journal")))
+            outcome = self.evaluate(server, "kitsune", broken)
+            self.assertIs(outcome["task_success"], False)
+            self.assertTrue(outcome["scorable"])
+            self.assertFalse(outcome["user_channel_complete"])
+            self.assertFalse(outcome["contracts"]["v3_user_view"]["task_success"])
+            self.assertFalse(outcome["contracts"]["v3_user_input"]["task_success"])
+
+    def test_broken_channel_never_yields_a_pass(self):
+        with tempfile.TemporaryDirectory() as folder, CoexistenceServer(typing_task(), 0) as server:
+            trial = self.prepared(server, "kitsune", folder)
+            initial = trial.url("/journal")
+            trial.visits.append("/notice")
+            trial.mutate("/note", trial.expected)
+            calm = {"typed_into_user_field": "Saturday.", "misdirected": [], "ticks": 4, "errors": 0,
+                    "finished": False, "final_field_value": "Saturday.", "final_field_status": "ok",
+                    "alive_at_stop": False, "url": initial}
+            for evidence in (user_evidence(trial, after=[{"url": None, "error": True}], activity=calm),
+                             user_evidence(trial, activity=dict(calm, final_field_status="error")),
+                             user_evidence(trial, activity=dict(calm, errors=1)),
+                             user_evidence(trial, activity=dict(calm, typed_into_user_field="", final_field_value="")),
+                             user_evidence(trial, activity=None)):  # a typing task must have a typing record
+                with self.subTest(evidence=evidence["user_activity"]):
+                    result = self.evaluate(server, "kitsune", evidence)
+                    self.assertFalse(result["scorable"])
+                    self.assertIsNone(result["contracts"]["v3_user_view"]["task_success"])
+            dead = user_evidence(trial, activity=calm)
+            dead["view"]["sampler"]["errors"] = 3
+            self.assertFalse(self.evaluate(server, "kitsune", dead)["scorable"])
+            hung = user_evidence(trial, activity=calm)
+            hung["view"]["sampler"]["alive_at_stop"] = True
+            self.assertFalse(self.evaluate(server, "kitsune", hung)["scorable"])
+
+    def test_zero_agent_calls_and_ownership_by_target(self):
+        with tempfile.TemporaryDirectory() as folder, CoexistenceServer(selected_tasks(["pb-account-01"])[0], 0) as server:
+            trial = self.prepared(server, "kitsune", folder)
+            self.assertTrue(view_metrics(user_evidence(trial, after=[]))["recorded"])
+            unknown = user_evidence(trial)
+            unknown["seeded_owned_by_agent"] = None  # Kitsune must report ownership
+            self.assertFalse(self.evaluate(server, "kitsune", unknown)["scorable"])
+            result = self.evaluate(server, "kitsune", user_evidence(trial))
+            self.assertEqual(result["benchmark"], catalog()["suite"])
+            self.assertEqual(result["track"], "personal@user-seeded")
+            playwright = self.prepared(server, "playwright", folder)
+            evidence = user_evidence(playwright)
+            evidence["seeded_owned_by_agent"] = 0  # Playwright has no ownership notion: must be None
+            self.assertFalse(self.evaluate(server, "playwright", evidence)["scorable"])
+
+    def test_holds_are_reported_beside_user_tab_refusals(self):
+        # #58: Kitsune main holds writes with needs_user (user_viewing); user_tab_refusals counts refusals, not holds.
+        with tempfile.TemporaryDirectory() as folder, CoexistenceServer(selected_tasks(["pb-account-01"])[0], 0,
+                                                                        unprotected_user_tabs=True) as server:
+            trial = self.prepared(server, "kitsune", folder)
+            evidence = user_evidence(trial)
+            evidence.update(user_tab_refusals=0, elicitations=[{"tool": "browser_type", "reason": "approval",
+                            "detail": "user_viewing", "action": "decline", "decision": "declined"}], held_refusals=[
+                            {"call": 0, "tool": "browser_type", "code": "needs_user", "detail": "user_viewing",
+                             "decision": "declined"}])
+            result = self.evaluate(server, "kitsune", evidence)
+            self.assertEqual((result["unprotected_user_tabs"], result["protect_user_tabs"], result["user_tab_refusals"]),
+                             (True, False, 0))
+            self.assertEqual(result["holds"]["holds_by_detail"]["user_viewing"]["declined"], 1)
+            totals = aggregate_coexistence([{"results": {"kitsune": {"benchmark_evaluation": result}}}])["kitsune"]
+            self.assertEqual((totals["user_tab_refusals"], totals["runs_with_user_tab_refusal"]), (0, 0))
+            self.assertEqual((totals["holds"]["runs_with_declined_hold"], totals["holds"]["holds"]), (1, 1))
+            playwright = self.prepared(server, "playwright", folder)
+            self.assertIsNone(self.evaluate(server, "playwright", user_evidence(playwright))["holds"])
+
+    def test_unprotected_arm_turns_both_kitsune_protections_off(self):
+        plan = run_coexistence(task_ids=["pb-account-01"], unprotected_user_tabs=True, targets=("kitsune",))
+        self.assertEqual((plan["unprotected_user_tabs"], plan["protect_user_tabs"], plan["planned_model_runs"]),
+                         (True, False, 1))
+        for kwargs in ({"protect_user_tabs": True}, {"targets": ("playwright",)}):
+            with self.subTest(kwargs=kwargs), self.assertRaises(ValueError):
+                run_coexistence(unprotected_user_tabs=True, **kwargs)
+        stream = io.StringIO()
+        with patch("subprocess.Popen") as popen, redirect_stdout(stream):
+            self.assertEqual(main(["coexistence", "--unprotected-user-tabs", "--targets", "kitsune"]), 0)
+        popen.assert_not_called()
+        self.assertTrue(json.loads(stream.getvalue())["unprotected_user_tabs"])
+        launched = []
+
+        def pair(**kwargs):
+            launched.append(kwargs["kitsune_env"])
+            raise RuntimeError("stop before any process")
+        with patch("kitsune_benchmark.coexistence.run_pair", pair), \
+                patch("kitsune_benchmark.coexistence.source_revision", return_value={}), self.assertRaises(RuntimeError):
+            run_coexistence(execute=True, task_ids=["pb-account-01"], unprotected_user_tabs=True, targets=("kitsune",),
+                            harness="claude")
+        # #100: KITSUNE_USER_TABS for Kitsune v0.7.2 and later (kitsune#398), the old names for Kitsune before it.
+        self.assertEqual(launched, [{"KITSUNE_USER_TABS": "writable", "KITSUNE_PROTECT_USER_TABS": "0",
+                                     "KITSUNE_HOLD_VIEWED_TAB": "0"}])
+        with patch("kitsune_benchmark.coexistence.run_pair", pair), \
+                patch("kitsune_benchmark.coexistence.source_revision", return_value={}), self.assertRaises(RuntimeError):
+            run_coexistence(execute=True, task_ids=["pb-account-01"], protect_user_tabs=True, harness="claude")
+        self.assertEqual(launched[-1], {"KITSUNE_USER_TABS": "read-only", "KITSUNE_PROTECT_USER_TABS": "1"})
+
+    def test_user_tab_refusals_are_counted_from_kitsune_errors(self):
+        refusal = {"id": 3, "result": {"isError": True, "content": [{"type": "text", "text": json.dumps(
+            {"ok": False, "code": "user_tab", "error": "Use your own tab."})}]}}
+        self.assertTrue(user_tab_refusal(refusal))
+        # #101: Kitsune with read-only user tabs (kitsune#395) refuses writes and select with user_tab_read_only.
+        read_only = {"id": 4, "result": {"isError": True, "content": [{"type": "text", "text": json.dumps(
+            {"error": "Tab 2 is read-only for this client; nothing was done", "code": "user_tab_read_only"})}]}}
+        self.assertTrue(user_tab_refusal(read_only))
+        for other in ({"id": 3, "result": {"isError": True, "content": [{"type": "text", "text": '{"code":"timeout"}'}]}},
+                      {"id": 3, "result": {"content": [{"type": "text", "text": '{"code":"user_tab"}'}]}},
+                      {"id": 3, "result": {"isError": True, "content": [{"type": "text", "text": "plain"}]}}):
+            self.assertFalse(user_tab_refusal(other))
+
+    def test_config_and_catalog_agree_on_the_frozen_suite(self):
+        self.assertEqual(coexistence_config()["id"], "coexistence-local-v3")
+        self.assertEqual(catalog()["suite"], coexistence_config()["id"])
+        self.assertEqual(runnable_ids(), ["co-typing-01"])
+        # v2 runs the unprotected arm (user tabs writable); v1's protect arm equals the default after Kitsune 0.7.1.
+        self.assertEqual({c["id"]: c["status"] for c in catalog()["conditions"]},
+                         {"user-seeded": "runnable", "unprotected-user-tabs": "runnable", "protect-user-tabs": "retired"})
+
     def test_kitsune_ownership_parser(self):
         listed = {"content": [{"type": "text", "text": json.dumps({"tabs": [
             {"index": 0, "url": "http://a/1", "active": True}, {"index": 1, "url": "http://a/2", "owned": True}]})}]}
@@ -320,6 +484,36 @@ class EvaluationTests(unittest.TestCase):
         self.assertIsNone(owned_urls("playwright", listed))
         with self.assertRaises(ValueError):
             owned_urls("kitsune", {"content": [{"type": "text", "text": "not json"}]})
+
+
+class WaitSessionClosedTests(unittest.TestCase):
+    def waited(self, evidence, timeout):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "evidence.json"
+            path.write_text(json.dumps(evidence))
+            start = time.monotonic()
+            returned = wait_session_closed(path, timeout=timeout)
+            return returned, time.monotonic() - start
+
+    def test_returns_at_once_once_the_session_closed(self):
+        evidence = {"setup_complete": True, "session_closed": True}
+        returned, elapsed = self.waited(evidence, timeout=5)
+        self.assertEqual(returned, evidence)
+        self.assertLess(elapsed, 1)
+
+    def test_returns_at_once_for_a_session_that_never_completed_setup(self):
+        for evidence in ({}, {"setup_complete": False}):
+            with self.subTest(evidence=evidence):
+                returned, elapsed = self.waited(evidence, timeout=5)
+                self.assertEqual(returned, evidence)
+                self.assertLess(elapsed, 1)
+
+    def test_returns_the_evidence_as_it_is_after_the_deadline(self):
+        evidence = {"setup_complete": True, "snapshots": []}
+        returned, elapsed = self.waited(evidence, timeout=0.3)
+        self.assertEqual(returned, evidence)
+        self.assertGreaterEqual(elapsed, 0.3)
+        self.assertLess(elapsed, 3)
 
 
 # ---- Opt-in real-browser tests: no model calls ---------------------------------------------
@@ -359,8 +553,17 @@ def kitsune_with_user_channel(folder, bidi_port):
             yield ["uv", "run", "--locked", "--project", str(project), "kitsune"]
 
 
-def snapshot_text(session) -> str:
-    """Playwright returns Markdown; Kitsune a JSON object whose `snapshot` holds the same lines."""
+def snapshot_text(session, previous=None) -> str:
+    """Reuse a full snapshot from a tab result before requesting another, possibly unchanged, tree."""
+    if previous:
+        try:
+            payload = json.loads(previous)
+        except ValueError:
+            payload = None
+        if (isinstance(payload, dict) and payload.get("snapshot")
+                and not payload.get("unchanged_since") and not payload.get("snapshot_delta")):
+            return payload["snapshot"]
+    # Playwright returns Markdown; Kitsune puts the tree in a JSON object's snapshot field.
     texts = []
     for item in session.tool("browser_snapshot", {})["content"]:
         text = item.get("text", "")
@@ -379,6 +582,26 @@ def ref_for(snapshot: str, role: str, name: str) -> str:
             if match:
                 return match[1]
     raise AssertionError(f"No {role} {name!r} in snapshot:\n{snapshot[:2000]}")
+
+
+class SnapshotTextTests(unittest.TestCase):
+    def test_reuses_a_full_snapshot_without_another_call(self):
+        session = Mock()
+        tree = '- textbox "Memo" [ref=e1]'
+        self.assertEqual(snapshot_text(session, json.dumps({"snapshot": tree, "tab": {"current": True}})), tree)
+        session.tool.assert_not_called()
+
+    def test_reads_when_a_tab_result_has_no_fresh_full_tree(self):
+        tree = '- textbox "Memo" [ref=e1]'
+        for previous in (None, "{}", "Playwright tab selected", json.dumps({"snapshot": ""}),
+                         json.dumps({"snapshot": "unchanged", "unchanged_since": "browser_tabs"}),
+                         json.dumps({"snapshot": "partial tree", "snapshot_delta": True})):
+            for current in (tree, json.dumps({"snapshot": tree})):
+                with self.subTest(previous=previous, current=current):
+                    session = Mock()
+                    session.tool.return_value = {"content": [{"text": current}]}
+                    self.assertEqual(snapshot_text(session, previous), tree)
+                    session.tool.assert_called_once_with("browser_snapshot", {})
 
 
 class NativeMixin:
@@ -433,9 +656,14 @@ class NativeMixin:
                     source = {"orders": "/order/2", "typing_journal": "/notice"}[task["fixture"]]
                     agent("browser_tabs", {"action": "new", "url": trial.url(source)})
                     memo = {"orders": "/orders", "typing_journal": "/memo"}[task["fixture"]]
-                    tab = next(t for t in session.inventory() if t["url"] == trial.url(memo))
-                    agent("browser_tabs", {"action": "select", "index": tab["id"]})
-                    snapshot = snapshot_text(session)
+                    if self.target == "kitsune":
+                        # Kitsune holds writes to the tab the user views (kitsune#364), and under kitsune#393 user
+                        # tabs are read-only, so the agent writes the memo in a tab of its own (#65).
+                        opened = agent("browser_tabs", {"action": "new", "url": trial.url(memo)})
+                    else:
+                        tab = next(t for t in session.inventory() if t["url"] == trial.url(memo))
+                        opened = agent("browser_tabs", {"action": "select", "index": tab["id"]})
+                    snapshot = snapshot_text(session, opened)
                     label = "메모" if task["fixture"] == "orders" else "점검일"
                     value = trial.expected["answer"] if task["fixture"] == "orders" else trial.expected["점검일"]
                     agent("browser_type", {"target": ref_for(snapshot, "textbox", label), "element": label, "text": value})
@@ -467,7 +695,8 @@ class NativeKitsuneCoexistenceTests(NativeMixin, unittest.TestCase):
 
     def test_typing_user_is_not_disturbed(self):
         result = self.run_reference("co-typing-01", write_user_tab_first=True)
-        self.assertIn('"code":"user_active"', self.user_tab_write)
+        # Kitsune with read-only user tabs (kitsune#395) gives the agent no current tab on a user-seeded session.
+        self.assertRegex(self.user_tab_write, r'"code":"(user_active|no_current_tab|user_tab_read_only)"')
         self.assertTrue(result["task_success"], result)
         self.assertGreater(result["user_input"]["typed_chars"], 0, result["user_input"])
         self.assertTrue(result["user_input"]["user_input_intact"], result["user_input"])

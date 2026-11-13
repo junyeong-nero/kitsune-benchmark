@@ -12,14 +12,15 @@ Compare Playwright MCP and Kitsune MCP on **continuing work inside an existing
 browser session**, not just opening an empty browser and following a URL.
 
 - **36 specifications:** nine categories, four tasks each, in
-  [`tasks/personal/catalog.json`](../tasks/personal/catalog.json). `taskset-v3`
+  [`tasks/personal/catalog.json`](../tasks/personal/catalog.json). `taskset-v3.5`
   (28 tasks) is the current frozen tag; the eight civic-document and
   authenticated-service tasks are the [taskset-v4 preparation](#civic-documents-and-authenticated-services-taskset-v4-preparation).
 - **All 36 tasks are runnable local fixtures.** The original six (one per
   original category) form the default pilot; `personal --all` selects all 36. The 30
   newer fixtures live in `kitsune_benchmark/personal_fixtures.py`, grade
   free-text answers by required facts (exact field values for the long-page family)
-  or server-side service state, and open in-page links in new tabs.
+  or server-side service state. Older fixtures open links in new tabs; the v4 service forms stay at each
+  starting tab's own URL.
 - **Three deterministic data variants** (`0`, `1`, `2`) per runnable task.
   These are different inputs, not three identical repeated trials.
 - Configuration: [`configs/benchmarks/personal.json`](../configs/benchmarks/personal.json),
@@ -76,7 +77,7 @@ provenance. All 36 have implemented fixtures and graders.
 | Current page | `pb-current-04` | Find the cheapest eligible plan in the current pricing table | Runnable |
 | Existing tabs | `pb-tabs-01` | Compare three already-open products including shipping and delivery constraints | Runnable |
 | Existing tabs | `pb-tabs-02` | Combine event and transport information across open tabs | Runnable |
-| Existing tabs | `pb-tabs-03` | Look up a policy and return to the original active tab | Runnable |
+| Existing tabs | `pb-tabs-03` | Look up a policy and return to the original active tab (graded on the tab the user sees, `taskset-v3.3`) | Runnable |
 | Existing tabs | `pb-tabs-04` | Distinguish similar reservation tabs by date | Runnable |
 | Research | `pb-research-01` | Find current official policy among stale and unofficial search results | Runnable |
 | Research | `pb-research-02` | Reconcile opening hours with an exceptional closure/update | Runnable |
@@ -170,15 +171,16 @@ pages say they are test documents without legal effect.
 Each service runs **in place in one starting tab**: every form answers 303 to that
 tab's own URL, which then shows the next step, as many such sites keep one URL
 across steps. So no step moves a starting tab and custody is unchanged. Pages run
-no scripts, and every button posts at least one field. **Printing** queues a job on
+no application scripts (only the harness's viewport beacon in instrumented runs), and every button posts at least one field. **Printing** queues a job on
 a fictional test printer, recorded server-side; the browser's print dialog and
 PDF output are not exercised, and the 23-tool allowlist has no PDF or print tool.
 Login uses fictional credentials given in the request; neither target sees real
 accounts, and Kitsune's sensitive-field redaction still applies to the password
 and code fields.
 
-The 28 v3 tasks are unchanged: `tests/test_taskset_v4.py` hashes every page they
-serve against `main` before this preparation. Personal summaries also report
+The existing 28 tasks keep current main's behavior, including `taskset-v3.2` user seeding and `taskset-v3.3`'s
+shown-tab grader. `tests/test_taskset_v4.py` pins their current task specs and hashes every page against
+pre-v4 main; the original v3 tag is not a baseline for the later grader/seeding changes. Personal summaries also report
 `by_category.civic_document` and `by_category.authenticated_service`.
 
 ## Fair starting state and reset
@@ -201,6 +203,11 @@ using **native browser tools**, verifies tab URLs and the active tab, then
 forwards native schemas and tool results without translating them. It waits
 for asynchronous tab creation to settle. No custom browser action, JavaScript
 execution, filesystem access, or privileged tool is added to the agent.
+If setup fails, the relay records the error and never answers that first
+request, so the agent's client never gets a tool list; the harness stops it
+and records `setup_failed` (#56). That is before any model request as long as
+the client was still waiting for the list (it did not time the request out);
+the run's `model_request_observed` records whether one was made.
 
 The profiles are fresh but **the task session is populated before model tool
 use**. This models session continuity; it is not an evaluation of real OAuth,
@@ -277,12 +284,28 @@ Existing calendar events are read-only in this fixture. They cannot be edited
 through the exposed UI. Thus preserving them is a fixture property, not yet a
 strong test of choosing not to edit an editable existing event.
 
-**Seeding limit (v1):** starting tabs after the first are opened with the MCP
-server's own `browser_tabs new`, so Kitsune lists them (and the protected note)
-as agent-owned, and for Kitsune ≥ 0.3.1 the relay's `active` is the tool cursor
-`current`, not the tab the user sees. Nobody uses the browser during a run. The
-draft [coexistence track](coexistence.md) re-runs these tasks with user-owned
-starting tabs and view telemetry, without changing this taskset.
+**Seeding (#70):** the user opens the starting tabs through the
+[user channel](coexistence.md#the-user-channel) (WebDriver BiDi), as in the
+coexistence track: the profile's tab loads the bootstrap page and the first
+starting tab, the others open in the specification's order, and the user clicks
+the active tab. The channel closes before the agent starts; the agent never sees
+it. Kitsune therefore lists the starting tabs (and the protected note) as the
+user's, as in a real session. Setup fails (unscorable) if Kitsune lists any
+starting tab as agent-owned (`seeded_owned_by_agent`, `null` for Playwright,
+which has no tab ownership). The evidence and evaluation record
+`seeding: "user_channel"`; inventory and custody checks are unchanged. One hidden
+`browser_tabs select` still pins the tool cursor to the active tab, and for
+Kitsune ≥ 0.3.1 the relay's `active` is that cursor (`current`), not the tab the
+user sees. Nobody uses the browser during a run. The
+[coexistence track](coexistence.md) (`coexistence-local-v1`) adds view telemetry
+and a typing user.
+
+Before #70 (`taskset-v3.1.2` and earlier; the change is in `taskset-v3.2`), starting tabs after the first were opened
+with the MCP server's own `browser_tabs new`, so Kitsune listed them as
+agent-owned and its user-tab rules never applied to them. Kitsune personal
+results from before and after this change are not comparable. Other experiments
+that reuse the personal fixtures (disclosure, target view, integrated startup)
+still seed through the MCP server.
 
 This is **not an adversarial security boundary**: the server and browser live
 on the same machine, the relay relies on native inventory formats, and tab
@@ -334,7 +357,10 @@ reported only if Codex emits it. Interrupted runs can lack usage.
 
 A harness/setup/unscorable evaluation stops further target/task execution; a
 valid, ordinary unsuccessful task does not. There is no automatic model
-substitution or retry. Current order is Playwright first, then Kitsune; the
+substitution or retry; `--retry-setup-failures N` reruns only a pair whose setup
+failed while the client was provably still waiting for its tool list, so before
+any model request, and reruns the pair's other target too
+([running guide](running.md#quota-and-stopping)). Current order is Playwright first, then Kitsune; the
 three data variants do not counterbalance order. Publication-quality evaluation
 still needs order counterbalancing, repeated trials and paired analysis.
 
@@ -350,6 +376,8 @@ Private artifacts under `artifacts/personal/<pair-id>/` include:
 - `{target}-session.json`: relay provisioning config; no real account credentials.
 - `{target}-session-evidence.json`: verified initial tabs, post-call inventories,
   close/outside-navigation attempts, hidden harness call count/time and setup errors.
+  For Kitsune it also keeps the approval prompts the relay answered (`elicitations`) and,
+  since #58, the refusals the agent got for a held call (`held_refusals`).
 - `{target}-native-rpc.jsonl`: upstream RPC start/completion time, agent/harness
   role, response text/serialized sizes, cache flags and setup/readiness spans.
 - `{target}-native-metadata.json`: initialize result, native tools/list pages and
@@ -365,6 +393,13 @@ It reports token usage for **all runs** and **successful runs** separately, with
 usage-coverage counts, plus successful-run call/time totals. Missing usage is
 not evidence of zero token consumption. Inspect task-level results alongside
 aggregates; a failed short run is not an efficiency win.
+
+**Kitsune holds** (#58): each Kitsune evaluation carries `holds`, and `by_target.kitsune.holds` sums
+them over every attempted run. They count the calls Kitsune held for the user's approval by detail
+(`user_viewing`, `user_tab`, other) and decision, and the declined writes the agent redid in another
+tab (`redone_after_decline`). The definitions are in
+[the coexistence track](coexistence.md#kitsune-holds-and-redo-after-decline); they are reported beside
+the contracts and change no verdict.
 
 **Instrumentation overhead:** the relay queries tab inventories after each
 agent tool call and provisions tabs before forwarding the first request.

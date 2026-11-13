@@ -25,6 +25,9 @@ NEW = ("civic_document", "authenticated_service")
 # Every page (status, CSP header, body with the trial base URL as BASE) of the 28 taskset-v3 tasks x 3 variants,
 # served without and with the viewport report (its script and CSP removed), as at main 8a74a1e (taskset-v3 + 2).
 V3_PAGES_SHA256 = "099e2cbe534ec6e30e170eb73ec21f0716c2529c8c02cf66bee7655fa6ee4ced"
+# Current main 08823b2, including the shown-tab grader contract and unprotected coexistence arm.
+V3_TASKS_SHA256 = "dd9642b06d0fbd073b3149a9d7e2652c7796aebe99801f90764b43f0c2899785"
+COEXISTENCE_CONTRACT_SHA256 = "3210918cadbdf6917d1f2f173e14d4c0c874537e7b61b4cc91b8cf1a3bbc3fc1"
 
 
 def new_tasks():
@@ -116,6 +119,18 @@ class TasksetV4ContractTests(unittest.TestCase):
         self.assertTrue(all(issubclass(FIXTURE_CLASSES[t["fixture"]], ServiceFixture) for t in new_tasks()))
         coexistence = json.loads((ROOT / "tasks/coexistence/catalog.json").read_text())
         self.assertIn("all 36 personal-browsing-local-v4 tasks", json.dumps(coexistence, ensure_ascii=False))
+        self.assertEqual(coexistence["suite"], "coexistence-local-v3")
+
+    def test_existing_specs_and_coexistence_contracts_stay_current(self):
+        tasks = [t for t in catalog()["tasks"] if t["category"] not in NEW]
+        self.assertEqual(len(tasks), 28)
+        self.assertEqual(hashlib.sha256(json.dumps(tasks, ensure_ascii=False).encode()).hexdigest(), V3_TASKS_SHA256)
+        coexistence = json.loads((ROOT / "tasks/coexistence/catalog.json").read_text())
+        contract = {k: coexistence[k] for k in ("tasks", "conditions")}
+        # Only the personal selection grows; conditions, typing fixture and specified-only tasks stay intact.
+        del next(c for c in contract["conditions"] if c["id"] == "user-seeded")["applies_to"]
+        self.assertEqual(hashlib.sha256(json.dumps(contract, ensure_ascii=False).encode()).hexdigest(),
+                         COEXISTENCE_CONTRACT_SHA256)
 
     def test_v3_task_pages_stay_byte_identical(self):
         pages = {False: [], True: []}

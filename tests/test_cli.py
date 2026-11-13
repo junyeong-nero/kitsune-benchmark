@@ -66,6 +66,46 @@ class CLITests(unittest.TestCase):
         with redirect_stdout(io.StringIO()), self.assertRaises(SystemExit):
             main(["personal", "--harness", "claude", "--codex-model", "gpt-6.1-sol"])
 
+    def test_elicitation_policy_reaches_session_config_and_is_recorded(self):
+        # #59: --elicitation sets the relay's answer to Kitsune's prompts (personal_session.py) on the relay tracks.
+        from kitsune_benchmark.personal import runnable_ids
+        from kitsune_benchmark.specs import Server
+        tracks = (("personal", "kitsune_benchmark.personal", runnable_ids()[0]),
+                  ("gallery", "kitsune_benchmark.smoke", "mm-audio"),  # run_gallery imports run_pair when called
+                  ("coexistence", "kitsune_benchmark.coexistence", "co-typing-01"))
+        for (command, module, task), policy in ((track, policy) for track in tracks
+                                                          for policy in (None, "decline", "accept")):
+            expected = policy or "decline"
+            flag = ["--elicitation", policy] if policy else []
+            with self.subTest(command=command, policy=policy), tempfile.TemporaryDirectory() as folder:
+                out = io.StringIO()
+                with redirect_stdout(out):
+                    self.assertEqual(main([command, "--task", task, *flag]), 0)
+                self.assertEqual(json.loads(out.getvalue())["elicitation"], expected)
+                specs, settings = [], {}
+                def run_pair(**kwargs):
+                    specs.append(kwargs["experiment_spec"])
+                    for target in kwargs["targets"]:
+                        prompt = kwargs["task_for_target"](target)
+                        wrapped = kwargs["prepare_server"](target, Server(target, "node", ("cli.js",)), prompt, Path(folder))
+                        settings[target] = json.loads(Path(wrapped.args[-1]).read_text())["elicitation"]
+                    return {"pair_dir": folder, "results": {t: {"benchmark_evaluation": {"scorable": False}}
+                                                             for t in kwargs["targets"]}}
+                out = io.StringIO()
+                with patch(module + ".run_pair", side_effect=run_pair), redirect_stdout(out):
+                    main([command, "--task", task, *flag, "--execute"])
+                result = json.loads(out.getvalue())
+                self.assertEqual(settings, {"playwright": expected, "kitsune": expected})
+                self.assertEqual(specs[0]["elicitation"], expected, "the pair manifest records the experiment")
+                self.assertEqual(result["elicitation"], expected)
+                self.assertEqual(json.loads(Path(result["suite_summary_path"]).read_text())["elicitation"], expected)
+                pair = json.loads((Path(folder) / f"{command}-summary.json").read_text())
+                self.assertEqual(pair["elicitation"], expected)
+        with redirect_stdout(io.StringIO()), self.assertRaises(SystemExit):
+            main(["personal", "--elicitation", "approve"])
+        with redirect_stdout(io.StringIO()), self.assertRaises(SystemExit):
+            main(["external", "--elicitation", "accept"])  # no relay, no prompts to answer
+
     def test_claude_overrides_rejected_for_codex(self):
         with redirect_stdout(io.StringIO()), self.assertRaises(SystemExit):
             main(["personal", "--harness", "codex", "--claude-model", "claude-opus-5-5"])

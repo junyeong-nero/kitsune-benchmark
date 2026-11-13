@@ -5,10 +5,11 @@
 
 ## Setup
 
-Prerequisites: Python 3.11+, uv, Node/npm, a supported Codex ChatGPT subscription
-login and the Kitsune source checkout (normally sibling `../kitsune`). The
-current harness pins Codex CLI `0.163.0`; execution configs request
-`gpt-6-luna` with reasoning `medium`.
+Prerequisites: Python 3.11+, uv, Node/npm, Claude Code `2.1.303` logged in to a
+claude.ai subscription (the [default harness](#default-harness-claude-code-on-the-subscription)),
+and the Kitsune source checkout (normally sibling `../kitsune`). The Codex harness
+(`--harness codex`) needs a supported Codex ChatGPT login instead; it pins Codex CLI
+`0.163.0`, and the configs request `gpt-6-luna` with reasoning `medium`.
 
 ```sh
 uv sync --locked
@@ -20,7 +21,8 @@ The browser helper installs to the private `artifacts/browsers` cache with
 shared-cache garbage collection disabled. Automated pair commands use isolated
 headless profiles and private bridge ports, not an everyday Firefox/Zen session.
 Use `--kitsune-project /absolute/path/to/kitsune` if the checkout is not the
-sibling directory; `--codex /path/to/codex` disambiguates CLI discovery.
+sibling directory; with the Codex harness, `--codex /path/to/codex` disambiguates
+CLI discovery.
 
 Do not import real account credentials or attach a normal browser profile.
 Personal tasks use synthetic local app state and test cookies. See
@@ -37,17 +39,22 @@ uv run --locked python -m kitsune_benchmark personal \
   --task pb-current-01 --variant 0
 ```
 
-`doctor` flags inherited model API credentials. Actual execution uses a restricted
-child environment that strips them. To run a standalone subscription-only doctor
-check when the shell has such variables, omit them only for that child command:
+`doctor` flags inherited API credentials: `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`,
+`CLAUDE_CODE_OAUTH_TOKEN` and the Bedrock/Vertex/Foundry switches for the Claude
+harness, the OpenAI/Codex keys for `--harness codex`. Actual execution uses a
+restricted child environment that strips them. To run a standalone subscription-only
+doctor check when the shell has such variables, omit them only for that child command:
 
 ```sh
-env -u OPENAI_API_KEY -u CODEX_API_KEY -u OPENAI_AUTH_TOKEN -u AZURE_OPENAI_API_KEY \
+env -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN -u CLAUDE_CODE_OAUTH_TOKEN \
   uv run --locked python -m kitsune_benchmark doctor --json
+env -u OPENAI_API_KEY -u CODEX_API_KEY -u OPENAI_AUTH_TOKEN -u AZURE_OPENAI_API_KEY \
+  uv run --locked python -m kitsune_benchmark doctor --harness codex --json
 ```
 
-No command edits the user's Codex authentication/configuration. The CLI alone
-reads its existing login; there is no API-key or alternate-model fallback.
+No command edits Claude Code's or Codex's login or configuration. Each CLI reads its
+existing login; there is no API-key or alternate-model fallback. API billing is only
+the explicit `--harness claude-api` described below.
 
 ## Choose the smallest relevant run
 
@@ -57,8 +64,14 @@ reads its existing login; there is no API-key or alternate-model fallback.
 | `personal --execute` | Six-task personal pilot, one variant | 12 |
 | `personal --all --execute` | All 36 personal tasks, one variant | 72 |
 | Three separate `personal --variant N --execute` commands for N=0,1,2 | Six tasks across three data variants | 36 total |
-| `benchmark --execute` | One MiniWoB++ `click-test-2` pair, seed 42 | 2 |
+| `external --task mw-login-user --execute` | One MiniWoB++ pair, seed 42 | 2 |
+| `external --execute` | All 10 external tasks: 7 MiniWoB++ + 3 live sites | 20 |
+| `coexistence --execute` | The `co-typing-01` typing-user pair, variant 0 | 2 |
 | `smoke --execute` | One read-only Example Domain pair | 2 |
+| `stress --profile release-v1 --execute` | Independent `stress-v1`: 1–32 concurrent MCP clients, 3 repeats, private shared browser | **0** |
+| `stress-compare --profile shared-browser-v1 --execute` | Independent `stress-compare-v1`: paired Kitsune/Playwright, 1–32 clients, 2 counter-ordered repeats | **0** |
+| `full-native --unit pb-longpage-01 --execute` | One [full-native](full-native.md) unit, both Kitsune arms | 2 |
+| `full-native --execute` | All 14 full-native units, both Kitsune arms, one variant | 28 |
 
 These are **agent run counts**, not LLM turn counts, token caps or prices. One
 agent run can contain many model/tool interactions. There is no `full-test`
@@ -66,7 +79,7 @@ command that automatically executes every upstream benchmark.
 
 ### Default harness: Claude Code on the subscription
 
-`smoke`, `benchmark`, `personal`, `gallery`, `coexistence`, `doctor` and
+`smoke`, `benchmark`, `personal`, `gallery`, `coexistence`, `full-native`, `doctor` and
 `scripts/run-full-suite.py` default to **`--harness claude`**. It runs **Claude Code
 `2.1.303`** on the existing **claude.ai subscription login**, with the model/effort
 from each config's `claude_code` block (default `claude-opus-5-5`, effort `medium`;
@@ -128,20 +141,44 @@ values actually used. `doctor --claude-model ID` validates that model for free.
 With `--harness codex`, `--codex-model ID` overrides the config's Codex `model` the
 same way; `scripts/run-full-suite.py --harness codex --model ID` passes it to every
 track and records it in `suite-manifest.json` (default: the config's Codex model).
-`scripts/run-full-suite.py` runs every graded track (personal 36 × 3 variants,
-gallery 21 × 3 variants × 2 layouts, MiniWoB) under one total `--budget-usd`, and
+`scripts/run-full-suite.py` runs every track (personal 36 × 3 variants,
+gallery 21 × 3 variants × 2 layouts, the [coexistence plan](coexistence.md#frozen-protocol),
+external 7 MiniWoB + 3 live) under one total `--budget-usd`, and
 writes `suite-manifest.json` with the Kitsune revision and `git describe` so the
 result can be filed under [its Kitsune version](results/kitsune-versions.md).
-By default each personal/gallery track runs Playwright and Kitsune as two
+On the v4 preparation, one `--plan full` attempt is **602 agent runs**; `--plan lite` uses personal variants 0/1
+and gallery variant 0 on both layouts, for **362 runs**. Coexistence stays on variant 0 for all 36 personal tasks
+(default pair + Kitsune unprotected arm), plus `co-typing-01` variants 0–2. External is unchanged. `taskset-v3.5`
+remains the latest frozen tag (530 full / 306 lite runs); do not relabel its cohorts or compare expanded totals.
+Freeze/tag v4 and rerun compared releases before making a version comparison.
+By default each personal/gallery/external track runs Playwright and Kitsune as two
 concurrent `--targets` processes with half the remaining budget each (about half
 the wall time; elapsed and CPU/RSS are then measured under shared load, and the
 suite log has one entry per target). `--sequential` restores paired,
 Playwright-first runs in one process. A Playwright-only process starts no Kitsune
 bridge or browser. `scripts/analyze-per-tool.py <out>` compares the two targets
 tool by tool (calls, errors, latency, response size, grouped error texts).
+**Model-free stress is now included once before the graded tracks.** The driver
+runs `stress --profile release-v1 --execute` alone, with no model or competing
+track processes. This adds roughly 15 minutes (host-dependent) and records the
+independent `stress-v1` protocol/profile and a separate `stress` summary, never
+adding performance results to task-success denominators. Resource safety stops
+or invalid/incomplete stress evidence stop the suite before model execution.
+`--skip-stress` explicitly opts out and records that choice. `--attempts` below
+applies to graded tracks; the stress profile always declares its own three repeats.
+See [stress protocol, limits and standalone commands](stress.md). Add
+`--stress-comparison` to the full-suite command to replace that prelude with the
+independent `stress-compare-v1` / `shared-browser-v1` paired Kitsune/Playwright
+comparison. It is mutually exclusive with `--skip-stress`, also runs alone before
+model work, and never changes task scores. The standalone, model-free command is
+`uv run --locked python -m kitsune_benchmark stress-compare --profile shared-browser-v1 --execute`.
+See [comparison protocol](stress-comparison.md).
+
 The full-suite driver exits **3** after an invalid/incomplete track (nonzero exit,
 stopped reason, malformed summary, or incomplete coverage), once its active
-target processes have settled. It does not start later tracks or retry. Ordinary
+target processes have settled. It does not start later tracks or retry, except the
+setup retries that `--retry-setup-failures N` passes to the personal, gallery and
+coexistence entries ([Quota and stopping](#quota-and-stopping)). Ordinary
 scorable task failures still allow the suite to continue. Use a fresh output
 directory for each suite invocation; nonempty output directories are rejected.
 
@@ -152,6 +189,44 @@ uv run --locked python scripts/run-full-suite.py --model claude-opus-5-5 \
 # API credit, explicitly:
 uv run --locked python scripts/run-full-suite.py --harness claude-api --allow-api-billing \
   --budget-usd 60 --kitsune-project artifacts/vendor/kitsune-pinned --out artifacts/opus-full
+```
+
+### Elicitation policy: Kitsune's approval prompts
+
+Since kitsune#364 Kitsune holds some calls for the user's approval (a tab the user
+is viewing, a tab the agent did not open, an ask-before-act action), and since
+kitsune#376 it asks through MCP elicitation. The personal, gallery and coexistence
+relay declares elicitation and answers every prompt itself, so no prompt reaches the
+agent's client. The harness's own setup calls are always approved. During the agent's
+turn `--elicitation` decides:
+
+- `decline` (default): every prompt is declined. The held call does not run, and the
+  run measures whether the agent stops, reports or works around it.
+- `accept`: approval prompts are approved and the held call runs once.
+  `browser_ask_user` prompts are still declined, because no user does what they ask.
+
+Playwright never elicits, so the policy changes only Kitsune runs. External does not
+use the relay and has no `--elicitation`; an accept suite still runs it, unchanged.
+Each run's session evidence records `elicitation_policy` and every prompt in
+`elicitations`. Plan output, pair manifests (`experiment.elicitation`), per-pair and
+track summaries, and `suite-manifest.json` record the policy. `scripts/run-full-suite.py --elicitation accept` passes it to every
+personal, gallery and coexistence entry.
+
+**Results across policies are not comparable.** Do not compare token ratios between
+a decline and an accept suite. Do not compare either with a cohort from before
+kitsune#364, which held nothing, without saying so. `scripts/analyze-release.py`
+shows each suite's policy: from `suite-manifest.json`, else (suites before #59) from
+a pair's `experiment.elicitation` or a Kitsune run's session evidence. It warns when
+`--compare` mixes policies or compares with a suite that recorded none. When that
+earlier suite's Kitsune (`git describe` in its `suite-manifest.json`) predates
+kitsune#364, it says "no holds then (Kitsune < #364)" instead.
+
+```sh
+# Authorized model execution only: the accept arm of a lite suite, beside a decline suite on the same tag.
+uv run --locked python scripts/run-full-suite.py --plan lite --elicitation accept \
+  --kitsune-project artifacts/vendor/kitsune-pinned --out artifacts/opus-lite-accept
+uv run --locked python scripts/analyze-release.py artifacts/opus-lite-accept \
+  --compare artifacts/opus-lite-decline > review.md   # warns: the policies differ
 ```
 
 ### Repeated, predeclared order (taskset-v3)
@@ -166,16 +241,21 @@ across all attempts: no implicit retry after invalid evidence.
 A = Playwright, B = Kitsune (not baseline/candidate Kitsune versions).
 `--sequential --order ab` or `ba` fixes the target order for every attempt.
 `--sequential --attempts 2 --order abba` declares AB for attempt 1 and BA for
-attempt 2 (alternates for larger even N; odd N is rejected). Order includes
-MiniWoB. Default parallel personal/gallery mode has **no target order** and
-rejects `--order`; its MiniWoB pair remains AB. Default `--attempts 1` retains
-the previous parallel behavior, or AB with `--sequential`.
+attempt 2 (alternates for larger even N; odd N is rejected). Default parallel
+personal/gallery/external mode has **no target order** and rejects `--order`.
+Coexistence entries always run paired in one process: AB by default, or the
+attempt's declared order. Default `--attempts 1` keeps the parallel behavior, or AB
+with `--sequential`.
 
 ```sh
 # Authorized model execution only; run both Kitsune revisions separately on the same frozen tag.
 uv run --locked python scripts/run-full-suite.py --sequential --attempts 2 --order abba \
   --kitsune-project artifacts/vendor/kitsune-pinned --out artifacts/v3-repeated
 ```
+
+`scripts/analyze-release.py` on such a suite adds per-order ratios, the claims both orders agree on and per-unit
+spread between attempts; the release-cohort form (`--plan lite`, about 612 runs) is in the
+[release cohort protocol](experiments/2026-10-29-release-cohort-protocol.md#counterbalanced-cohort-claim-grade-107).
 
 Every pair/run manifest records configured geometry read from launch/server args:
 Playwright `viewport_size` 1280×720 (content) and the Kitsune headless Firefox
@@ -191,12 +271,13 @@ nothing and adds no accessibility node or snapshot text; the server keeps the
 reports apart from visits, form writes and forbidden actions, so grading is
 unchanged. No agent-visible call or resize is involved. Apart from that script
 and its CSP header, the 24 original tasks serve the same pages as `taskset-v2`;
-reproduce v2 results from the `taskset-v2` checkout. Gallery, MiniWoB, coexistence
-and the experiments that reuse personal fixtures serve uninstrumented pages and
-are not measured. The personal, gallery and coexistence tracks launch Kitsune's
-window at 1280×805 (720 + 85) so its content viewport is 1280×720 by construction
-(verified per run only on personal pages); MiniWoB and the older experiments keep
-the 1280×720 window. Pair manifests show `content_viewport_construction`.
+reproduce v2 results from the `taskset-v2` checkout. Coexistence
+(`coexistence-local-v1`, now `v2`) serves the same instrumented personal pages and reports
+them the same way. Gallery, external and the older experiments that reuse personal
+fixtures serve uninstrumented pages and are not measured. The personal, gallery and
+coexistence tracks launch Kitsune's window at 1280×805 (720 + 85), so its content
+viewport is 1280×720 by construction; this is verified per run only on personal and
+coexistence pages. External and the older experiments keep the 1280×720 window. Pair manifests show `content_viewport_construction`.
 
 After each run, `viewport.effective` (first report, `reports`,
 `later_reports_differed`) is written beside the unchanged `configured` record into
@@ -214,10 +295,13 @@ Native no-model check (Kitsune `v0.4.1-15-g2110a32`, Playwright MCP 0.0.83 Firef
 headless, macOS): Playwright `--viewport-size 1280x720` → inner 1280×720,
 outer 1280×805, DPR 1. Kitsune `--width=1280 --height=720` → inner 1280×635,
 outer 1280×720, DPR 1. Kitsune `--height=805` → inner 1280×720, outer
-1280×805, DPR 1. Rerun it after a Firefox or Kitsune upgrade:
+1280×805, DPR 1. Revalidated on 2026-11-10 with Kitsune product revision `fd9b90e`
+(test-only repair `cb3bc27`) and the same private Firefox/Playwright build. Kitsune
+setup seeds through the user channel and reads in an agent-owned tab; it does not
+make user tabs writable (#137). Rerun it after a Firefox or Kitsune upgrade:
 
 ```sh
-PERSONAL_BROWSER_TEST=1 PERSONAL_KITSUNE_TEST=1 KITSUNE_PROJECT=../kitsune \
+PERSONAL_BROWSER_TEST=1 PERSONAL_KITSUNE_TEST=1 KITSUNE_PROJECT="$PWD/../kitsune" \
   uv run --locked python -m unittest discover -s tests -p test_taskset_v3.py -k Native
 ```
 
@@ -245,10 +329,12 @@ sets `KITSUNE_TOOL_PRESET` for the Kitsune server. A suite stops with
 `stopped_reason: kitsune_revision_changed` if the Kitsune checkout's revision or
 dirty state changes between pairs.
 
-**Live-site tasks.** `smoke --task FILE` runs any `{id, prompt}` task in the same
-isolated browsers without a grader. Add `--ui-tools` for the benchmark UI allowlist
-and `--targets` to pick MCPs. Live sites change, so judge results from the trace and
-screenshots, and never treat them as benchmark scores.
+**Live-site tasks.** The three catalogued live tasks belong to the
+[external track](external.md) (`external --kind live`), where they are recorded but
+never graded. For an ad-hoc live prompt, `smoke --task FILE` runs any `{id, prompt}`
+task in the same isolated browsers without a grader. Add `--ui-tools` for the
+benchmark UI allowlist and `--targets` to pick MCPs. Live sites change, so judge
+results from the trace and screenshots, and never treat them as benchmark scores.
 
 ```sh
 uv run --locked python -m kitsune_benchmark smoke \
@@ -316,18 +402,23 @@ See the [catalog and protocol](personal-browsing.md#catalog) for eligible tasks 
 uv run --locked python -m kitsune_benchmark smoke
 uv run --locked python -m kitsune_benchmark smoke --execute
 
-# Draft coexistence track (docs/coexistence.md): plan, then the typing-user fixture pair.
+# Coexistence track (docs/coexistence.md): plan, then the typing-user fixture pair.
 uv run --locked python -m kitsune_benchmark coexistence
 uv run --locked python -m kitsune_benchmark coexistence --execute
 
-# MiniWoB source fetch only: network/download, but no model inference.
-uv run --locked python -m kitsune_benchmark benchmark --fetch
-uv run --locked python -m kitsune_benchmark benchmark
-uv run --locked python -m kitsune_benchmark benchmark --execute
+# Full-native track (docs/full-native.md): Kitsune only, KITSUNE_CAPS=core vs all + KITSUNE_PUBLISH=core.
+uv run --locked python -m kitsune_benchmark full-native
+uv run --locked python -m kitsune_benchmark full-native --unit pb-longpage-01 --execute
+
+# External track: MiniWoB source fetch only (network/download, no model), plan, then execute.
+uv run --locked python -m kitsune_benchmark external --fetch
+uv run --locked python -m kitsune_benchmark external
+uv run --locked python -m kitsune_benchmark external --kind miniwob --execute
 ```
 
-MiniWoB is the small [upstream task/reward integration](miniwob.md), not the
-personal-session evaluation and not the complete MiniWoB++ suite. Generic
+The [external track](external.md) is 7 pinned MiniWoB++ tasks graded by the upstream
+reward, plus 3 ungraded live-site tasks. It is not the complete MiniWoB++ suite.
+`benchmark` remains an alias of `external`. Generic
 `plan`/`run` are advanced operator-provisioned commands; `run` requires
 `--confirm-isolated-browser` and **does not provision an isolated browser**.
 Read [individual-run inputs](codex-harness.md#individual-run-inputs) first.
@@ -336,14 +427,73 @@ Read [individual-run inputs](codex-harness.md#individual-run-inputs) first.
 
 - Without `--execute`, paired track commands plan only. The separate generic
   `run` command executes by definition.
-- Execution consumes **ChatGPT subscription usage**. The project has no direct
-  model API integration, remaining-quota monitor or dollar-cost estimator.
-- Current per-agent wall-clock limit is **180 seconds** in the paired configs.
+- With the default `--harness claude`, execution consumes **claude.ai subscription usage**;
+  with `--harness codex` it consumes ChatGPT subscription usage. API-key harnesses bill
+  per token, need `--allow-api-billing`, and can be capped with `--budget-usd`.
+- Current per-agent wall-clock limit is **180 seconds** in the paired configs
+  (gallery 240, external live tasks 300).
   **There is no token-budget stop.** A timeout is not a fixed token allowance.
 - Setup/execution/unscorable failures stop further targets/tasks. Ordinary
-  scorable task failures do not. No automatic retry or model substitution occurs.
-- Fixed order is Playwright then Kitsune. Data variants are not repeated
-  identical trials or order counterbalancing.
+  scorable task failures do not. No model substitution occurs, and by default no
+  retry. `--retry-setup-failures N` (personal, gallery, coexistence and
+  `scripts/run-full-suite.py`; default 0) retries one case only: a run recorded
+  as `execution_status: setup_failed` with `model_request_observed: false` and
+  `stopped_before_client_timeout: true`. The second field says the harness had
+  stopped the agent's client (`client_stopped_sec` after its launch) within
+  `client_tool_list_timeout_sec`, the shorter of the server's
+  `startup_timeout_sec` and the 60 s MCP request default. Its startup clock
+  cannot start before its launch, so it was stopped while it still waited for
+  its tool list, which it awaits before its first model request (the Claude
+  harness forces blocking MCP startup). That run therefore sent the model
+  nothing, so it has no outcome a rerun could select on (#121).
+  `model_request_observed: false` alone is not enough: a client that gave up on
+  `tools/list` may have started a model call without tools whose events were
+  not written yet. A later stop, or a run missing either field, is not retried.
+  The pair is rerun in place, before the next task, with a fresh
+  fixture, profile and ports, up to N times, and only while the budget still
+  covers a pair's worst case and the Kitsune revision is unchanged. The rerun
+  repeats the whole pair: a target that already completed in it (Playwright,
+  when Kitsune's setup failed in a sequential pair) is run again, and its earlier
+  run is discarded. Only the last attempt is scored. Each retry is recorded as
+  `setup_retries` (task, failed pair and run directories, target, the client
+  timing fields, the failed run's `error_detail`, and `discarded_runs`: each
+  rerun target's `run_dir`, `usage` and `list_price_cost_usd`) in the scored
+  pair's summary, the track summary and the entry's `suite-log.jsonl` line.
+  Discarded runs count toward `estimated_cost_usd` and `--budget-usd`, and the
+  plan's `worst_case_usd` counts every pair run 1 + N times. It never
+  retries a setup failure after a model request, a timeout, a session limit, a
+  harness error, an invalid trace or an unscorable evaluation. These, and a setup
+  failure once the retries run out, stop the track as before.
+  The track's `stopped_reason` is `unscorable_pair`, or `session_limit` when a
+  Claude Code run hit the subscription's session limit (its run summary records
+  `api_error: usage_limit_reached`); that track is rerun after the reset (#69).
+- A failed session setup (personal, gallery, coexistence and the experiment relays)
+  stops the agent's client before its first model request (#56), provided setup
+  fails while the client still waits for its tool list. The relay sets the
+  session up inside the client's first `tools/list` and, after a failure, leaves
+  that request unanswered; the harness reads the failure from the relay's
+  evidence file (`{target}-session-evidence.json`) and stops the client. The run
+  is recorded as `execution_status: setup_failed` with `harness_error: true`, and
+  the track stops as `unscorable_pair`. Next to its generic `error` code, the
+  evidence records `error_detail`: the exception's type and message, then those
+  of its cause chain (for example `ValueError: User channel setup failed. <-
+  BidiError: Timed out waiting for the user's new tab.`). The runner copies it
+  into the run summary after `execution_status` and prints it in the track's
+  warning (#120). The guarantee does not hold if the client
+  gave up on `tools/list` first (MCP clients time requests out, typically after
+  about 60 s, while each native setup request may take up to 60 s) or if the
+  relay crashed without recording the failure. `model_request_observed` in the
+  run summary says whether the events show a model request (usage, an assistant
+  message, a turn or a tool call); when it is true the runner warns, and the
+  usage that was spent is reported as usual. `client_stopped_sec`,
+  `client_tool_list_timeout_sec` and `stopped_before_client_timeout` say whether
+  the client was stopped before it could have given up (#121).
+  Successful runs are unchanged: setup still runs inside the agent run, so
+  `elapsed_sec`, `timing.relay_setup_sec` and `elapsed_minus_relay_setup_sec`
+  keep their meaning.
+- A single track command runs Playwright, then Kitsune, unless `--targets` gives
+  another order. Data variants are not repeated identical trials or order
+  counterbalancing; use the full-suite `--attempts`/`--order` for that.
 
 ## Inspect outcomes and usage
 
@@ -354,7 +504,8 @@ The CLI prints the summary. Raw evidence is private and gitignored:
 | Personal | `artifacts/personal/<pair-id>/` | `personal-summary.json`; `suite-summary.json` in the first attempted pair |
 | Gallery | `artifacts/gallery/<pair-id>/` | `gallery-summary.json`; `suite-summary.json` in the first attempted pair |
 | Coexistence | `artifacts/coexistence/<pair-id>/` | `coexistence-summary.json`; `suite-summary.json` in the first attempted pair |
-| MiniWoB | `artifacts/miniwob/<pair-id>/` | `benchmark-summary.json` |
+| External | `artifacts/external/<pair-id>/` | `external-summary.json`; `suite-summary.json` in the first attempted pair (historical pilot: `artifacts/miniwob/`) |
+| Full native | `artifacts/full-native/<pair-id>/` | `full-native-summary.json` per run; `suite-summary.json` (with `analysis`) in the first run |
 | Smoke | `artifacts/smoke/<pair-id>/` | `pair-summary.json` |
 
 Per-run `summary.json` retains execution audit and `usage`; external tracks add
@@ -413,8 +564,10 @@ Review/redact raw artifacts before sharing them; do not publish profiles or toke
 
 With an allowlist (UI tracks), each run records `tool_surface`: the allowlisted
 tools the native server actually published (`exposed`) and those it did not
-(`missing`), and the runner prints a warning. Kitsune's default `lean` preset
-publishes 14 of the 22 allowlisted Kitsune tools (`browser_keypress`,
+(`missing`), and the runner prints a warning. `no_allowlisted_tools` flags a run
+whose server published none of them (for example after a failed setup); suite
+summaries count those as `runs_without_allowlisted_tools`. Kitsune's default
+`lean` preset publishes 14 of the 22 allowlisted Kitsune tools (`browser_keypress`,
 `browser_drag` and others are missing), so a Kitsune failure that needs them is a
 tool-surface result, not a capability verdict. Suite summaries count
 `runs_missing_allowlisted_tools` per target. Use `--kitsune-preset full` (and
@@ -438,16 +591,21 @@ external task can retain it alongside `benchmark_evaluation.task_success: true`.
 uv run --locked python -m unittest discover -s tests -v
 
 # Real isolated Firefox UI fixture tests for both native MCPs, still no inference.
-PERSONAL_BROWSER_TEST=1 PERSONAL_KITSUNE_TEST=1 \
+PERSONAL_BROWSER_TEST=1 PERSONAL_KITSUNE_TEST=1 KITSUNE_PROJECT="$PWD/../kitsune" \
   uv run --locked python -m unittest discover -s tests -p 'test_personal.py' -v
+PERSONAL_BROWSER_TEST=1 PERSONAL_KITSUNE_TEST=1 KITSUNE_PROJECT="$PWD/../kitsune" \
+  uv run --locked python -m unittest discover -s tests -p 'test_coexistence.py' -v
+PERSONAL_BROWSER_TEST=1 PERSONAL_KITSUNE_TEST=1 KITSUNE_PROJECT="$PWD/../kitsune" \
+  uv run --locked python -m unittest discover -s tests -p 'test_taskset_v3.py' -k Native -v
 ```
 
 The opt-in tests require installed private browser/npm tools and the sibling
 Kitsune checkout. They use deterministic drivers, not Codex agent execution;
-passing them is not a model benchmark score. The full suite including both
-native-browser tests passed 65 tests when the personal track was introduced.
-After adding offline diagnostic-analysis tests, default discovery runs 69 tests
-(67 pass, two opt-in native-browser tests skipped).
+passing them is not a model benchmark score. On 2026-11-10, default discovery ran
+412 tests: 394 passed and 18 opt-in tests skipped. Record the actual counts for
+each revision; a skipped native check is not a pass. The coexistence reference
+reuses a full snapshot returned by a tab action instead of treating a subsequent
+`unchanged_since` response as a fresh tree (#136).
 
 ## Analyze existing logs without inference
 

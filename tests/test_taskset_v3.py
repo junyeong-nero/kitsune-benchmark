@@ -1,5 +1,6 @@
 """Taskset-v3 contract tests: deterministic state, not model answers."""
 import copy
+from contextlib import ExitStack
 from http.cookiejar import CookieJar
 import hashlib
 import json
@@ -20,7 +21,7 @@ from kitsune_benchmark.personal_fixtures import LongPage
 from kitsune_benchmark.cost_metrics import observation_volume
 from kitsune_benchmark.coexistence import run_coexistence
 from kitsune_benchmark.gallery import config as gallery_config, run_gallery
-from kitsune_benchmark.personal_session import NativeSession
+from kitsune_benchmark.personal_session import NativeSession, result_json
 from kitsune_benchmark.smoke import ROOT
 from kitsune_benchmark.viewport import (CONTENT_HEIGHT, CONTENT_WIDTH, FIREFOX_CHROME_HEIGHT, REPORT_PATH,
                                         observed_viewport, parse_report, report_script, viewport_record)
@@ -255,14 +256,23 @@ def native_tasks():
 
 
 def native_viewport(test, target, upstream, record, task):
-    """Seed a v3 task with the harness's own tools, then read the pages' reports; no model calls."""
-    with PersonalServer(task, 0, report_viewport=True) as server, tempfile.TemporaryDirectory(prefix="pb-", dir="/tmp") as folder:
+    """Seed as a user on Kitsune, then read the pages' reports; no model calls or user-tab write opt-out."""
+    from test_coexistence import snapshot_text
+    with PersonalServer(task, 0, report_viewport=True, user_channel=target == "kitsune") as server, \
+            tempfile.TemporaryDirectory(prefix="pb-", dir="/tmp") as folder, ExitStack() as stack:
         server.begin(target)
         trial = server.trials[server.by_target[target]]
         title = trial.render(trial.paths[trial.active_index])[0]
-        session = NativeSession({"target": target, "upstream": upstream(folder), "bootstrap_url": trial.url("/start"),
+        seeding = {}
+        if target == "kitsune":
+            port = server.bidi_ports[target]
+            command = stack.enter_context(upstream(folder, port))
+            seeding = {"seeding": "user_channel", "user_driver": {"bidi_url": f"ws://127.0.0.1:{port}"}}
+        else:
+            command = upstream(folder)
+        session = NativeSession({"target": target, "upstream": command, "bootstrap_url": trial.url("/start"),
             "urls": [trial.url(p) for p in trial.paths], "active_index": trial.active_index,
-            "evidence_path": folder + "/evidence.json", "origin": server.origin})
+            "evidence_path": folder + "/evidence.json", "origin": server.origin, **seeding})
         try:
             session.start()
             session.request("initialize", {"protocolVersion": "2024-11-05", "capabilities": {},
@@ -272,7 +282,16 @@ def native_viewport(test, target, upstream, record, task):
             deadline = time.monotonic() + 10
             while len(server.viewport_reports(target)) < 1 + len(trial.paths) and time.monotonic() < deadline:
                 time.sleep(0.1)
-            snapshot = "\n".join(i.get("text", "") for i in session.tool("browser_snapshot", {})["content"])
+            previous = None
+            if target == "kitsune":
+                test.assertEqual(session.evidence["seeded_owned_by_agent"], 0)
+                url = trial.url(trial.paths[trial.active_index])
+                opened = session.tool("browser_tabs", {"action": "new", "url": url})
+                previous = "\n".join(i.get("text", "") for i in opened["content"])
+                tabs = result_json(session.tool("browser_tabs", {"action": "list"}), "tabs")
+                (owned,) = [tab for tab in tabs if tab.get("owned") and tab.get("url") == url]
+                test.assertTrue(owned.get("current"), owned)
+            snapshot = snapshot_text(session, previous)
             test.assertIn(title, snapshot)
             for marker in ("sendBeacon", "viewport-report", "innerWidth", "devicePixelRatio"):
                 test.assertNotIn(marker, snapshot)
@@ -314,8 +333,8 @@ class NativeKitsuneViewportTests(unittest.TestCase):
             height = CONTENT_HEIGHT + (FIREFOX_CHROME_HEIGHT if equalized else 0)
             record = viewport_record("kitsune", (), ("-headless", f"--width={CONTENT_WIDTH}", f"--height={height}"),
                                      equalized=equalized)
-            with self.subTest(height=height, task=task["id"]), tempfile.TemporaryDirectory(prefix="pb-", dir="/tmp") as folder, \
-                    isolated_kitsune(folder, height) as upstream:
-                observed = native_viewport(self, "kitsune", lambda _: upstream, record, task)
+            with self.subTest(height=height, task=task["id"]):
+                observed = native_viewport(self, "kitsune",
+                    lambda folder, port: isolated_kitsune(folder, height, bidi_port=port), record, task)
                 self.assertEqual(observed["effective"]["innerWidth"], CONTENT_WIDTH)
                 self.assertEqual(observed["content_viewport_equality_asserted"], equalized, observed)

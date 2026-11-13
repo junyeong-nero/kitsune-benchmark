@@ -278,10 +278,14 @@ class ReturnsBack(Fixture):  # pb-tabs-03
                                                   "환불 처리: 반품 도착 후 3영업일 이내"))}
 
     def correct(self, evidence):
+        # "Back on the order tab" means the tab the user sees (#94). Kitsune inventories record it as `shown`, beside
+        # `active`, the agent's current tab, which a Kitsune with read-only user tabs cannot move to the user's order
+        # tab. Playwright's current tab is the one it shows, and its inventories have no `shown`.
         final = (evidence.get("snapshots") or [[]])[-1]
-        active = [t for t in final if t.get("active")]
+        key = "shown" if any("shown" in t for t in final) else "active"
+        front = [t for t in final if t.get(key)]
         return (number_in(self.note["반품 기간"], self.DAYS[self.v])
-                and len(active) == 1 and active[0].get("url") == self.url("/order"))
+                and len(front) == 1 and front[0].get("url") == self.url("/order"))
 
 
 class Bookings(Fixture):  # pb-tabs-04

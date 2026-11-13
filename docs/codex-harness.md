@@ -4,7 +4,7 @@
 
 This document describes execution/authentication boundaries. Track-specific
 reset and grading contracts live in the [personal](personal-browsing.md) and
-[MiniWoB](miniwob.md) guides; observed measurements live in dated reports.
+[external track](external.md) guides; observed measurements live in dated reports.
 
 ## Fixed configuration and boundaries
 
@@ -30,7 +30,7 @@ Commands:
 The personal track has a bounded sequential multi-task runner. No generalized
 randomized/repeated scheduler/statistics, WebArena reset/deployment, token-budget
 termination, or complete tool/prompt attestation is implemented. See
-[MiniWoB](miniwob.md) and [personal browsing](personal-browsing.md) for separate
+[external track](external.md) and [personal browsing](personal-browsing.md) for separate
 tracks, external state evaluation, and their limits.
 
 ## Local checks and real validation
@@ -197,9 +197,12 @@ unknown schema items, and malformed logs invalidate the trace. It is a conservat
 post-run audit, not a real-time or cryptographically complete security boundary.
 
 Execution statuses: `completed_unscored`, `incomplete`, `invalid_trace`,
-`harness_error`, `timeout`, `interrupted`. External evaluation remains a separate
-object, not a replacement for execution evidence. Quota/auth failures are not
-converted into externally graded task failures.
+`harness_error`, `setup_failed` (a session relay's setup failed and the harness
+was stopped, before its first model request if it was still waiting for its tool
+list; `model_request_observed` records whether it made one), `timeout`,
+`interrupted`. External
+evaluation remains a separate object, not a replacement for execution evidence.
+Quota/auth failures are not converted into externally graded task failures.
 
 CLI exit0: successful plan/check, completed unscored run/pair, or a scorable
 external selection whose requested pairs are all scorable (including valid task

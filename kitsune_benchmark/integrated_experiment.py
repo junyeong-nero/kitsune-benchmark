@@ -42,8 +42,12 @@ def hashes():
     return {n: hashlib.sha256((ROOT/'kitsune_benchmark'/n).read_bytes()).hexdigest() for n in FILES}
 
 
+# This experiment predates external-v1 and keeps its single MiniWoB task.
+MINIWOB_TASK = {'id':'mw-click-test-2','kind':'miniwob','task_id':'click-test-2','seed':42}
+
+
 def units():
-    rows = [{'track':'miniwob','task':miniwob.config()['task_id'],'layout':None}]
+    rows = [{'track':'miniwob','task':MINIWOB_TASK['task_id'],'layout':None}]
     rows += [{'track':'personal','task':t,'layout':None} for t in personal.runnable_ids()]
     rows += [{'track':'gallery','task':t.id,'layout':layout} for t in gallery.select() for layout in ('crowded','isolated')]
     priorities = [('miniwob','click-test-2',None),('personal','pb-current-01',None),
@@ -77,7 +81,7 @@ def fixture_for(item):
     if item['track']=='gallery':return gallery.GalleryServer(gallery.select([item['task']])[0],0,item['layout'])
     spec=miniwob.config();source=ROOT/spec['source_directory']
     miniwob.verify_source(source,spec['source_revision'])
-    return MiniFixture(source,spec)
+    return MiniFixture(source,spec,MINIWOB_TASK)
 
 
 def spec_for(item):

@@ -13,15 +13,29 @@ from .specs import load_server, load_task
 from .smoke import experiment as smoke_experiment, run_pair
 from .miniwob import UI_TOOLS
 from pathlib import Path
-from .miniwob import run_benchmark
+from .external import run_external
 from .gallery import run_gallery
 from .personal import config as personal_config, pair_complete, run_personal, runnable_ids
+from .personal_session import ELICITATION_POLICIES
 from .coexistence import run_coexistence
+from .stress import run_stress
+from .stress_compare import run_comparison
+from .full_native import run_full_native, units as full_native_units
+from .hostile import run_hostile
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Kitsune browser MCP benchmark tooling")
     subparsers = parser.add_subparsers(dest="command", required=True)
+    for command, profile in (("stress", "release-v1"), ("stress-compare", "shared-browser-v1")):
+        stress = subparsers.add_parser(command, help="Model-free shared-browser load; plan by default")
+        stress.add_argument("--execute", action="store_true")
+        stress.add_argument("--profile", choices=(profile,), help="Fixed profile; no workload overrides")
+        stress.add_argument("--clients", help="Comma-separated concurrency levels (1–128)")
+        stress.add_argument("--repeats", type=int)
+        for setting in ("duration", "idle", "warmup", "cooldown", "timeout", "interval", "min-available-mib", "max-rss-mib"):
+            stress.add_argument("--" + setting, type=float)
+        stress.add_argument("--kitsune-project")
     doctor = subparsers.add_parser("doctor", help="Check Codex prerequisites without a model call")
     doctor.add_argument("--codex", default="codex", help="Codex executable name or path")
     doctor.add_argument("--codex-home", help="Existing Codex home to check; no credentials are copied")
@@ -50,12 +64,16 @@ def main(argv: list[str] | None = None) -> int:
     smoke.add_argument("--task", dest="task_file", help="Task JSON ({id, prompt}) instead of the default read-only smoke task")
     smoke.add_argument("--ui-tools", action="store_true", help="Expose only the benchmark UI tool allowlist to each MCP")
     smoke.add_argument("--targets", default="playwright,kitsune", help="Comma-separated MCPs to run")
-    benchmark = subparsers.add_parser("benchmark", help="MiniWoB++ UI-only pilot; defaults to a plan")
-    benchmark.add_argument("--execute", action="store_true", help="Run the pinned external task; consumes subscription quota")
+    benchmark = subparsers.add_parser("external", aliases=["benchmark"], help="External track: 7 MiniWoB++ tasks "
+                                      "(upstream reward) + 3 ungraded live public-web tasks; plan by default")
+    benchmark.add_argument("--execute", action="store_true", help="Run selected pairs; consumes quota or API credit")
     benchmark.add_argument("--fetch", action="store_true", help="Download the pinned upstream source, without inference unless --execute")
+    benchmark.add_argument("--task", action="append", dest="task_ids", help="External task ID; repeatable; default all 10")
+    benchmark.add_argument("--kind", choices=("miniwob", "live"), help="Only MiniWoB or only live tasks")
     benchmark.add_argument("--codex", default="codex")
     benchmark.add_argument("--kitsune-project")
     benchmark.add_argument("--targets", default="playwright,kitsune")
+    benchmark.add_argument("--budget-usd", type=float)
     personal = subparsers.add_parser("personal", help="Personal browsing: 36 runnable local tasks (six-task pilot by default); plan by default")
     personal.add_argument("--execute", action="store_true", help="Run selected pairs; consumes subscription quota")
     personal.add_argument("--task", action="append", dest="task_ids", help="Runnable task ID; repeat to select several; default: six pilot tasks")
@@ -79,7 +97,7 @@ def main(argv: list[str] | None = None) -> int:
     gallery.add_argument("--kitsune-preset")
     gallery.add_argument("--targets", default="playwright,kitsune")
     gallery.add_argument("--budget-usd", type=float)
-    coexistence = subparsers.add_parser("coexistence", help="Draft coexistence track: user-seeded tabs, a simulated "
+    coexistence = subparsers.add_parser("coexistence", help="Coexistence track (coexistence-local-v3): user-seeded tabs, a simulated "
                                         "user and view telemetry; plan by default")
     coexistence.add_argument("--execute", action="store_true", help="Run selected pairs; consumes quota or API credit")
     coexistence.add_argument("--task", action="append", dest="task_ids",
@@ -87,13 +105,57 @@ def main(argv: list[str] | None = None) -> int:
                                   "default: runnable co-* tasks")
     coexistence.add_argument("--all-personal", action="store_true", help="All 36 personal tasks under the user-seeded condition")
     coexistence.add_argument("--protect-user-tabs", action="store_true",
-                             help="Kitsune arm with KITSUNE_PROTECT_USER_TABS=1 (reported separately)")
+                             help="Kitsune arm with user-tab protection on: KITSUNE_USER_TABS=read-only, and "
+                                  "KITSUNE_PROTECT_USER_TABS=1 for Kitsune before v0.7.2; the coexistence-local-v1 arm, "
+                                  "retired from the run plan (reported separately)")
+    coexistence.add_argument("--unprotected-user-tabs", action="store_true",
+                             help="Kitsune arm with user-tab protection off: KITSUNE_USER_TABS=writable, and "
+                                  "KITSUNE_PROTECT_USER_TABS=0 KITSUNE_HOLD_VIEWED_TAB=0 for Kitsune before v0.7.2; the "
+                                  "coexistence-local-v3 arm (reported separately)")
+    coexistence.add_argument("--tab-permissions", action="store_true",
+                             help="Draft kitsune#393 tab-permission scenarios (tp-* tasks, outside coexistence-local-v3; "
+                                  "reported separately); default: every tp-* task the --elicitation policy runs")
     coexistence.add_argument("--variant", type=int, choices=(0, 1, 2), default=0)
     coexistence.add_argument("--codex", default="codex")
     coexistence.add_argument("--kitsune-project")
     coexistence.add_argument("--targets", default="playwright,kitsune")
     coexistence.add_argument("--budget-usd", type=float)
-    for child in (smoke, benchmark, personal, gallery, coexistence):
+    full_native = subparsers.add_parser("full-native", help="Full-native track (#109): Kitsune only, KITSUNE_CAPS=core vs "
+                                        "KITSUNE_CAPS=all + KITSUNE_PUBLISH=core on the same units, no allowlist; "
+                                        "reported apart from the head-to-head; plan by default")
+    full_native.add_argument("--execute", action="store_true", help="Run the selected units in both arms; consumes "
+                             "subscription quota or API credit")
+    full_native.add_argument("--unit", action="append", dest="unit_ids",
+                             help="Unit ID (a pb-* task, or ui-table/crowded, ui-table/isolated); repeatable; default all "
+                                  f"{len(full_native_units())}")
+    full_native.add_argument("--variant", type=int, choices=(0, 1, 2), default=0)
+    full_native.add_argument("--codex", default="codex")
+    full_native.add_argument("--kitsune-project")
+    full_native.add_argument("--budget-usd", type=float)
+    hostile = subparsers.add_parser("hostile", help="Hostile-UI capability matrix: real-web components x tool strategies, "
+                                    "no model calls; plan by default")
+    hostile.add_argument("--execute", action="store_true", help="Start isolated browsers and run the matrix (no model)")
+    hostile.add_argument("--component", action="append", dest="component_ids", help="Component ID; repeatable")
+    hostile.add_argument("--targets", default="playwright,kitsune")
+    hostile.add_argument("--kitsune-project")
+    hostile.add_argument("--headed", action="store_true", help="Show the browser windows")
+    hostile.add_argument("--trusted", action="store_true",
+                         help="Also run OS-input strategies (browser_trusted_click, Kitsune only); needs --headed and "
+                              "moves the real pointer")
+    hostile.add_argument("--out", help="Output directory (default artifacts/hostile/runs/<UTC time>)")
+    for child in (personal, gallery, coexistence, full_native):
+        child.add_argument("--elicitation", choices=ELICITATION_POLICIES, default="decline",
+                           help="How the relay answers Kitsune's approval prompts during the agent's turn: decline "
+                                "(default) or accept; browser_ask_user prompts are always declined. Results under "
+                                "different policies are not comparable")
+    for child in (personal, gallery, coexistence):
+        child.add_argument("--retry-setup-failures", type=int, default=0, metavar="N",
+                           help="Rerun a whole pair in place, with a fresh profile and ports, up to N times while its "
+                                "run failed in session setup and its client was stopped before it could give up on its "
+                                "tool list (setup_failed, model_request_observed false, stopped_before_client_timeout "
+                                "true); recorded as setup_retries with the discarded runs. Default 0: no retry. "
+                                "Any other failure still stops the track")
+    for child in (smoke, benchmark, personal, gallery, coexistence, full_native):
         child.add_argument("--harness", choices=HARNESSES, default="claude",
                            help="Agent CLI. Default claude (Claude Code on the claude.ai subscription login; "
                                 "no API credit). codex (ChatGPT login). claude-api (Claude Code --bare, "
@@ -110,8 +172,22 @@ def main(argv: list[str] | None = None) -> int:
                            "(e.g. gpt-6.1-sol); the override is recorded in each run's manifest")
     doctor.add_argument("--claude-model", help="Model ID to validate with the claude-api harnesses")
     args = parser.parse_args(argv)
+    if args.command in {"stress", "stress-compare"}:
+        try:
+            runner = run_stress if args.command == "stress" else run_comparison
+            result = runner(execute=args.execute, profile=args.profile,
+                clients=tuple(int(n) for n in args.clients.split(",")) if args.clients is not None else None,
+                duration=args.duration, idle=args.idle, timeout=args.timeout, interval=args.interval,
+                repeats=args.repeats, warmup=args.warmup, cooldown=args.cooldown,
+                min_available_mib=args.min_available_mib, max_rss_mib=args.max_rss_mib,
+                kitsune_project=args.kitsune_project)
+        except (ValueError, OSError, subprocess.SubprocessError, TimeoutError, EOFError) as exc:
+            print(json.dumps({"error": str(exc)}))
+            return 2
+        print(json.dumps(result, indent=2))
+        return 3 if result.get("status") in {"failed", "stopped"} else 0
     claude = getattr(args, "harness", "codex").startswith("claude")
-    executable = getattr(args, "claude", None) if claude else args.codex
+    executable = getattr(args, "claude", None) if claude else getattr(args, "codex", None)
     overrides = {"claude_model": getattr(args, "claude_model", None),
                  "max_budget_usd_per_run": getattr(args, "max_budget_usd_per_run", None)}
     if args.command != "doctor" and not claude and any(value is not None for value in overrides.values()):
@@ -146,6 +222,7 @@ def main(argv: list[str] | None = None) -> int:
                                   executable=executable, kitsune_project=args.kitsune_project,
                                   harness=args.harness, budget_usd=args.budget_usd,
                                   kitsune_preset=args.kitsune_preset, targets=tuple(args.targets.split(",")),
+                                  elicitation=args.elicitation, retry_setup_failures=args.retry_setup_failures,
                                   **overrides)
             print(json.dumps(result, indent=2, ensure_ascii=False))
             if not args.execute:
@@ -155,34 +232,58 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "coexistence":
             if args.all_personal and args.task_ids:
                 raise ValueError("Use either --all-personal or --task.")
+            if args.all_personal and args.tab_permissions:
+                raise ValueError("Use either --all-personal or --tab-permissions.")
             result = run_coexistence(execute=args.execute, task_ids=runnable_ids() if args.all_personal else args.task_ids,
                                      variant=args.variant, kitsune_project=args.kitsune_project, executable=executable,
                                      harness=args.harness, budget_usd=args.budget_usd,
-                                     protect_user_tabs=args.protect_user_tabs,
+                                     protect_user_tabs=args.protect_user_tabs, elicitation=args.elicitation,
+                                     unprotected_user_tabs=args.unprotected_user_tabs,
+                                     tab_permissions=args.tab_permissions,
+                                     retry_setup_failures=args.retry_setup_failures,
                                      targets=tuple(args.targets.split(",")), **overrides)
             print(json.dumps(result, indent=2, ensure_ascii=False))
             if not args.execute:
                 return 0
             return 0 if result["completed_pairs"] == result["requested_pairs"] else 3
+        if args.command == "full-native":
+            result = run_full_native(execute=args.execute, unit_ids=args.unit_ids, variant=args.variant,
+                                     kitsune_project=args.kitsune_project, executable=executable,
+                                     harness=args.harness, budget_usd=args.budget_usd,
+                                     elicitation=args.elicitation, **overrides)
+            print(json.dumps(result, indent=2, ensure_ascii=False))
+            if not args.execute:
+                return 0
+            return 0 if result["completed_runs"] == result["requested_runs"] else 3
+        if args.command == "hostile":
+            result = run_hostile(execute=args.execute, component_ids=args.component_ids,
+                                 targets=tuple(args.targets.split(",")), kitsune_project=args.kitsune_project,
+                                 headed=args.headed, trusted=args.trusted, out=args.out)
+            if args.execute:
+                print(result["matrix"])
+                print(f"results: {result['out_dir']}")
+            else:
+                print(json.dumps({k: v for k, v in result.items() if k != "plan"}, indent=2))
+            return 0
         if args.command == "gallery":
             result = run_gallery(execute=args.execute, task_ids=args.task_ids, category=args.category, variant=args.variant,
                                  layout=args.layout, kitsune_project=args.kitsune_project, executable=executable,
                                  harness=args.harness, budget_usd=args.budget_usd, kitsune_preset=args.kitsune_preset,
-                                 targets=tuple(args.targets.split(",")), **overrides)
+                                 targets=tuple(args.targets.split(",")), elicitation=args.elicitation,
+                                 retry_setup_failures=args.retry_setup_failures, **overrides)
             print(json.dumps(result, indent=2, ensure_ascii=False))
             if not args.execute:
                 return 0
             return 0 if result["completed_pairs"] == result["requested_pairs"] else 3
-        if args.command == "benchmark":
-            result = run_benchmark(execute=args.execute, fetch=args.fetch,
-                                   executable=executable, kitsune_project=args.kitsune_project,
-                                   harness=args.harness, targets=tuple(args.targets.split(",")), **overrides)
+        if args.command in ("external", "benchmark"):
+            result = run_external(execute=args.execute, fetch=args.fetch, task_ids=args.task_ids, kind=args.kind,
+                                  executable=executable, kitsune_project=args.kitsune_project,
+                                  harness=args.harness, budget_usd=args.budget_usd,
+                                  targets=tuple(args.targets.split(",")), **overrides)
             print(json.dumps(result, indent=2, ensure_ascii=False))
             if not args.execute:
                 return 0
-            results = result["results"]
-            return 0 if set(results) == set(args.targets.split(",")) and all(
-                item.get("benchmark_evaluation", {}).get("scorable") for item in results.values()) else 3
+            return 0 if result["completed_pairs"] == result["requested_pairs"] else 3
         if args.command == "smoke":
             spec = with_claude_overrides(smoke_experiment(), overrides["claude_model"],
                                          overrides["max_budget_usd_per_run"], overrides.get("codex_model"))

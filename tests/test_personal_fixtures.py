@@ -158,6 +158,15 @@ class NewFixtureTests(unittest.TestCase):
         evidence = solved_evidence(back)
         evidence["snapshots"][-1] = [dict(t, active=t["url"] == back.url("/memo")) for t in evidence["snapshots"][-1]]
         self.assertFalse(back.evaluate(VALID, evidence)["task_success"], "must return to the order tab")
+        # #94: Kitsune inventories record the tab the browser shows (`shown`) beside the agent's current tab (`active`).
+        # With read-only user tabs the agent's memo copy stays current while the user's order tab stays in front.
+        copy = {"id": 9, "url": back.url("/memo"), "active": True, "shown": False}
+        evidence["snapshots"][-1] = [dict(t, active=False, shown=t["url"] == back.url("/order"))
+                                     for t in evidence["initial_tabs"]] + [copy]
+        self.assertTrue(back.evaluate(VALID, evidence)["task_success"], "the order tab is the one the user sees")
+        evidence["snapshots"][-1] = [dict(t, active=False, shown=False) for t in evidence["initial_tabs"]] + [
+            dict(copy, shown=True)]
+        self.assertFalse(back.evaluate(VALID, evidence)["task_success"], "the view moved to the agent's tab")
 
         cited = trial_for("cited_policy")
         perform(session(cited), cited, [("GET", "/refund/summary")])
