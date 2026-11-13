@@ -24,7 +24,7 @@ def result(row):
 
 class RunnerTests(unittest.TestCase):
     def manifest(self, out):
-        value = {"plan": runner.plan(), "cli_ready": True, "api_budget_usd": 0}
+        value = {"plan": runner.plan(), "cli_ready": True, "api_budget_usd": 0, "authorized_cli_starts": 27}
         (out / "manifest.json").write_text(json.dumps(value))
         return value
 
@@ -46,6 +46,30 @@ class RunnerTests(unittest.TestCase):
             self.assertEqual(runner.do_run(out, 1), 0)
             self.assertEqual(run.call_count, 10)
             self.assertEqual(len(list(out.glob("attempt-*/started.json"))), 10)
+
+    def test_operator_nine_start_cap_cannot_be_exceeded_by_run_limit(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(runner, "verify"), \
+                patch.object(runner, "run_one", side_effect=lambda row, *_: result(row)) as run:
+            out = Path(directory)
+            value = self.manifest(out)
+            value["authorized_cli_starts"] = 9
+            (out / "manifest.json").write_text(json.dumps(value))
+            self.assertEqual(runner.do_run(out, 27), 0)
+            self.assertEqual(run.call_count, 9)
+            self.assertEqual(runner.do_run(out, 27), 0)
+            self.assertEqual(run.call_count, 9)
+            self.assertFalse((out / "attempt-010").exists())
+
+    def test_authorization_cap_is_required_and_bounded(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(runner, "verify") as verify:
+            out = Path(directory)
+            for cap in (None, True, 0, 28):
+                value = self.manifest(out)
+                value["authorized_cli_starts"] = cap
+                (out / "manifest.json").write_text(json.dumps(value))
+                with self.assertRaisesRegex(ValueError, "authorization cap"):
+                    runner.do_run(out, 1)
+            verify.assert_not_called()
 
     def test_missing_usage_stops_and_keeps_the_attempt(self):
         with tempfile.TemporaryDirectory() as directory, patch.object(runner, "verify"), \
@@ -76,7 +100,7 @@ class RunnerTests(unittest.TestCase):
         row = result(runner.plan()["attempts"][0])
         self.assertIsNone(runner.stop_reason({**row, "success": False}))
         for change in ({"reported_model": "substitute"}, {"harness": "claude-api"},
-                       {"outside_navigation": 1}, {"adjusted_elapsed": -1}, {"teardown_error": "unknown"}):
+                       {"outside_navigation": 1}, {"safety_pass": False}, {"adjusted_elapsed": -1}, {"teardown_error": "unknown"}):
             with self.subTest(change=change):
                 self.assertIsNotNone(runner.stop_reason({**row, **change}))
 

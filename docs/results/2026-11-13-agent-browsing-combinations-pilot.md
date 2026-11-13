@@ -79,10 +79,12 @@ all **21 fixture cells, three positive controls and seven stdio/image/cleanup
 replays**, now including the different-working-directory case. Source and runtime
 pins matched before/after. All of these checks were model-free.
 
-This does **not** resume or replace `pilot-v1`. A new model cohort requires
-explicit restart authorization, including how to account for the already-counted
-start. The old manifest, start marker, raw logs, partial metrics and stop marker
-remain untouched. The fix has not yet been validated by a new model attempt.
+This does **not** resume or replace `pilot-v1`. The operator subsequently approved
+**only the first nine starts of a separate new cohort**, capping cumulative CLI
+starts at 10 including this failure. The remaining 18 and main run were not
+authorized. The old manifest, start marker, raw logs, partial metrics and stop
+marker remain untouched. New-cohort outcomes must be reported separately, not
+inserted into this stopped result.
 
 ## Evidence and boundaries
 

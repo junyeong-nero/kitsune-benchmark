@@ -1,9 +1,13 @@
 # Agent-browsing combinations: token-efficiency comparison
 
-**Status: PILOT V1 STOPPED AT CLI INITIALIZATION / RESTART AUTHORIZATION REQUIRED.**
+**Status: PILOT V1 STOPPED / SEPARATE FIRST-NINE RESTART AUTHORIZED / MAIN RUN NOT AUTHORIZED.**
 The first counted CLI start failed during MCP initialization; no model turn or
 usage was recorded. See the [stopped pilot report](../results/2026-11-13-agent-browsing-combinations-pilot.md).
-Do not resume that manifest or erase its counted start.
+Do not resume that manifest or erase its counted start. After the correction, the
+operator explicitly selected **only the first nine starts of a new cohort**.
+Cumulative CLI starts are therefore capped at **10 including the prior failure**.
+Stop after those nine regardless of audit outcome; the remaining 18 and the main
+comparison are not authorized. The new manifest must set `authorized_cli_starts: 9`.
 The operator subsequently authorized merging the benchmark work into `main` and
 running this diagnostic **before a separately authorized main comparison**. Local
 merge `527aea0` integrates the preparation scaffold with updated upstream `main`;
@@ -305,8 +309,9 @@ evidence-supported presentation update. The scaffold is now merged into local
   with 23 opt-in skips, plus all 21 fixture cells/three positive controls/seven
   different-cwd stdio image and cleanup replays passed without models in
   `artifacts/agent-combinations-postfix-preflight-v1/`.
-- [ ] Obtain restart authorization; preserve the failed start in cumulative
-  accounting and do not automatically replace it.
+- [x] Obtain authorization for a **separate first-nine-only restart**. Preserve
+  the old failed start; cumulative CLI cap is 10, not a fresh unrestricted 27.
+- [ ] Execute and audit that new cohort, then stop; no additional 18 starts.
 
 Plan-only command (no browser/model):
 
@@ -314,16 +319,16 @@ Plan-only command (no browser/model):
 uv run --locked python -m kitsune_benchmark.agent_combinations
 ```
 
-Execution workflow (**new inference requires restart authorization**; new evidence
-directories only; `freeze` invokes no model):
+Authorized restart workflow (**first nine only**; new evidence directories only;
+`freeze` invokes no model):
 
 ```sh
 uv run --locked python scripts/preflight-agent-combinations.py --out artifacts/<preflight>
 uv run --locked python scripts/run-agent-combinations.py freeze \
-  --preflight artifacts/<preflight>/preflight.json --out artifacts/<pilot>
-uv run --locked python scripts/run-agent-combinations.py run --out artifacts/<pilot>
-# pilot-v1 is stopped and must not be retried. A separately authorized new cohort
-# stops after the first nine; review raw evidence before creating its audit approval.
+  --preflight artifacts/<preflight>/preflight.json --out artifacts/<new-pilot> --limit 9
+uv run --locked python scripts/run-agent-combinations.py run --out artifacts/<new-pilot> --limit 9
+# pilot-v1 remains stopped. The new manifest hard-caps starts at 9 even if a
+# subsequent invocation requests more. Audit the nine, but do not approve continuation.
 ```
 
 The offline plan command deliberately remains `execution_ready: false`; only a

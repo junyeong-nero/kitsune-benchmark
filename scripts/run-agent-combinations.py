@@ -87,7 +87,9 @@ def probe_catalog(config, path, surface):
     return native_catalog(path, surface)
 
 
-def freeze(preflight, out, project):
+def freeze(preflight, out, project, *, start_cap=27):
+    if type(start_cap) is not int or not 1 <= start_cap <= 27:
+        raise ValueError("Authorized CLI start cap must be between 1 and 27")
     report = json.loads(preflight.read_text())
     expected = {c["unit"] + "--" + s for c in CONDITIONS for s in CLI_SURFACES}
     if (report.get("model_invoked") is not False or set(report.get("checks", {})) != expected
@@ -128,7 +130,8 @@ def freeze(preflight, out, project):
             raise ValueError("Actual stdio/image/catalog/cleanup interface not validated: " + surface)
     manifest = {"benchmark": plan()["benchmark"], "benchmark_sha": revision["revision"],
         "kitsune_project": str(project.resolve()), "kitsune_sha": KITSUNE_SHA, "plan": plan(),
-        "cli_ready": True, "manual_chrome": "pending_operator_manual_setup", "api_budget_usd": 0,
+        "cli_ready": True, "authorized_cli_starts": start_cap,
+        "manual_chrome": "pending_operator_manual_setup", "api_budget_usd": 0,
         "preflight": str(preflight.resolve()), "preflight_sha256": digest(preflight),
         "source_sha256": validation_fingerprint(), "runner_sha256": digest(__file__),
         "protocol_sha256": digest(PROTOCOL), "pins": pins(), "catalogs": catalogs, "policy": POLICY,
@@ -216,7 +219,7 @@ def stop_reason(row):
         return "required usage/grade/timing evidence unavailable"
     if row["adjusted_elapsed"] < 0:
         return "invalid adjusted time"
-    if row.get("outside_navigation") or row.get("violations") or row.get("teardown_error"):
+    if row.get("safety_pass") is False or row.get("outside_navigation") or row.get("violations") or row.get("teardown_error"):
         return "out-of-scope action, harness violation or cleanup failure"
     return None
 
@@ -232,10 +235,13 @@ def do_run(out, limit):
     manifest = json.loads((out / "manifest.json").read_text())
     if manifest.get("plan") != json.loads(json.dumps(plan())) or manifest.get("cli_ready") is not True or manifest.get("api_budget_usd") != 0:
         raise ValueError("Frozen matrix differs from the authorized subscription-only pilot")
+    cap = manifest.get("authorized_cli_starts")
+    if type(cap) is not int or not 1 <= cap <= 27:
+        raise ValueError("Missing/invalid explicit CLI authorization cap")
     verify(manifest)
     wanted = [r for r in manifest["plan"]["attempts"] if r["execution"] == "cli"]
     rows = load_rows(out)
-    if len(rows) > 27 or len(wanted) != 27:
+    if len(rows) > cap or len(wanted) != 27:
         raise ValueError("Invalid bounded matrix")
     for row, expected in zip(rows, wanted):
         if any(row.get(k) != v for k, v in expected.items()) or stop_reason(row):
@@ -243,14 +249,17 @@ def do_run(out, limit):
     starts = list(out.glob("attempt-*/started.json"))
     if len(starts) != len(rows):
         raise ValueError("An attempted cell has no completed row; preserve it, do not retry")
+    if len(rows) == cap:
+        print("Authorized start cap reached; no further inference.", flush=True)
+        return 0
     if len(rows) < FIRST_CLI_AUDIT_SIZE:
-        end = FIRST_CLI_AUDIT_SIZE
+        end = min(FIRST_CLI_AUDIT_SIZE, cap)
     else:
         audit = json.loads((out / "first-nine-audit.json").read_text())
         data = b"".join((out / "runs.jsonl").read_bytes().splitlines(keepends=True)[:FIRST_CLI_AUDIT_SIZE])
         if audit.get("continue") is not True or audit.get("first_nine_sha256") != hashlib.sha256(data).hexdigest():
             raise ValueError("First-nine audit is missing, negative or stale")
-        end = 27
+        end = cap
     for row in wanted[len(rows):min(end, len(rows) + limit)]:
         verify(manifest)
         folder = out / f"attempt-{row['seq']:03d}"
@@ -277,15 +286,16 @@ def main():
     parser.add_argument("--out", required=True, type=Path)
     parser.add_argument("--preflight", type=Path)
     parser.add_argument("--kitsune-project", type=Path, default=ROOT.parent / "kitsune")
-    parser.add_argument("--limit", type=int, default=27)
+    parser.add_argument("--limit", type=int, default=27,
+        help="freeze: total authorized CLI starts; run: max starts in this invocation")
     args = parser.parse_args()
     if args.limit <= 0 or args.limit > 27:
         parser.error("--limit must be between 1 and 27")
     if args.action == "freeze":
         if args.preflight is None:
             parser.error("freeze requires --preflight")
-        manifest = freeze(args.preflight, args.out, args.kitsune_project)
-        print(json.dumps({"cli_ready": True, "planned_cli_starts": 27,
+        manifest = freeze(args.preflight, args.out, args.kitsune_project, start_cap=args.limit)
+        print(json.dumps({"cli_ready": True, "authorized_cli_starts": manifest["authorized_cli_starts"],
             "catalog_sizes": {s: len(c["tools"]) for s, c in manifest["catalogs"].items()}}))
         return 0
     try:
