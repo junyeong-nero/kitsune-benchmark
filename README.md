@@ -30,14 +30,16 @@ These are single attempts, so read the differences as observations, not a rankin
 
 | Track | What the agent does | Graded by |
 | --- | --- | --- |
-| [Personal browsing](docs/personal-browsing.md) | 28 tasks in already-open tabs and a signed-in test session: look things up, fill in drafts, don't submit or close what it shouldn't | The local apps' saved state and the tabs it leaves |
+| [Personal browsing](docs/personal-browsing.md) | 36 tasks in already-open tabs and a signed-in test session: look things up, fill in drafts, don't submit or close what it shouldn't; eight civic-document and authenticated-service tasks are new in the v4 preparation | The local apps' saved state and the tabs it leaves |
 | [Component gallery](docs/gallery.md) | 21 tasks: custom widgets, shadow DOM, iframes, media puzzles and one hand-off, on a crowded page and one at a time | Each task's recorded outcome |
-| [Coexistence](docs/coexistence.md) | The personal tasks while a user is in the browser: tabs the user opened, a watched view, a user typing | Personal grading plus the user's view and input |
+| [Coexistence](docs/coexistence.md) | The 36 personal tasks while a user is in the browser: tabs the user opened, a watched view, a user typing (`coexistence-local-v3` preparation) | Personal grading plus the user's view and input |
 | [External](docs/external.md) | 7 MiniWoB++ tasks and 3 live sites (Steam, Wikipedia, MDN) | MiniWoB++'s own reward; live tasks are recorded, not graded |
 | [Full native](docs/full-native.md) (Kitsune only, not run yet) | 14 of those tasks with Kitsune's own tool groups: `KITSUNE_CAPS=core` vs `all` + the tool gateway, reported apart from the head-to-head | The tracks' own graders, plus gateway use, batch steps and capability errors |
 | [Hostile UI](docs/hostile.md) (draft, no model) | 26 real-web components that resist automation | Scripted tool strategies |
 
 The personal and gallery apps are synthetic and local. No real account or everyday browser profile is used.
+`main` prepares `taskset-v4`; `taskset-v3.5` remains the latest frozen tag. The expanded 36-task totals are not
+comparable with the 28-task results above. See the [upgrade protocol](docs/results/kitsune-versions.md#preparing-taskset-v4).
 
 ## Setup
 
@@ -65,7 +67,7 @@ uv run --locked python -m kitsune_benchmark personal --task pb-current-01 --vari
 # Run it: two agent runs on your subscription. Without --task, --execute runs the six-task pilot (12 runs).
 uv run --locked python -m kitsune_benchmark personal --task pb-current-01 --variant 0 --execute
 
-# A release cohort (306 agent runs), then its review.
+# A v4-preparation lite cohort (362 agent runs), then its review. Freeze/tag before release comparisons.
 uv run --locked python scripts/run-full-suite.py --plan lite \
   --kitsune-project artifacts/vendor/kitsune-v0.7.2 --out artifacts/my-suite
 uv run --locked python scripts/analyze-release.py artifacts/my-suite

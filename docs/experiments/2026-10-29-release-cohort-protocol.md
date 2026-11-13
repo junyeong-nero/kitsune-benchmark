@@ -6,6 +6,11 @@
 This protocol fixes how the next Kitsune release is evaluated before any run. It is committed before the first
 execution. The report goes in `docs/results/` and is added to `kitsune-versions.md`.
 
+**Taskset-v4 preparation:** this document's 28-task counts and tags describe the historical v3 release cohorts.
+Current `main` expands personal and user-seeded coexistence to 36 tasks (362 lite / 602 full agent runs).
+Use the [v4 upgrade steps](../results/kitsune-versions.md#preparing-taskset-v4) and
+[current running guide](../running.md) for that preparation; do not label an expanded run as this frozen v3 cohort.
+
 ## Purpose
 
 The release after v0.7.0 contains several changes that the benchmark measured or that touch its tracks:

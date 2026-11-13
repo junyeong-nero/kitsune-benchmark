@@ -470,7 +470,7 @@ class EvaluationTests(unittest.TestCase):
             self.assertFalse(user_tab_refusal(other))
 
     def test_config_and_catalog_agree_on_the_frozen_suite(self):
-        self.assertEqual(coexistence_config()["id"], "coexistence-local-v2")
+        self.assertEqual(coexistence_config()["id"], "coexistence-local-v3")
         self.assertEqual(catalog()["suite"], coexistence_config()["id"])
         self.assertEqual(runnable_ids(), ["co-typing-01"])
         # v2 runs the unprotected arm (user tabs writable); v1's protect arm equals the default after Kitsune 0.7.1.

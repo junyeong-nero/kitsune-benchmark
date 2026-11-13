@@ -4,7 +4,7 @@ Runs personal-browsing tasks under the `user-seeded` condition, plus coexistence
 that need a simulated user. Starting tabs belong to the user (opened over WebDriver BiDi,
 not through the MCP server), and the tab the user sees is recorded throughout the run.
 
-Benchmark `coexistence-local-v2` (configs/benchmarks/coexistence.json). The personal fixtures,
+Benchmark `coexistence-local-v3` (configs/benchmarks/coexistence.json, taskset-v4 preparation). The personal fixtures,
 graders and relay are imported, never modified. Their contracts are reported as they are
 (primary `v2_agent_tab_cleanup`, strict v1 beside it); the coexistence contracts build on the
 primary one:
@@ -50,7 +50,7 @@ INTEGRITY = ("Synthetic local apps; personal-track graders unchanged. The simula
 # tabs), so the arm configures what the default arm runs: coexistence-local-v2 retires it from the run plan, and it is
 # kept to reproduce coexistence-local-v1 cohorts.
 PROTECTED_KITSUNE_ENV = {"KITSUNE_USER_TABS": "read-only", "KITSUNE_PROTECT_USER_TABS": "1"}
-# The unprotected arm, in coexistence-local-v2's run plan: every user-tab protection off, against the default arm.
+# The unprotected arm, in the run plan since coexistence-local-v2: every user-tab protection off, against the default arm.
 UNPROTECTED_KITSUNE_ENV = {"KITSUNE_USER_TABS": "writable", "KITSUNE_PROTECT_USER_TABS": "0",
                            "KITSUNE_HOLD_VIEWED_TAB": "0"}
 

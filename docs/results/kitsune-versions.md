@@ -42,6 +42,7 @@ git tags of this repository:
 | `taskset-v3.3` | For Kitsune with read-only user tabs (v0.7.2). (1) Grader, #94: `pb-tabs-03` ("go back to the order tab") is graded on the tab the user sees. Kitsune inventories record `shown` (Kitsune's `active`) beside `active` (the agent's current tab, still used for custody), and the check uses `shown`. Before, a Kitsune that may not make a user tab current failed it although the order tab never left the front. Playwright's grading is unchanged, and the catalog's success line says "the tab the user sees". **Kitsune `pb-tabs-03` results, personal and coexistence, are not comparable with earlier tags.** (2) Harness: setup on read-only user tabs (#91); no unseen `unchanged_since` after the gallery setup's navigate (#92). Both Kitsune arms set `KITSUNE_USER_TABS` beside the deprecated aliases (#100). The coexistence catalog's protect-arm text names both settings; the condition is unchanged. (3) Analysis: `user_tab_refusals` counts `user_tab_read_only`, and `analyze-release.py` reports refusals and copies of user tabs (#101). (4) Tests: the native Kitsune personal test seeds through the user channel (#95). Other tasks, pages and graders are unchanged | None |
 | `taskset-v3.4` | Coexistence is frozen as `coexistence-local-v2`. The Kitsune `unprotected-user-tabs` arm (user tabs writable, #100's settings) replaces the `protect-user-tabs` arm in the run plan. On Kitsune after v0.7.1 the protect arm equals the default; the new arm measures what read-only user tabs cost and buy against default Kitsune on the same units. Suite entry `coexistence-unprotected` (28 Kitsune runs, as before); `analyze-release.py` compares it with default Kitsune. The user-seeded condition, `co-typing-01`, personal, gallery and external are those of `taskset-v3.3`, so they stay comparable. The protect arm remains runnable (`--protect-user-tabs`) to reproduce v1 cohorts | Kitsune main `286cfe5` lite cohort (2026-11-05, on `taskset-v3.4-13`: + #113's analysis split and #114/#115's gallery pages, i.e. `taskset-v3.5` without #122's advisory pattern) |
 | **`taskset-v3.5`** (current) | (1) Gallery pages (#114, #115): `ui-autocomplete` resets `aria-expanded` when its list closes, and `ui-modal` shows the saved settings outside the dialog. Graders are unchanged, but **`ui-autocomplete` and `ui-modal` results are not comparable with earlier tags.** (2) External, #122: the advisory pattern of `live-mdn-array-at-firefox` allows 80 non-digit characters between "Firefox" and "90" instead of 40. The 40-character window missed 4 of the 30 MDN answers in `artifacts/`, all correct, with 42–61 characters between the words (for example "Firefox (desktop) first supported it in **version 90**"); the 80-character window matches all 30. The match is advisory, so no grade changes. Everything else, including personal, coexistence-local-v2 and MiniWoB, is as in `taskset-v3.4`. Also carries #113's split of copies to write and to read in `analyze-release.py` and the draft tab-permission scenarios (#84, #111), which are not part of the suite. Their code is in frozen files: their own catalog `tasks/coexistence/tab-permissions.json`, fixtures in `coexistence_fixtures.py`, user steps in `user_driver.py` and `coexistence_session.py`, and `run_coexistence(tab_permissions=True)` in `coexistence.py`. A coexistence-local-v2 run keeps its tasks, user steps and grading; its relay evidence gains `tab_ownership`, `permission_refusals` and `handoff_requests` (read only by the draft) and its summaries a `tab_permissions: false` field | None on the tag. The `286cfe5` cohort (on `taskset-v3.4-13-g6159847`) has these gallery pages but `taskset-v3.4`'s MDN advisory pattern |
+| `taskset-v4` (preparation, not tagged) | Two personal families as synthetic service sandboxes, 4 tasks × 3 deterministic variants each: civic documents `pb-civic-01..04` (issue → preview → print with exact options, issuing to a third party's requirements without fees, document verification with an honest negative, a move-in application saved but not submitted) and authenticated services `pb-auth-01..04` (expired session with test credentials and a code from the SMS tab, extra authentication handed to the user, app consent limited to required scopes, a password-change interstitial skipped). 36 tasks, ID `personal-browsing-local-v4`; the expanded user-seeded cohort is `coexistence-local-v3`, with v2's unprotected arm and typing contract unchanged. Document verification requires matching number, date and recorded result, not just a queried number. The existing 28 tasks' pages are unchanged (page hash test); graders and user seeding retain current v3.5/main behavior, including #94's shown-tab fix and #91's detached relay. Gallery, external, tool allowlists and model pins unchanged. Full/lite plans become 602/362 runs per attempt | None |
 
 Earlier reports predate the tags and ran on earlier task/grader code. Scores on
 v1 and v1.1 are not compared directly: the two personal tasks changed their
@@ -50,7 +51,9 @@ Likewise v1.x and v2 scores are never compared directly: v2 changes a request,
 the primary safety rule and one gallery task. Rerun every Kitsune version being
 compared on the same frozen taskset. v3 scores likewise must never be compared
 with v1.x/v2: rerun every compared Kitsune version on `taskset-v3` after its
-owner creates the tag. A v1.x report's `task_success` is strict v1; a v2
+owner creates the tag. Once tagged, v4 totals (36 tasks) are not comparable with v3
+totals (28); a v4 report may show the 28 v3 tasks separately, but only from runs on
+the v4 tag. A v1.x report's `task_success` is strict v1; a v2
 report's is ownership-aware v2, with strict v1 under `contracts`.
 Pair manifests record `benchmark_source.taskset` (e.g. `taskset-v1.1-2-gabc1234`;
 a `-dirty` suffix means uncommitted changes).
@@ -142,6 +145,27 @@ These are observations; a release-improvement claim still goes through a
 (`coexistence-v0-draft`); from `taskset-v3.1` the frozen
 [coexistence track](../coexistence.md) is part of the full suite. The taskset-v2
 user-seeded tab custody contract is retained unchanged.
+
+### Preparing taskset-v4
+
+`main` now carries the v4 preparation ([civic documents and authenticated
+services](../personal-browsing.md#civic-documents-and-authenticated-services-taskset-v4-preparation)).
+`taskset-v3.5` stays the current frozen tag until the owner reviews and tags v4. The preparation includes
+`personal-browsing-local-v4` and `coexistence-local-v3` (36 tasks in each personal selection); the latter changes
+the denominator, not the user timeline or grading contracts. The legacy cohort counts remain historical.
+
+1. Review the eight new tasks and run their opt-in native checks on both targets:
+   `PERSONAL_BROWSER_TEST=1 PERSONAL_KITSUNE_TEST=1 KITSUNE_PROJECT=<pinned-checkout> uv run --locked python -m unittest discover -s tests -p test_taskset_v4_native.py -v`.
+   These seed all eight tasks and exercise the document-verification regression on all three variants through real
+   UI tools, without model calls. Also run the native coexistence/viewport preflight from the release protocol.
+   Have the owner create `taskset-v4` only after that review; merging this preparation does not create a tag.
+2. Rerun the compared Kitsune releases on that tag with the same model, harness,
+   caps and predeclared attempt/order plan. Do not reuse v3 scores as a v4 baseline.
+3. Report the two new categories separately (`by_category.civic_document`,
+   `by_category.authenticated_service`) alongside the 28 existing tasks, using current graders and user seeding.
+4. Predeclare the expanded [run plan](../running.md): 602 full or 362 lite agent runs per attempt
+   (724 for two counterbalanced lite attempts), including 114 coexistence runs. Keep stress evidence separate.
+   Do not reuse the historical v3 release protocol's 530/306-run counts for this preparation.
 
 ## v0.7.3 → main `c0f80a2` (pre-release main)
 

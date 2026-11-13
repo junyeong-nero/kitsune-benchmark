@@ -28,8 +28,9 @@ from kitsune_benchmark.user_driver import LinkOpeningUser, TypingUser
 from kitsune_benchmark.miniwob import UI_TOOLS
 
 VALID = {"execution_status": "completed_unscored"}
-# The frozen coexistence-local-v2 catalog (taskset-v3.4) must not change (its sha256 is recorded in every run).
-FROZEN_CATALOG_SHA256 = "49cfc14aa20c0a491c6ba9b3b9bc295e3c84ee2ca568f829f4b5ada0df23036c"
+# Pin the main catalog independently of the draft (coexistence-local-v3 / taskset-v4 preparation).
+# Only v4's cohort metadata changes; test_taskset_v4 pins the inherited v2 tasks and conditions separately.
+FROZEN_CATALOG_SHA256 = "3b342509b5e7534cd34b059d26b624a202813d80b423aaffbb7da993b2d163c6"
 
 
 def task(task_id):
@@ -115,7 +116,7 @@ class CatalogTests(unittest.TestCase):
                 run_coexistence(tab_permissions=True, **kwargs)
         with redirect_stdout(io.StringIO()):
             self.assertEqual(main(["coexistence", "--tab-permissions", "--all-personal"]), 2)
-        self.assertEqual(run_coexistence()["benchmark"], "coexistence-local-v2")
+        self.assertEqual(run_coexistence()["benchmark"], "coexistence-local-v3")
 
     def test_execution_uses_the_draft_server_catalog_and_suite(self):
         launched = []

@@ -17,11 +17,14 @@ allowlist, and grades them from outside the agent. Pick the guide that matches w
 
 ## Tracks
 
+`main` prepares `taskset-v4` (36 personal tasks); `taskset-v3.5` remains the latest frozen tag (28).
+The historical results below do not include the eight new tasks. See the [v4 upgrade steps](results/kitsune-versions.md#preparing-taskset-v4).
+
 | Track | Tasks | Latest: Kitsune v0.7.2, Opus 5.5 (2026-11-04) |
 | --- | --- | --- |
-| [Personal browsing](personal-browsing.md) | 28 tasks in already-open tabs and a signed-in test session (`personal-browsing-local-v3`), three data variants each, on synthetic local apps | Playwright 56/56, Kitsune 54/56 (`pb-tabs-03`, [#94](https://github.com/junyeong-nero/kitsune-benchmark/issues/94)); Kitsune / Playwright input 0.985 |
+| [Personal browsing](personal-browsing.md) | 36 tasks in already-open tabs and a signed-in test session (`personal-browsing-local-v4` preparation), three data variants each, on synthetic local apps | On the prior 28-task catalog: Playwright 56/56, Kitsune 54/56 (`pb-tabs-03`, [#94](https://github.com/junyeong-nero/kitsune-benchmark/issues/94)); Kitsune / Playwright input 0.985 |
 | [Component gallery](gallery.md) | 21 tasks (custom widgets, shadow DOM, iframes, media puzzles, one hand-off), three variants, on a crowded page and one at a time | 42/42 both; input 0.625 crowded, 0.962 isolated |
-| [Coexistence](coexistence.md) (frozen `coexistence-local-v2`) | The 28 personal tasks with tabs the user opened, a Kitsune arm with user tabs writable, and `co-typing-01`; 25 more tasks specified only | User's view moved: Playwright 26/28, Kitsune 0/28. Typing user's input kept: 0/3 vs 3/3 |
+| [Coexistence](coexistence.md) (`coexistence-local-v3` preparation) | The 36 personal tasks with tabs the user opened, a Kitsune arm with user tabs writable, and `co-typing-01`; 25 more tasks specified only | On the prior 28-task catalog: user's view moved, Playwright 26/28, Kitsune 0/28. Typing user's input kept: 0/3 vs 3/3 |
 | [External](external.md) (`external-v1`) | 7 MiniWoB++ tasks graded by their own reward, 3 live sites recorded but not graded | MiniWoB++ 7/7 both; live tasks completed by both |
 | [Full native](full-native.md) (`kitsune-full-native-v1`, Kitsune only) | 14 existing units (personal research, research → draft, long pages; gallery `ui-table` on both layouts) × `KITSUNE_CAPS=core` vs `KITSUNE_CAPS=all` + `KITSUNE_PUBLISH=core`, no allowlist; reported apart from the head-to-head | Not run yet |
 | [Hostile UI](hostile.md) (draft, no model) | 26 real-web components that resist automation × scripted tool strategies | Kitsune v0.7.1: Playwright 23/26, Kitsune 20/26 |

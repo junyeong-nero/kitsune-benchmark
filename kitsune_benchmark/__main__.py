@@ -74,10 +74,10 @@ def main(argv: list[str] | None = None) -> int:
     benchmark.add_argument("--kitsune-project")
     benchmark.add_argument("--targets", default="playwright,kitsune")
     benchmark.add_argument("--budget-usd", type=float)
-    personal = subparsers.add_parser("personal", help="Personal browsing: 28 runnable local tasks (six-task pilot by default); plan by default")
+    personal = subparsers.add_parser("personal", help="Personal browsing: 36 runnable local tasks (six-task pilot by default); plan by default")
     personal.add_argument("--execute", action="store_true", help="Run selected pairs; consumes subscription quota")
     personal.add_argument("--task", action="append", dest="task_ids", help="Runnable task ID; repeat to select several; default: six pilot tasks")
-    personal.add_argument("--all", action="store_true", help="Select all 28 runnable tasks (56 agent runs with --execute)")
+    personal.add_argument("--all", action="store_true", help="Select all 36 runnable tasks (72 agent runs with --execute)")
     personal.add_argument("--variant", type=int, choices=(0, 1, 2), default=0)
     personal.add_argument("--codex", default="codex")
     personal.add_argument("--kitsune-project")
@@ -97,13 +97,13 @@ def main(argv: list[str] | None = None) -> int:
     gallery.add_argument("--kitsune-preset")
     gallery.add_argument("--targets", default="playwright,kitsune")
     gallery.add_argument("--budget-usd", type=float)
-    coexistence = subparsers.add_parser("coexistence", help="Coexistence track (coexistence-local-v2): user-seeded tabs, a simulated "
+    coexistence = subparsers.add_parser("coexistence", help="Coexistence track (coexistence-local-v3): user-seeded tabs, a simulated "
                                         "user and view telemetry; plan by default")
     coexistence.add_argument("--execute", action="store_true", help="Run selected pairs; consumes quota or API credit")
     coexistence.add_argument("--task", action="append", dest="task_ids",
                              help="Runnable co-* task, or a personal pb-* task to run user-seeded; repeatable; "
                                   "default: runnable co-* tasks")
-    coexistence.add_argument("--all-personal", action="store_true", help="All 28 personal tasks under the user-seeded condition")
+    coexistence.add_argument("--all-personal", action="store_true", help="All 36 personal tasks under the user-seeded condition")
     coexistence.add_argument("--protect-user-tabs", action="store_true",
                              help="Kitsune arm with user-tab protection on: KITSUNE_USER_TABS=read-only, and "
                                   "KITSUNE_PROTECT_USER_TABS=1 for Kitsune before v0.7.2; the coexistence-local-v1 arm, "
@@ -111,9 +111,9 @@ def main(argv: list[str] | None = None) -> int:
     coexistence.add_argument("--unprotected-user-tabs", action="store_true",
                              help="Kitsune arm with user-tab protection off: KITSUNE_USER_TABS=writable, and "
                                   "KITSUNE_PROTECT_USER_TABS=0 KITSUNE_HOLD_VIEWED_TAB=0 for Kitsune before v0.7.2; the "
-                                  "coexistence-local-v2 arm (reported separately)")
+                                  "coexistence-local-v3 arm (reported separately)")
     coexistence.add_argument("--tab-permissions", action="store_true",
-                             help="Draft kitsune#393 tab-permission scenarios (tp-* tasks, outside coexistence-local-v2; "
+                             help="Draft kitsune#393 tab-permission scenarios (tp-* tasks, outside coexistence-local-v3; "
                                   "reported separately); default: every tp-* task the --elicitation policy runs")
     coexistence.add_argument("--variant", type=int, choices=(0, 1, 2), default=0)
     coexistence.add_argument("--codex", default="codex")

@@ -1,17 +1,19 @@
-# Coexistence track (`coexistence-local-v2`)
+# Coexistence track (`coexistence-local-v3` preparation)
 
 [Documentation index](README.md) · [Running guide](running.md) ·
 [Spec catalog](../tasks/coexistence/catalog.json) · [Personal protocol](personal-browsing.md)
 
-**Status: frozen as benchmark `coexistence-local-v2`, part of `taskset-v3.4`.** The frozen scope is:
+**Status: `coexistence-local-v3`, part of the untagged `taskset-v4` preparation.** The scope is:
 
-- the `user-seeded` condition (all 28 `personal-browsing-local-v3` tasks);
+- the `user-seeded` condition (all 36 `personal-browsing-local-v4` tasks);
 - the Kitsune `unprotected-user-tabs` arm (user tabs writable), compared with default Kitsune;
 - the `co-typing-01` fixture.
 
 `coexistence-local-v1` (`taskset-v3.1` to `v3.3`) ran the `protect-user-tabs` arm in its place. On Kitsune after
 v0.7.1 that arm equals the default, so v2 retires it from the run plan and measures the counterfactual instead.
-The user-seeded condition and `co-typing-01` are unchanged.
+`coexistence-local-v2` remains frozen in `taskset-v3.4`/`v3.5` with 28 personal tasks. v3 adds the eight v4 service
+tasks to both personal arms; the conditions, `co-typing-01`, user timeline and grading contracts are unchanged from
+current v2. Expanded totals are not comparable with v2 totals. No v4 tag has been created yet.
 
 The 25 tasks with status `specified` are specification only. They are never run or scored. See
 [Frozen protocol](#frozen-protocol) for the run plan, the main verdicts and the comparability rules.
@@ -101,12 +103,13 @@ endpoint, and this is not an adversarial boundary.
 
 ## Conditions and tasks
 
-### `user-seeded` (runnable): the 28 personal tasks
+### `user-seeded` (runnable): the 36 personal tasks
 
 Fixtures, requests and graders are imported from `personal.py` and
-`personal_fixtures.py` unchanged. `--all-personal` selects all 28
-`personal-browsing-local-v3` tasks, including the four long-page tasks. Pages carry the
-personal track's viewport report, so `viewport.effective` is measured as it is in the personal
+`personal_fixtures.py` unchanged. `--all-personal` selects all 36
+`personal-browsing-local-v4` tasks, including the four long-page tasks and eight new service tasks.
+The existing 28 tasks retain current main's graders, including `taskset-v3.3`'s shown-tab fix.
+Pages carry the personal track's viewport report, so `viewport.effective` is measured as it is in the personal
 track. The relay (`coexistence_session.py`, a subclass of the personal relay) changes three
 things:
 
@@ -167,7 +170,7 @@ is typing there (`user_active`), and a user tab becomes the agent's only after `
 user's approval. Six scenarios check it (#74). They have their own catalog,
 [`tasks/coexistence/tab-permissions.json`](../tasks/coexistence/tab-permissions.json), and benchmark ID
 `coexistence-tab-permissions-v0-draft`. They run only with `coexistence --tab-permissions`, never in the default
-selection or `run-full-suite`, and are never pooled with `coexistence-local-v2`. The frozen catalog and config are
+selection or `run-full-suite`, and are never pooled with `coexistence-local-v2` or `v3`. The main catalog and config are
 unchanged.
 
 **Verified without a model on Kitsune v0.7.2**, which implements kitsune#393 to #397. A scripted agent that keeps
@@ -357,7 +360,8 @@ That is 28 runs with a declined hold (personal 12, coexistence 16), all 28 redon
 
 ## Frozen protocol
 
-**Identity.** The benchmark ID is `coexistence-local-v2` (`coexistence-local-v1` up to `taskset-v3.3`). It is set in
+**Identity.** The preparation's benchmark ID is `coexistence-local-v3` (36 personal tasks); frozen
+`coexistence-local-v2` in `taskset-v3.4`/`v3.5` has 28. `coexistence-local-v1` ran up to `taskset-v3.3`. It is set in
 `configs/benchmarks/coexistence.json` and must equal the catalog's `suite`. The code checks this
 and writes it into every evaluation's `benchmark`. The model pins and timeout belong to this
 config; they are no longer borrowed from the personal config. The minimum Kitsune version is 0.7.0,
@@ -374,18 +378,22 @@ v2 changes the Kitsune arm only: the catalog's `unprotected-user-tabs` condition
 and `protect-user-tabs` is retired.
 #74 added the [draft tab-permission scenarios](#draft-tab-permission-scenarios-for-kitsune393-outside-the-frozen-scope)
 beside them: new fixtures, user steps, relay evidence fields and the `--tab-permissions` option. The frozen catalog,
-config, `co-typing-01`, conditions, contracts, verdicts and run plan are unchanged.
+config, `co-typing-01`, conditions, contracts, verdicts and run plan were unchanged by that addition.
+v3 changes only the imported personal selection to 36 tasks and versions the expanded catalog/config accordingly;
+the existing 28 tasks, relay and contracts retain current v2 behavior. Freeze this preparation with `taskset-v4`
+before release comparisons.
 
-**Run plan per attempt.** `scripts/run-full-suite.py` runs these entries, always as paired runs in
+**Run plan per attempt (v3 preparation, 114 agent runs).** `scripts/run-full-suite.py` runs these entries, always as paired runs in
 one process and in the attempt's order (`--targets playwright,kitsune` for AB, the reverse for BA):
 
 | Entry | Command | Agent runs |
 | --- | --- | --- |
-| `coexistence-user-seeded` | `coexistence --all-personal --variant 0` | 56 |
+| `coexistence-user-seeded` | `coexistence --all-personal --variant 0` | 72 |
 | `coexistence-typing-v0..2` | `coexistence --task co-typing-01 --variant N` | 6 |
-| `coexistence-unprotected` | `coexistence --all-personal --variant 0 --unprotected-user-tabs --targets kitsune` | 28 |
+| `coexistence-unprotected` | `coexistence --all-personal --variant 0 --unprotected-user-tabs --targets kitsune` | 36 |
 
-v1's third entry was `coexistence-protect` (`--protect-user-tabs`, 28 runs).
+v2 used 56 + 6 + 28 = 90 runs. v1's third entry was `coexistence-protect` (`--protect-user-tabs`, 28 runs).
+Check out the corresponding historical taskset tag to reproduce either plan; today's `--all-personal` selects 36.
 
 Since #59 the driver adds `--elicitation decline` (or the suite's `--elicitation accept`) to each
 command above. Decline is the default, so a command without the flag runs the same plan.
@@ -415,6 +423,9 @@ A failure caused by a system refusal counts as the protection's design cost, not
 
 ### Comparability
 
+- v3 expands both personal arms from 28 to 36 tasks. Do not pool totals with v1/v2. Report the eight new service
+  tasks separately; compare the existing 28 only on matching taskset/grader, model, harness and variant/order plans.
+  The `taskset-v3.2` user seeding and `taskset-v3.3` shown-tab grader are preserved, not reverted to original v3 behavior.
 - The four runs before the freeze (2026-10-23, -24, -25, -26) are **pre-freeze observations**
   under `coexistence-v0-draft`. They are never pooled with `coexistence-local-v1` or relabeled.
 - `coexistence-local-v2` keeps v1's user-seeded condition and `co-typing-01` unchanged, so their results
@@ -452,10 +463,10 @@ track; add `--harness claude-api --allow-api-billing` only to spend API credit:
 ```sh
 # The coexistence fixture(s): 2 agent runs per task.
 uv run --locked python -m kitsune_benchmark coexistence --execute
-# All 28 personal tasks user-seeded (56 runs), then the Kitsune arm with user tabs writable (28 runs).
+# All 36 personal tasks user-seeded (72 runs), then the Kitsune arm with user tabs writable (36 runs).
 uv run --locked python -m kitsune_benchmark coexistence --all-personal --execute
 uv run --locked python -m kitsune_benchmark coexistence --all-personal --unprotected-user-tabs --targets kitsune --execute
-# coexistence-local-v1's retired protect arm, to reproduce a v1 cohort (28 runs).
+# Retired protect arm (36 runs here; use a v1 taskset tag for the historical 28-task cohort).
 uv run --locked python -m kitsune_benchmark coexistence --all-personal --protect-user-tabs --targets kitsune --execute
 ```
 

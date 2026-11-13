@@ -51,9 +51,9 @@ def perform(client, trial, steps):
 
 
 class NewFixtureTests(unittest.TestCase):
-    def test_catalog_maps_twenty_two_new_fixtures(self):
+    def test_catalog_maps_thirty_new_fixtures(self):
         tasks = new_tasks()
-        self.assertEqual(len(tasks), 22)
+        self.assertEqual(len(tasks), 30)
         self.assertEqual({t["fixture"] for t in tasks}, set(FIXTURE_CLASSES))
         self.assertEqual(sorted(t["category"] for t in tasks).count("research"), 3)
 

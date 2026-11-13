@@ -248,7 +248,7 @@ class FullSuiteTests(unittest.TestCase):
                               + ["suite-manifest.json", "suite-summary.json"])
         self.assertEqual((self.manifest["plan"], self.manifest["targets_in_parallel"], self.manifest["order_policy"]),
                          ("lite", False, "abba"))
-        # The track commands' own plan mode (no --execute: no browser or model) counts the agent runs: 2 x 306.
+        # The track commands' own plan mode (no --execute: no browser or model) counts the v4 runs: 2 x 362.
         planned = []
         for command in launched:
             output = io.StringIO()
@@ -257,8 +257,20 @@ class FullSuiteTests(unittest.TestCase):
             plan = json.loads(output.getvalue())
             self.assertFalse(plan["model_invoked"])
             planned.append(plan["planned_model_runs"])
-        self.assertEqual(sum(planned[:len(lite)]), 306)
-        self.assertEqual(sum(planned), 612)
+        self.assertEqual(sum(planned[:len(lite)]), 362)
+        self.assertEqual(sum(planned), 724)
+
+    def test_expanded_full_plan_run_count(self):
+        from kitsune_benchmark.__main__ import main as track_main
+        planned = []
+        for _, command in suite.commands("full"):
+            output = io.StringIO()
+            with redirect_stdout(output):
+                self.assertEqual(track_main(command), 0)
+            plan = json.loads(output.getvalue())
+            self.assertFalse(plan["model_invoked"])
+            planned.append(plan["planned_model_runs"])
+        self.assertEqual(sum(planned), 602)
 
     def test_repeated_attempts_stop_on_first_invalid_track(self):
         bad = {"requested_pairs": 28, "completed_pairs": 1, "stopped_reason": "unscorable_pair"}

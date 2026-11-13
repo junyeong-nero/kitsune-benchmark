@@ -1,4 +1,4 @@
-"""Run every track (personal 28×3 variants, gallery 21×3×2 layouts, coexistence, external 7 MiniWoB + 3 live) under one
+"""Run every track (personal 36×3 variants, gallery 21×3×2 layouts, coexistence, external 7 MiniWoB + 3 live) under one
 total budget.
 
 Each track command gets the remaining budget via --budget-usd, so the suite as a whole never starts a pair
@@ -10,7 +10,7 @@ playwright / --targets kitsune), each with its own fixture server, ports, profil
 Both targets then share the machine, so elapsed time and CPU/RSS are measured under that contention.
 --sequential restores one process per track with paired runs, Playwright-first unless --order selects otherwise.
 The external track runs like the others; its three live tasks are recorded, never graded.
-Coexistence (coexistence-local-v2) follows its frozen plan: the 28 personal tasks user-seeded on variant 0,
+Coexistence (coexistence-local-v3, taskset-v4 preparation) runs the 36 personal tasks user-seeded on variant 0,
 co-typing-01 on variants 0-2, then the Kitsune unprotected-user-tabs arm (user tabs writable) on variant 0. Its
 entries always run paired in one process (the user channel was validated that way), in the attempt's order.
 
@@ -57,7 +57,7 @@ from pathlib import Path
 
 
 # Variants per track. "lite" keeps every personal and gallery task and both gallery layouts with fewer data
-# variants: personal 28 x v0-v1 + gallery 21 x 2 layouts x v0 = 98 units (196 paired runs) instead of 210.
+# variants: personal 36 x v0-v1 + gallery 21 x 2 layouts x v0 = 114 units (228 paired runs) instead of 234.
 PLANS = {"full": {"personal": (0, 1, 2), "gallery": (0, 1, 2)},
          "lite": {"personal": (0, 1), "gallery": (0,)}}
 ELICITATION_POLICIES = ("decline", "accept")  # kitsune_benchmark/personal_session.py
