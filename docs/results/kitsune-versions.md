@@ -111,6 +111,18 @@ These are observations; a release-improvement claim still goes through a
 [coexistence track](../coexistence.md) is part of the full suite. The taskset-v2
 user-seeded tab custody contract is retained unchanged.
 
+## v0.7.3 → main `c0f80a2` (pre-release main)
+
+`c0f80a2` (`v0.7.3-24-gc0f80a2`): `85b50d2` plus #493 (#485: a collapsed run is listed when its lines total at most
+600 characters) and #516 (#513–#515: opt-in Python scripting and a minimal toolset with it, off by default and not
+exercised here).
+
+Runs on `taskset-v3.5-13` (`53d6a9b`).
+
+| Date | Report | Model / harness | Kitsune revision | Notes |
+| --- | --- | --- | --- | --- |
+| 2026-11-11 | [Lite cohort](2026-11-11-main-c0f80a2.md) | `claude-opus-5-5`, Claude Code subscription | `c0f80a2` | 306 scorable runs in one invocation. Both targets solve every unit. K/PW input (`ad04bac` → `c0f80a2`): personal 0.854 → 0.809, crowded 0.695 → 0.568, isolated 0.777 → 0.921 (one `mm-video` run), coexistence 0.858 → 0.785, external 0.916 → 0.952. #483, #484, #485 and #488 hold on the units that exercise them; #487 not exercised |
+
 ## v0.7.3 → main `85b50d2` (pre-release main)
 
 `85b50d2cdce53c3e7eefb02e4b3d4e2e95ecfee9` (`v0.7.3-18-g85b50d2`): `ad04bac` plus #489 (#487), #490 (#484),
