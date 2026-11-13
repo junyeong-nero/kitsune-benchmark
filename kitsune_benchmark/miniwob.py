@@ -33,6 +33,9 @@ CORE_TOOLS = ("browser_close", "browser_resize", "browser_console_messages", "br
     "browser_snapshot", "browser_click", "browser_drag", "browser_hover", "browser_select_option",
     "browser_tabs", "browser_wait_for")
 UI_TOOLS = {"playwright": CORE_TOOLS, "kitsune": CORE_TOOLS}
+# Exhibition arms (smoke.EXHIBITION_TARGETS) have only a code-execution tool, so unlike the two UI-tool arms above
+# they could rewrite page state or rewards; the prompt forbids it and the result is reported apart.
+EXHIBITION_TOOLS = {"aside": ("repl",), "ego": ("run_script",)}
 
 
 def config() -> dict:
