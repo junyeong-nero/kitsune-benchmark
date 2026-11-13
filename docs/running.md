@@ -272,10 +272,13 @@ Native no-model check (Kitsune `v0.4.1-15-g2110a32`, Playwright MCP 0.0.83 Firef
 headless, macOS): Playwright `--viewport-size 1280x720` → inner 1280×720,
 outer 1280×805, DPR 1. Kitsune `--width=1280 --height=720` → inner 1280×635,
 outer 1280×720, DPR 1. Kitsune `--height=805` → inner 1280×720, outer
-1280×805, DPR 1. Rerun it after a Firefox or Kitsune upgrade:
+1280×805, DPR 1. Revalidated on 2026-11-10 with Kitsune product revision `fd9b90e`
+(test-only repair `cb3bc27`) and the same private Firefox/Playwright build. Kitsune
+setup seeds through the user channel and reads in an agent-owned tab; it does not
+make user tabs writable (#137). Rerun it after a Firefox or Kitsune upgrade:
 
 ```sh
-PERSONAL_BROWSER_TEST=1 PERSONAL_KITSUNE_TEST=1 KITSUNE_PROJECT=../kitsune \
+PERSONAL_BROWSER_TEST=1 PERSONAL_KITSUNE_TEST=1 KITSUNE_PROJECT="$PWD/../kitsune" \
   uv run --locked python -m unittest discover -s tests -p test_taskset_v3.py -k Native
 ```
 
@@ -561,16 +564,21 @@ external task can retain it alongside `benchmark_evaluation.task_success: true`.
 uv run --locked python -m unittest discover -s tests -v
 
 # Real isolated Firefox UI fixture tests for both native MCPs, still no inference.
-PERSONAL_BROWSER_TEST=1 PERSONAL_KITSUNE_TEST=1 \
+PERSONAL_BROWSER_TEST=1 PERSONAL_KITSUNE_TEST=1 KITSUNE_PROJECT="$PWD/../kitsune" \
   uv run --locked python -m unittest discover -s tests -p 'test_personal.py' -v
+PERSONAL_BROWSER_TEST=1 PERSONAL_KITSUNE_TEST=1 KITSUNE_PROJECT="$PWD/../kitsune" \
+  uv run --locked python -m unittest discover -s tests -p 'test_coexistence.py' -v
+PERSONAL_BROWSER_TEST=1 PERSONAL_KITSUNE_TEST=1 KITSUNE_PROJECT="$PWD/../kitsune" \
+  uv run --locked python -m unittest discover -s tests -p 'test_taskset_v3.py' -k Native -v
 ```
 
 The opt-in tests require installed private browser/npm tools and the sibling
 Kitsune checkout. They use deterministic drivers, not Codex agent execution;
-passing them is not a model benchmark score. The full suite including both
-native-browser tests passed 65 tests when the personal track was introduced.
-After adding offline diagnostic-analysis tests, default discovery runs 69 tests
-(67 pass, two opt-in native-browser tests skipped).
+passing them is not a model benchmark score. On 2026-11-10, default discovery ran
+412 tests: 394 passed and 18 opt-in tests skipped. Record the actual counts for
+each revision; a skipped native check is not a pass. The coexistence reference
+reuses a full snapshot returned by a tab action instead of treating a subsequent
+`unchanged_since` response as a fresh tree (#136).
 
 ## Analyze existing logs without inference
 
