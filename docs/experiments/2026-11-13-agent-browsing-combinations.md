@@ -1,13 +1,14 @@
 # Agent-browsing combinations: token-efficiency comparison
 
-**Status: PILOT SCOPE APPROVED / PREFLIGHT PENDING / NOT YET EXECUTABLE.** The
-operator selected the previous CLI models at medium effort, a maximum 33-start
-diagnostic and **no paid API usage**. After login failed in the dedicated Chrome
-profile, the operator selected **manual execution in their own Chrome profile**;
-there is no authorization for an automated attachment to that profile. Runtime
-pins, adapters and measurement evidence must pass
-no-inference preflight before freezing an executable plan. No model attempt
-belongs to this proposal yet. Candidate availability is not adapter support.
+**Status: CLI PREFLIGHT PASSED / CLEAN MANIFEST FREEZE REQUIRED / MANUAL CHROME PENDING.**
+The operator subsequently authorized merging the benchmark work into `main` and
+running this diagnostic **before a separately authorized main comparison**. Local
+merge `527aea0` integrates the preparation scaffold with updated upstream `main`;
+no remote push or product-repository merge is implied. The selected CLI models,
+medium effort, maximum 33 starts and **zero paid API budget** remain unchanged.
+Manual operation in the user's Chrome profile is not authorization for automated
+attachment. No-inference evidence and a clean frozen manifest are required before
+CLI inference; the manual Chrome track remains separately pending.
 
 ## Confirmed scope
 
@@ -20,10 +21,10 @@ belongs to this proposal yet. Candidate availability is not adapter support.
   using `claude --chrome`.
 - Investigate **browser-use native Agent and Browser Harness MCP separately**.
 - Support adding baselines without rewriting historical experiment runners or
-  pooling old cohorts. No merge, release, tag or everyday-browser restart is
-  part of this work.
+  pooling old cohorts. The newly authorized merge is benchmark-only. No product
+  merge, release, tag or everyday-browser restart is part of this work.
 
-## Approved pilot design — runtime preflight pending
+## Approved pilot design — final validation and manifest freeze required
 
 ### A. CLI-backed combinations
 
@@ -33,13 +34,13 @@ multiplying every candidate by every model before establishing feasibility.
 
 | ID | Outer agent | Browser interface | Browser/runtime | State |
 | --- | --- | --- | --- | --- |
-| codex-kitsune-zen | Codex | Kitsune, six tools | Private Zen | Existing Firefox adapter needs an explicit Zen launch and validation |
-| codex-playwright | Codex | Microsoft Playwright MCP | Private Chrome (Chromium) | Existing adapter uses Firefox; new explicit browser configuration needed |
-| codex-aside | Codex | Aside native MCP REPL | Aside app | Existing relay; revalidate current app/catalog and isolation limits |
-| codex-ego | Codex | EgoLite script wrapper | EgoLite app | Existing relay; current app differs from historical pin |
-| codex-devtools | Codex | Chrome DevTools MCP | Private Chrome | New adapter, telemetry and lifecycle checks required |
-| codex-browser-harness | Codex | Browser Harness MCP | Private Chrome | New adapter; must not attach its default CDP port to an everyday browser |
-| codex-agent-browser | Codex | agent-browser MCP | Private Chrome | New adapter; current upstream documents an MCP entry point |
+| codex-kitsune-zen | Codex | Kitsune, six tools | Private Zen | Explicit Zen binary/private profile/bridge; final freeze required |
+| codex-playwright | Codex | Microsoft Playwright MCP | Private Chrome (Chromium) | Explicit owned Chrome CDP endpoint; final freeze required |
+| codex-aside | Codex | Aside native MCP REPL | Aside app | Fresh native REPL context, not a fresh profile |
+| codex-ego | Codex | EgoLite script wrapper | EgoLite app | Fresh TaskSpace, not a fresh profile; native guide retained |
+| codex-devtools | Codex | Chrome DevTools MCP | Private Chrome | Explicit owned Chrome endpoint; native schemas retained |
+| codex-browser-harness | Codex | Browser Harness MCP | Private Chrome | Private daemon/config + owned Chrome; fresh-PNG image bridge |
+| codex-agent-browser | Codex | agent-browser MCP | Private Chrome | Private MCP session/daemon + owned Chrome; native schemas |
 | claude-kitsune-zen | Claude Code | Kitsune, six tools | Private Zen | Same product/browser treatment as Codex Kitsune |
 | claude-playwright | Claude Code | Microsoft Playwright MCP | Private Chrome (Chromium) | Same browser/tool treatment as Codex Playwright |
 
@@ -98,9 +99,13 @@ catalog; do not invent a common tool schema to make candidates look equivalent.
 Other surveyed candidates remain future additions, not implicit executions.
 
 Locally observed app versions: Zen **1.24.2b**, Chrome **157.0.8103.52**, Aside
-**1.0.1022.1**, EgoLite **0.6.3.12**. Verify runtime versions, binary hashes and
-native catalogs before freezing. This does not prove isolated profiles or matching
-viewports. No everyday profile, login store or tab inventory was inspected.
+**1.0.1022.1**, EgoLite **0.6.3.12** during the original preparation. Before the
+executable freeze, the installed EgoLite bundle reports **0.6.3.14**; use the
+source-matched preflight's before/after runtime hashes, not the old observation.
+Installed bundle versions are not independent attestations of a running vendor
+process. No everyday browser was restarted to normalize versions. These checks
+do not prove isolated profiles or matching viewports. No personal login store or
+unrelated tab inventory was inspected.
 
 ## Workloads and proposed execution caps
 
@@ -192,6 +197,57 @@ execution rather than claiming the old UI-only policy was automatically enforced
 Trusted host code and post-call inventory are not confinement or complete safety
 proofs. Do not introduce new capabilities into Kitsune for benchmark parity.
 
+## Implemented CLI policy and observability limits
+
+`scripts/run-agent-combinations.py` freezes the three-condition schedule from the
+offline plan; it never expands that registry. Native browser-side Python/JS/CDP
+may inspect **rendered DOM text, geometry and visible state**, and perform normal
+UI input. The common prompt prohibits hidden application variables, task/grader
+source, storage/cookies, host files, response/network bodies, direct HTTP, script
+injection, permission changes, readonly/disabled bypass and unrelated tabs.
+This is a declared action policy, **not a sandbox or equal permission boundary**.
+Aside receives its prepared `tabs`/`page` handles; Ego resumes exactly its prepared
+TaskSpace. Neither is allowed to discover unrelated app contexts. Kitsune's
+published tools remain its actual six controls; setup uses the existing gateway.
+
+Personal/gallery whole-attempt limits are 180/240 seconds. MCP call limits are
+45 seconds for Kitsune/Playwright and 130 seconds for the other native interfaces;
+upstream native deadlines also apply. All CLI attempts are sequential. The first
+invocation stops after at most nine starts even when its requested limit is 27.
+Further starts require a reviewed `first-nine-audit.json` whose SHA256 matches the
+first nine persisted rows. A counted start with partial/missing evidence is never
+automatically retried. Usage is saved before grading/catalog checks can fail.
+
+Preflight covers 21 runtime/fixture cells, three independent positive UI controls,
+and seven no-model replays of the **actual stdio/filter/image/EOF-cleanup path**.
+These are not model attempts or evidence that a model understood an image. The
+manifest captures source/lock hashes, browser and CLI executable pins, native
+guides/catalogs and preflight identity. It rejects source/runtime/catalog drift.
+The relay survives the CLI's process-group stop to close native fixture contexts;
+the runner requires its close acknowledgement, with a bounded owned-process
+cleanup fallback. Unknown cleanup is a stop, not a success.
+
+Zen uses a fresh profile/HOME/bridge and `MOZ_REMOTE_ALLOW_SYSTEM_ACCESS=1`.
+Private Chrome disables component/background updates, uses a mock keychain/basic
+password store, and never attaches a default endpoint or personal profile. These
+launch flags are treatment details, not stock-browser equivalence. Aside/Ego
+context isolation is weaker than profile isolation. Browser Harness's bridge
+preserves the native receipt and adds only freshly written PNGs inside the
+attempt's own image directory; a file path alone does not count as image delivery.
+
+**Viewport parity is not asserted.** Personal fixture pages report CSS viewport
+and DPR; gallery pages do not, so gallery CSS viewport/DPR remain unavailable.
+The image preflight records delivered pixel dimensions for all conditions. Earlier
+blank-page checks already showed different Zen and Chrome dimensions. Browser
+engine, UI, profile/context isolation and permission differences confound any
+MCP-only causal interpretation. These are practical combinations, not a pure
+transport ablation.
+
+Report raw elapsed time and measured relay setup/post-call inventory separately.
+Their subtraction is descriptive overhead adjustment, not pure model latency.
+External provisioning and final cleanup lie outside the agent's raw timer. No
+missing usage/timing is filled with zero; cross-model tokens remain separate.
+
 ## Reporting and README
 
 Report success and usage together, including failures and recovery rounds.
@@ -212,8 +268,8 @@ its new claims have evidence.
 
 All protocol, runtime, runner, test and results changes for this experiment belong
 in **kitsune-benchmark**. The product repository receives only a later,
-evidence-supported presentation update. Current development branch:
-`experiment/agent-browsing-combinations`.
+evidence-supported presentation update. The scaffold is now merged into local
+`main`; the original branch was `experiment/agent-browsing-combinations`.
 
 - [x] Record the selected models, nine CLI combinations, diagnostic task set,
   zero-API policy and manual-only personal Chrome boundary.
@@ -227,10 +283,16 @@ evidence-supported presentation update. Current development branch:
   `389d9c0` in its own Python environment. Installation is not adapter validation.
 - [x] Pass six offline plan tests, including caps, separate model panels,
   six-tool Kitsune, blocked native slots and unavailable manual-Chrome metrics.
-- [ ] Implement and validate all selected CLI runtime/fixture adapters, actual
-  native catalogs, screenshot delivery, lifecycle cleanup and grading controls.
+- [x] Implement the seven runtime surfaces underlying all nine CLI combinations;
+  the 21-cell fixture/image/noncompletion matrix and three UI positive controls
+  passed (`artifacts/agent-combinations-fixtures-v8/`).
+- [x] Complete final source/runtime-matched preflight: 21 cells, three positive
+  UI controls and all seven actual stdio/image/cleanup replays passed in
+  `artifacts/agent-combinations-final-preflight-v2/`. The regression suite ran
+  606 tests with 23 opt-in skips and no failures.
+- [ ] Freeze the clean executable manifest before inference.
 - [ ] Prepare manual Chrome fixture instructions and observable grading.
-- [ ] Freeze the executable manifest and implement the first-nine CLI audit gate.
+- [x] Implement the bounded runner, failure retention and first-nine CLI audit gate.
 - [ ] Run only the approved pilot starts and retain all failed/partial evidence.
 - [ ] Audit and publish a reviewed pilot report here; decide separately whether
   further authorized measurement can support a product README figure.
@@ -241,17 +303,35 @@ Plan-only command (no browser/model):
 uv run --locked python -m kitsune_benchmark.agent_combinations
 ```
 
-No execution command or new model result exists yet. The original benchmark
-Node lock currently reports five npm audit findings (three low, one moderate,
-one high); do not mistake successful installation/tests for a clean audit.
-Assess the relevant execution paths before freezing; no automatic `audit fix`
-or unrelated historical dependency rewrite was performed. The separately
-installed additional Node-tool lock reported zero findings at preparation time.
+Execution workflow (new evidence directories only; `freeze` invokes no model):
+
+```sh
+uv run --locked python scripts/preflight-agent-combinations.py --out artifacts/<preflight>
+uv run --locked python scripts/run-agent-combinations.py freeze \
+  --preflight artifacts/<preflight>/preflight.json --out artifacts/<pilot>
+uv run --locked python scripts/run-agent-combinations.py run --out artifacts/<pilot>
+# Stops after the first nine. Review raw evidence before creating the audit approval.
+```
+
+The offline plan command deliberately remains `execution_ready: false`; only a
+separate validated manifest authorizes this runner's CLI path. Manual Chrome and
+browser-use native Agent are not launched by it.
+
+The original Node lock still reports five npm audit findings (three low, one
+moderate, one high). `npm explain` traces the high `node-forge` finding to
+`web-ext → @devicefarmer/adbkit`; the other findings are `addons-linter` /
+`deepmerge` / `fast-uri`. This pilot uses desktop `web-ext run` with a trusted
+pinned local extension, not Android/ADB, package signing or untrusted extension
+linting. Native browser network/TLS is not implemented with `node-forge` here.
+That path assessment is **not a clean security audit**; the findings remain
+unfixed and retained. No automatic `audit fix` or unrelated historical dependency
+rewrite was performed. The separately installed additional tool lock reported
+zero findings at preparation time.
 
 ## Remaining execution gates
 
-1. Implement and validate the nine CLI combinations without inference; pin the
-   exact catalogs, guides, browser binaries and owned runtime resources.
+1. Finish the source-matched no-inference interface checks and regression suite;
+   freeze exact catalogs, guides, browser/CLI binaries and owned runtime resources.
 2. Prepare manual Chrome fixture instructions and collect operator-reported
    extension/mode/model and permissions. Validate server-side functional grading
    without attaching to the personal profile or issuing a hidden model smoke

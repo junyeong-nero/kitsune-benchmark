@@ -57,7 +57,9 @@ def launch(parent: Path, *, executable: Path = CHROME, headed: bool = False,
     env.update(HOME=str(home), TMPDIR=str(temp), TMP=str(temp), TEMP=str(temp))
     argv = [str(executable), f"--user-data-dir={profile}", "--remote-debugging-port=0",
             "--remote-debugging-address=127.0.0.1", "--no-first-run", "--no-default-browser-check",
-            "--disable-sync", "--disable-background-networking", "--window-size=1280,900",
+            "--disable-sync", "--disable-background-networking", "--disable-component-update", "--no-service-autorun",
+            "--password-store=basic", "--use-mock-keychain", "--disable-background-timer-throttling",
+            "--disable-backgrounding-occluded-windows", "--disable-renderer-backgrounding", "--window-size=1280,900",
             *([] if headed else ["--headless=new"]), url]
     log = folder / "browser.log"
     with log.open("xb") as stream:
