@@ -28,6 +28,8 @@ from kitsune_benchmark.personal_session import NativeSession, elicitation_kind, 
 from kitsune_benchmark.user_driver import UserDriver
 
 CHROME_SURFACES = {"devtools", "browser-harness", "agent-browser"}
+PENDING_URL_SECONDS = 1.0
+PENDING_URL_POLLS = 20
 
 
 def text_json(result):
@@ -82,6 +84,8 @@ class CombinationsSession(ExpandedSession):
     def request(self, method, params=None, *, notify=None, role="harness"):
         started = time.time_ns()
         response = super().request(method, params, notify=notify, role=role)
+        if self.config["target"] == "browser-harness" and role == "agent" and method == "tools/call":
+            self.pending_tab_receipt = {"request": params, "response": response}
         if role == "harness" and method == "tools/call" and not self.evidence["setup_complete"]:
             self.evidence.setdefault("setup_rpc", []).append({"request": params, "response": response})
         if (self.config["target"] == "browser-harness" and method == "tools/call"
@@ -89,6 +93,88 @@ class CombinationsSession(ExpandedSession):
                 and "error" not in response and not response.get("result", {}).get("isError")):
             response = {**response, "result": browser_harness_image(response["result"], self.config["images"], started)}
         return response
+
+    def browser_harness_tabs(self):
+        listed = text_json(self.tool("browser_list_tabs", {}))
+        current = text_json(self.tool("browser_current_tab", {}))
+        self.evidence["last_native_inventory"] = {"listed": listed, "current": current}
+        active = current.get("targetId", current.get("target_id"))
+        tabs = [{"id": t["targetId"], "url": t["url"], "title": t.get("title", ""),
+                 "active": t["targetId"] == active} for t in listed]
+        if (not tabs or len({t["id"] for t in tabs}) != len(tabs)
+                or sum(t["active"] for t in tabs) != 1 or any(not isinstance(t["url"], str) for t in tabs)):
+            raise ValueError("Invalid Browser Harness tab inventory/selection")
+        return tabs
+
+    def stabilize_pending_url(self, tabs):
+        # Only the immediately preceding successful explicit local new-tab request
+        # can establish provenance. Never reinterpret an empty URL as about:blank.
+        receipt = getattr(self, "pending_tab_receipt", None)
+        self.pending_tab_receipt = None
+        if not self.evidence["setup_complete"] or not any(t["url"] == "" for t in tabs):
+            return tabs
+        started = time.monotonic()
+        record = {"snapshot_index": len(self.evidence["snapshots"]), "receipt": receipt,
+                  "window_sec": PENDING_URL_SECONDS, "max_polls": PENDING_URL_POLLS,
+                  "samples": [{"elapsed_sec": 0.0, "tabs": tabs,
+                               "native_inventory": self.evidence.get("last_native_inventory")}], "status": "ineligible"}
+        self.evidence.setdefault("pending_url_observations", []).append(record)
+        params, response = (receipt or {}).get("request") or {}, (receipt or {}).get("response") or {}
+        url = (params.get("arguments") or {}).get("url")
+        try:
+            created = text_json(response.get("result", {})).get("targetId")
+        except (ValueError, AttributeError):
+            created = None
+        previous = self.evidence["snapshots"]
+        seen = {t["id"] for snapshot in previous for t in snapshot}
+        prior_help = {t["id"] for t in (previous[-1] if previous else [])
+                      if t["url"] == "chrome://settings/help" and not t["active"]}
+        if (params.get("name") != "browser_new_tab" or "error" in response
+                or response.get("result", {}).get("isError") or not isinstance(created, str) or created in seen
+                or not isinstance(url, str) or not url.startswith(self.config["origin"] + "/")
+                or not previous or {t["id"] for t in tabs} != {t["id"] for t in previous[-1]} | {created}
+                or [t["id"] for t in tabs if t["url"] == ""] != [created]
+                or any(t["url"] and t["url"] != "about:blank"
+                       and not t["url"].startswith(self.config["origin"] + "/")
+                       and not (t["id"] in prior_help and t["url"] == "chrome://settings/help" and not t["active"])
+                       for t in tabs)):
+            return tabs
+        stable = {t["id"]: (t["url"], t["active"]) for t in tabs if t["id"] != created}
+        created_active = next(t["active"] for t in tabs if t["id"] == created)
+        record.update(status="pending", target_id=created, requested_url=url)
+        try:
+            for _ in range(PENDING_URL_POLLS):
+                remaining = PENDING_URL_SECONDS - (time.monotonic() - started)
+                if remaining <= 0:
+                    break
+                time.sleep(min(0.05, remaining))
+                if time.monotonic() - started >= PENDING_URL_SECONDS:
+                    break
+                observed = self.browser_harness_tabs()
+                elapsed = time.monotonic() - started
+                record["samples"].append({"elapsed_sec": elapsed, "tabs": observed,
+                                          "native_inventory": self.evidence.get("last_native_inventory")})
+                # A slow native RPC retains its existing transport deadline, but
+                # a reply outside this observation window cannot qualify as settled.
+                if elapsed > PENDING_URL_SECONDS:
+                    raise ValueError("Pending URL observation exceeded its window")
+                if ({t["id"]: (t["url"], t["active"]) for t in observed if t["id"] != created} != stable
+                        or not any(t["id"] == created and t["active"] == created_active for t in observed)):
+                    raise ValueError("Ambiguous inventory change during pending URL observation")
+                resolved = next(t["url"] for t in observed if t["id"] == created)
+                if resolved == url:
+                    record["status"] = "settled"
+                    return observed
+                if resolved:
+                    raise ValueError("Pending target resolved to an unexpected URL")
+            record["status"] = "unresolved"
+            return tabs  # The unchanged empty URL remains an outside observation.
+        except (OSError, ValueError, KeyError, TypeError) as error:
+            record.update(status="failed", error_detail=error_detail(error),
+                          failure_inventory=self.evidence.get("last_native_inventory"))
+            raise
+        finally:
+            record["elapsed_sec"] = time.monotonic() - started
 
     def inventory(self):
         target = self.config["target"]
@@ -108,11 +194,7 @@ class CombinationsSession(ExpandedSession):
                             tabs.append({"id": int(match[1]), "url": titled[2] if titled else match[2],
                                          "title": titled[1] if titled else "", "active": bool(match[3])})
             elif target == "browser-harness":
-                listed = text_json(self.tool("browser_list_tabs", {}))
-                current = text_json(self.tool("browser_current_tab", {}))
-                active = current.get("targetId", current.get("target_id"))
-                tabs = [{"id": t["targetId"], "url": t["url"], "title": t.get("title", ""),
-                         "active": t["targetId"] == active} for t in listed]
+                tabs = self.stabilize_pending_url(self.browser_harness_tabs())
             else:
                 response = self.tool("agent_browser_tab_list", {})["structuredContent"]["response"]
                 if response.get("success") is not True:

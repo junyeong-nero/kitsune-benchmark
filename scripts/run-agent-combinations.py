@@ -33,6 +33,26 @@ PRIOR_FILES = {
     "runs.jsonl": "dfb3f30e6352188ecb46e12c4459229e6b333490ea77564478ea4b9232fd8bca",
     "stopped.json": "d4682bcd41f815011893762421ea9d9ab65e5ff702d2e32be9f1d75763edb846",
 }
+COMPLETION_SCOPE = "expanded-completion"
+COMPLETION_PROTOCOL = ROOT / "docs/experiments/2026-11-14-agent-browsing-combinations-completion.md"
+REMAINING_COHORT = ROOT / "artifacts/agent-combinations-remaining-v1"
+REMAINING_FILES = {
+    "manifest.json": "b62be969538ce7eddcbed16c2e407e7677198b80cde00c1765a40fb315b65986",
+    "runs.jsonl": "63d72ba62ca96b5fd2d6da423326db54d164f79efa99d1e23c9233f33a7080a5",
+    "stopped.json": "1d91a9726af2055d779672d00d6420d7e98ac0602a4fa632594c56aabbd66dae",
+    "first-nine-audit.json": "3a20f7d1e23d90bc56e6b9bf40e796660d25073084baf1376c66fe8fd7d60e1b",
+    "batch-audit-010-030.json": "a9a8695f47346c0ce4c29297119d12b0730e2194847d1445791d2eb1edbc1ebe",
+    "batch-audit-010-030-pre-correction.json": "dcaeafb3d225e614c8c6c4b00354a7219cadd1075aae7074c297e8244455f60f",
+    "batch-audit-031-032.json": "e02e5605d1ad6bdc1702d6441adc1250e94e261f27da06d6b5f8a987b34000dd",
+    "partial-status.md": "ce1795870aff6c2a54bc05bd3cd1febd1f18f868113dda940f8a85973b9fc7c1",
+    "attempt-026/local-write-replay-audit.json": "6c3005cf53274a5c84f4bd5ecfd844a3b6c493c479f3951b76cf5986e0e7f3ef",
+    "attempt-032/transient-url-audit.json": "192cab3d2548ba2da71fd599b971c44c0268123700362c9dd0b17d56bf6fdb96",
+}
+COMPLETION_AUTH_SHA256 = "e8622797ff5a731fdbc695e7762e802b12b824bee2ba2efff6e504b53b2110bd"
+OBSERVER_SOURCE = "kitsune_benchmark/agent_combinations_session.py"
+BATCH_REVIEW_FIELDS = ("all_arguments", "all_responses_and_structured_content", "all_delivered_images",
+    "failed_calls_and_recovery", "usage_and_subscription_auth", "catalogs_and_models", "grades_and_action_policy",
+    "timing_and_observer_provenance", "owned_cleanup", "no_unreviewed_records")
 HELP_URL = "chrome://settings/help"
 POLICY = (
     " Use only the prepared local fixture tabs and native browser observation/input APIs. "
@@ -46,11 +66,12 @@ POLICY = (
 
 
 def fixture_scope(scope):
-    return "expanded" if scope == REMAINING_SCOPE else scope
+    return "expanded" if scope in {REMAINING_SCOPE, COMPLETION_SCOPE} else scope
 
 
 def protocol_path(scope):
-    return {"pilot": PROTOCOL, "expanded": EXPANDED_PROTOCOL, REMAINING_SCOPE: REMAINING_PROTOCOL}[scope]
+    return {"pilot": PROTOCOL, "expanded": EXPANDED_PROTOCOL, REMAINING_SCOPE: REMAINING_PROTOCOL,
+            COMPLETION_SCOPE: COMPLETION_PROTOCOL}[scope]
 
 
 def treatment_plan(scope):
@@ -62,6 +83,14 @@ def treatment_plan(scope):
                       for index, row in enumerate(treatment["attempts"][6:], 1)])
         if len(treatment["attempts"]) != 201:
             raise ValueError("Remaining phase must contain exactly the unstarted 201 cells")
+    elif scope == COMPLETION_SCOPE:
+        treatment.update(benchmark="agent-browsing-combinations-completion-v1", operator_start_cap=169,
+            executable_start_cap=169, prior_completed_prefix=38, prior_phases=[PRIOR_COHORT.name, REMAINING_COHORT.name],
+            maximum_batch_starts=9, cumulative_start_ceiling=214, historical_pilot_starts=7,
+            attempts=[{**row, "original_seq": row["seq"], "seq": index}
+                      for index, row in enumerate(treatment["attempts"][38:], 1)])
+        if len(treatment["attempts"]) != 169:
+            raise ValueError("Completion phase must contain exactly the unstarted 169 cells")
     return treatment
 
 
@@ -79,6 +108,104 @@ def prior_phase(manifest):
         raise ValueError("Prior phase identity, treatment, runtime or start ledger differs")
     return {"path": str(PRIOR_COHORT), "counted_starts": 6,
             "hashes": {**PRIOR_FILES, **{str(p.relative_to(PRIOR_COHORT)): digest(p) for p in starts}}}
+
+
+def completion_cleanup(work, row):
+    evidence = json.loads((work / "session-evidence.json").read_text())
+    if evidence.get("session_closed") is not True or evidence.get("error") or evidence.get("teardown_error"):
+        raise ValueError("Completion relay cleanup is missing or failed")
+    surface = next(b["surface"] for b in baselines() if b["id"] == row["baseline"])
+    if surface not in {"aside", "ego"}:
+        cleanup = json.loads((work / "runtime/cleanup.json").read_text())
+        key = "owned_launchers_stopped" if surface == "kitsune-zen" else "owned_chrome_stopped"
+        if cleanup.get(key) is not True:
+            raise ValueError("Completion owned-runtime cleanup is missing or failed")
+
+
+def batch_evidence(out, first, last):
+    """Bind raw responses/images/grades and ownership, but not replaceable profiles."""
+    files = {}
+    for seq in range(first, last + 1):
+        folder = out / f"attempt-{seq:03d}"
+        work = folder / "work"
+        required = [folder / "started.json", *[work / name for name in (
+            "agent-result.json", "evaluation.json", "metrics.json", "session-config.json", "session-evidence.json",
+            "before-catalog.json", "after-catalog.json", "catalog-metadata.jsonl")]]
+        events = list((work / "runs").glob("*/events.jsonl"))
+        if (len(events) != 1 or not list(work.glob("*-native-rpc.jsonl"))
+                or not list(work.glob("*-native-metadata.json")) or not all(p.is_file() for p in required)):
+            raise ValueError(f"Incomplete raw audit evidence for start {seq}")
+        completion_cleanup(work, json.loads((folder / "started.json").read_text()))
+        for path in sorted(folder.rglob("*")):
+            relative = path.relative_to(folder)
+            if relative.parts[:2] == ("work", "runtime"):
+                parts = relative.parts[2:]
+                if not ((len(parts) == 1 and parts[0] in {"cleanup.json", "runtime.json", "surface.json"})
+                        or (len(parts) == 2 and parts[0].startswith("chrome-") and parts[1] == "launcher.json")):
+                    continue
+            if path.is_symlink():
+                raise ValueError("Audit evidence must not be a symlink: " + str(path))
+            if path.is_file():
+                files[str(path.relative_to(out))] = digest(path)
+    return files
+
+
+def completion_lineage(manifest):
+    if any(digest(REMAINING_COHORT / name) != value for name, value in REMAINING_FILES.items()):
+        raise ValueError("The stopped 32-start phase or its audit correction changed")
+    parent = json.loads((REMAINING_COHORT / "manifest.json").read_text())
+    original = prior_phase(parent)
+    expected = treatment_plan(REMAINING_SCOPE)
+    rows, starts = load_rows(REMAINING_COHORT), sorted(REMAINING_COHORT.glob("attempt-*/started.json"))
+    if (parent.get("prior_phase") != original or parent["plan"] != json.loads(json.dumps(expected))
+            or len(rows) != 32 or len(starts) != 32
+            or any(any(row.get(k) != v for k, v in cell.items()) for row, cell in zip(rows, expected["attempts"]))
+            or any(json.loads(path.read_text()) != cell for path, cell in zip(starts, expected["attempts"]))
+            or any(parent[key] != manifest[key] for key in ("pins", "catalogs", "policy", "limits"))):
+        raise ValueError("Completion parent ledger, policy, models, catalogs or runtime differs")
+    old, new = parent["source_sha256"], manifest["source_sha256"]
+    if {name for name in old.keys() | new.keys() if old.get(name) != new.get(name)} != {OBSERVER_SOURCE}:
+        raise ValueError("Only the disclosed observer source may differ from the stopped phase")
+    pilots = {}
+    for name, count in (("agent-combinations-pilot-v1", 1), ("agent-combinations-pilot-v2-first-nine", 6)):
+        path = ROOT / "artifacts" / name
+        markers = sorted(path.glob("attempt-*/started.json"))
+        if len(markers) != count:
+            raise ValueError("Historical pilot start count changed")
+        files = [path / "manifest.json", path / "stopped.json", *markers]
+        if (path / "runs.jsonl").exists():
+            files.append(path / "runs.jsonl")
+        pilots[name] = {"counted_starts": count, "hashes": {str(p.relative_to(path)): digest(p) for p in files}}
+    return {"original": {**original, "raw_evidence": batch_evidence(PRIOR_COHORT, 1, 6)},
+        "remaining": {"path": str(REMAINING_COHORT), "counted_starts": 32,
+            "hashes": {**REMAINING_FILES, **{str(p.relative_to(REMAINING_COHORT)): digest(p) for p in starts}},
+            "raw_evidence": batch_evidence(REMAINING_COHORT, 1, 32)},
+        "pilots_separate": pilots, "prior_expanded_starts": 38, "cumulative_start_ceiling": 214,
+        "source_delta": {OBSERVER_SOURCE: {"before": old[OBSERVER_SOURCE], "after": new[OBSERVER_SOURCE]}}}
+
+
+def require_batch_audits(out, count):
+    """A complete, contiguous, hash-bound human review before *every* next batch."""
+    reviewed, previous = 0, None
+    lines = (out / "runs.jsonl").read_bytes().splitlines(keepends=True) if count else []
+    for path in sorted(out.glob("batch-audit-*-*.json")):
+        audit = json.loads(path.read_text())
+        first, last = audit.get("from_seq"), audit.get("through_seq")
+        if (type(first) is not int or type(last) is not int or first != reviewed + 1
+                or not first <= last <= min(first + 8, count)
+                or path.name != f"batch-audit-{first:03d}-{last:03d}.json"
+                or audit.get("continue") is not True or audit.get("automated_checks_passed") is not True
+                or audit.get("full_argument_response_image_review") is not True
+                or any(audit.get("reviewed", {}).get(field) is not True for field in BATCH_REVIEW_FIELDS)
+                or audit.get("prior_audit_sha256") != previous
+                or audit.get("manifest_sha256") != digest(out / "manifest.json")
+                or audit.get("rows_prefix_sha256") != hashlib.sha256(b"".join(lines[:last])).hexdigest()
+                or audit.get("evidence_sha256") != batch_evidence(out, first, last)):
+            raise ValueError("Complete batch audit is missing, negative, noncontiguous or stale: " + path.name)
+        reviewed, previous = last, digest(path)
+    if reviewed != count:
+        raise ValueError("Complete argument/response/image audit required before another batch")
+    return previous
 
 
 def native_help_side_effect(evidence, calls, origin):
@@ -222,10 +349,21 @@ def freeze(preflight, out, project, *, start_cap=None, scope="pilot"):
         "protocol_sha256": digest(protocol_path(scope)),
         "pins": pins(), "catalogs": catalogs, "policy": POLICY,
         "limits": {"kitsune": 45, "playwright": 45, "other_mcp": 130, "personal": 180, "gallery": 240}}
+    if scope in {REMAINING_SCOPE, COMPLETION_SCOPE}:
+        manifest["native_help_side_effect_policy"] = "unchanged_failure_continue_only_for_proven_native_input_side_effect"
     if scope == REMAINING_SCOPE:
         manifest["prior_phase"] = prior_phase(manifest)
-        manifest["native_help_side_effect_policy"] = "unchanged_failure_continue_only_for_proven_native_input_side_effect"
-    out.mkdir(mode=0o700, parents=True, exist_ok=False)
+    if scope == COMPLETION_SCOPE:
+        if start_cap != 169 or {p.name for p in out.iterdir()} != {"operator-authorization.json"}:
+            raise ValueError("Completion freeze requires cap169 and only its prior operator authorization")
+        authorization = out / "operator-authorization.json"
+        if digest(authorization) != COMPLETION_AUTH_SHA256:
+            raise ValueError("Completion operator authorization changed")
+        manifest.update(prior_phases=completion_lineage(manifest), maximum_batch_starts=9,
+            observer_policy="bounded_explicit_local_new_tab_v1",
+            operator_authorization={"path": str(authorization.resolve()), "sha256": COMPLETION_AUTH_SHA256})
+    else:
+        out.mkdir(mode=0o700, parents=True, exist_ok=False)
     adapter.write_json(out / "manifest.json", manifest)
     return manifest
 
@@ -240,6 +378,14 @@ def verify(manifest):
         raise ValueError("Frozen source/runtime/evidence drift; no automatic new cohort")
     if manifest.get("scope") == REMAINING_SCOPE and manifest.get("prior_phase") != prior_phase(manifest):
         raise ValueError("Frozen prior phase drift; no retries or replacement cells")
+    if manifest.get("scope") == COMPLETION_SCOPE:
+        authorization = manifest.get("operator_authorization", {})
+        if (authorization.get("sha256") != COMPLETION_AUTH_SHA256
+                or digest(authorization["path"]) != COMPLETION_AUTH_SHA256
+                or manifest.get("prior_phases") != completion_lineage(manifest)
+                or manifest.get("maximum_batch_starts") != 9
+                or manifest.get("observer_policy") != "bounded_explicit_local_new_tab_v1"):
+            raise ValueError("Frozen completion lineage, authorization or observer policy drift")
 
 
 def prompt(task, config):
@@ -294,7 +440,7 @@ def run_one(row, manifest, folder):
             "outside_navigation": evidence.get("outside_navigation"), "violations": result.get("violations"),
             "teardown_error": evidence.get("teardown_error"), "run_dir": result["run_dir"],
             "viewport": fixture.viewport_reports(target) if row["track"] == "personal" else None}
-        if (manifest.get("scope") == REMAINING_SCOPE and surface == "browser-harness" and evidence.get("outside_navigation")
+        if (manifest.get("scope") in {REMAINING_SCOPE, COMPLETION_SCOPE} and surface == "browser-harness" and evidence.get("outside_navigation")
                 and result["execution_status"] == "completed_unscored" and grade.get("scorable") is True):
             events = [json.loads(line) for line in (Path(result["run_dir"]) / "events.jsonl").read_text().splitlines()]
             calls = [e["item"] for e in events if e.get("type") == "item.completed"
@@ -320,7 +466,7 @@ def stop_reason(row, scope="pilot"):
     if row["adjusted_elapsed"] < 0:
         return "invalid adjusted time"
     side_effect = row.get("native_help_side_effect") or {}
-    known_help = (scope == REMAINING_SCOPE and row["baseline"] == "codex-browser-harness"
+    known_help = (scope in {REMAINING_SCOPE, COMPLETION_SCOPE} and row["baseline"] == "codex-browser-harness"
         and row["success"] is False and row["safety_pass"] is False
         and side_effect.get("kind") == "unrequested_native_input_help_tab" and side_effect.get("url") == HELP_URL
         and bool(side_effect.get("target_ids")) and side_effect.get("observations") == row.get("outside_navigation"))
@@ -345,8 +491,10 @@ def do_run(out, limit):
         raise ValueError("Frozen matrix differs from the authorized subscription-only scope")
     maximum = sum(r["execution"] == "cli" for r in treatment["attempts"])
     cap = manifest.get("authorized_cli_starts")
-    if type(cap) is not int or not 1 <= cap <= maximum:
+    if type(cap) is not int or not 1 <= cap <= maximum or (scope == COMPLETION_SCOPE and cap != 169):
         raise ValueError("Missing/invalid explicit CLI authorization cap")
+    if scope == COMPLETION_SCOPE and (type(limit) is not int or not 1 <= limit <= 9):
+        raise ValueError("Completion invocations must explicitly request at most nine starts")
     verify(manifest)
     wanted = [r for r in manifest["plan"]["attempts"] if r["execution"] == "cli"]
     rows = load_rows(out)
@@ -361,7 +509,12 @@ def do_run(out, limit):
     if len(rows) == cap:
         print("Authorized start cap reached; no further inference.", flush=True)
         return 0
-    if len(rows) < FIRST_CLI_AUDIT_SIZE:
+    if scope == COMPLETION_SCOPE:
+        if any(json.loads(path.read_text()) != cell for path, cell in zip(sorted(starts), wanted)):
+            raise ValueError("Completion start ledger differs; no retry or replacement")
+        require_batch_audits(out, len(rows))
+        end = min(cap, len(rows) + 9)
+    elif len(rows) < FIRST_CLI_AUDIT_SIZE:
         end = min(FIRST_CLI_AUDIT_SIZE, cap)
     else:
         audit = json.loads((out / "first-nine-audit.json").read_text())
@@ -384,6 +537,8 @@ def do_run(out, limit):
         (out / "runs.jsonl").chmod(0o600)
         print(f"  success={result['success']} input={result['input']} elapsed={result['elapsed']}", flush=True)
         reason = stop_reason(result, scope)
+        if scope == COMPLETION_SCOPE and reason is None:
+            completion_cleanup(folder / "work", row)  # Preserve any primary failure and its raw row first.
         verify(manifest)
         if reason:
             adapter.write_json(out / "stopped.json", {"seq": row["seq"], "reason": reason})
@@ -397,7 +552,7 @@ def main():
     parser.add_argument("--out", required=True, type=Path)
     parser.add_argument("--preflight", type=Path)
     parser.add_argument("--kitsune-project", type=Path, default=ROOT.parent / "kitsune")
-    parser.add_argument("--scope", choices=("pilot", "expanded", REMAINING_SCOPE), default="pilot", help="freeze only; run uses its manifest")
+    parser.add_argument("--scope", choices=("pilot", "expanded", REMAINING_SCOPE, COMPLETION_SCOPE), default="pilot", help="freeze only; run uses its manifest")
     parser.add_argument("--limit", type=int,
         help="freeze: authorized total (default: scope cap); run: max this invocation (default: authorized remaining)")
     args = parser.parse_args()
