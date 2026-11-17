@@ -61,8 +61,22 @@ def arms() -> list[dict]:
             for harness, surfaces in HARNESS_SURFACES.items() for surface in surfaces]
 
 
-def plan() -> dict:
-    """Rotate arm order per condition within each model group; alternate group order."""
+def plan(scope: str = "main") -> dict:
+    """Rotate arm order per condition within each model group; alternate group order.
+
+    scope "kitsune-owned": a follow-up re-running only the Kitsune arms on the personal
+    track with starting tabs owned by the agent, as on every other surface."""
+    if scope == "kitsune-owned":
+        rows = [{"seq": 0, "arm": a["id"], "harness": a["harness"], "surface": a["surface"], "model": a["model"],
+                 "effort": "medium", "variant": 0, "repeat": 0, "kitsune_seeding": "agent", **c}
+                for c in conditions("expanded") if c["track"] == "personal"
+                for a in arms() if a["surface"] == "kitsune-zen"]
+        for seq, row in enumerate(rows, 1):
+            row["seq"] = seq
+        return {"benchmark": BENCHMARK + "-kitsune-owned", "arms": [a for a in arms() if a["surface"] == "kitsune-zen"],
+                "conditions": 7, "attempts": rows}
+    if scope != "main":
+        raise ValueError("Unknown scope")
     rows = []
     for index, condition in enumerate(conditions("expanded")):
         groups = []
@@ -96,7 +110,8 @@ def run_relay(row: dict, folder: Path, project: Path) -> dict:
     from .agent_combinations_fixture import await_relay_close, prepared_fixture, relay_server
     from .cost_metrics import run_timing
     from .smoke import session_setup
-    with prepared_fixture(row, row["surface"], folder, project) as (fixture, task, config, config_path):
+    with prepared_fixture(row, row["surface"], folder, project, row.get("kitsune_seeding", "user")) \
+            as (fixture, task, config, config_path):
         target = config["target"]
         server = relay_server(config, config_path, folder)
         result = adapter.run(server, relay_prompt(task, config), row["model"], executable=row["harness"],

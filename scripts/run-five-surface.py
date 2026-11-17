@@ -45,8 +45,8 @@ def usage_limited(row: dict) -> bool:
     return any(word in text for word in ("usage_limit", "rate_limit", "quota", "usage limit"))
 
 
-def ensure_manifest(out: Path, project: Path) -> dict:
-    treatment = plan()
+def ensure_manifest(out: Path, project: Path, scope: str = "main") -> dict:
+    treatment = plan(scope)
     path = out / "manifest.json"
     if path.exists():
         manifest = json.loads(path.read_text())
@@ -58,13 +58,15 @@ def ensure_manifest(out: Path, project: Path) -> dict:
     out.mkdir(mode=0o700, parents=True, exist_ok=True)
     manifest = {"benchmark": BENCHMARK, "created_at": datetime.now(timezone.utc).isoformat(),
                 "benchmark_revision": source_revision(ROOT), "kitsune_project": str(project.resolve()),
-                "kitsune_sha": KITSUNE_SHA, "pins": runtime_pins(), "plan": treatment, "api_budget_usd": 0}
+                "kitsune_sha": KITSUNE_SHA, "pins": runtime_pins(), "plan": treatment, "api_budget_usd": 0,
+                "scope": scope}
     adapter.write_json(path, manifest)
     return manifest
 
 
-def do_run(out: Path, project: Path, limit: int | None, arms: set[str] | None) -> int:
-    manifest = ensure_manifest(out, project)
+def do_run(out: Path, project: Path, limit: int | None, arms: set[str] | None, scope: str = "main") -> int:
+    manifest = ensure_manifest(out, project, scope)
+    total = len(manifest["plan"]["attempts"])
     done = {r["seq"] for r in load_rows(out)}
     pending = [r for r in manifest["plan"]["attempts"]
                if r["seq"] not in done and (arms is None or r["arm"] in arms)]
@@ -83,7 +85,7 @@ def do_run(out: Path, project: Path, limit: int | None, arms: set[str] | None) -
         folder.mkdir(mode=0o700)
         adapter.write_json(folder / "started.json", row)
         started += 1
-        print(f"[{row['seq']}/207] {row['arm']} {row['unit']}", flush=True)
+        print(f"[{row['seq']}/{total}] {row['arm']} {row['unit']}", flush=True)
         try:
             result = run_attempt(row, folder / "work", Path(manifest["kitsune_project"]))
         except Exception as error:  # Record and decide below; never retry the cell.
@@ -123,7 +125,8 @@ def fmt(value, digits=0):
 
 def summary(out: Path) -> str:
     rows = load_rows(out)
-    arms = plan()["arms"]
+    treatment = json.loads((out / "manifest.json").read_text())["plan"]
+    arms = treatment["arms"]
     lines = ["| Model | Surface | Runs | Scorable | Functional success | Task success (v2) | "
              "Median input | Median output | Median calls | Median time (s) |",
              "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"]
@@ -148,7 +151,7 @@ def summary(out: Path) -> str:
     for r in rows:
         statuses[r["execution_status"]] = statuses.get(r["execution_status"], 0) + 1
     return ("\n".join(lines) + "\n\nFunctional success by track:\n\n" + "\n".join(tracks)
-            + f"\n\nAttempts recorded: {len(rows)}/207. Execution status: {json.dumps(statuses)}\n")
+            + f"\n\nAttempts recorded: {len(rows)}/{len(treatment['attempts'])}. Execution status: {json.dumps(statuses)}\n")
 
 
 def main() -> int:
@@ -158,9 +161,11 @@ def main() -> int:
     parser.add_argument("--kitsune-project", type=Path, default=ROOT.parent / "kitsune")
     parser.add_argument("--limit", type=int, help="maximum new attempts in this invocation")
     parser.add_argument("--arms", help="comma-separated arm ids (default: all nine)")
+    parser.add_argument("--scope", choices=("main", "kitsune-owned"), default="main",
+                        help="kitsune-owned: Kitsune personal re-run with agent-owned starting tabs")
     args = parser.parse_args()
     if args.action == "plan":
-        print(json.dumps(plan(), indent=2, ensure_ascii=False))
+        print(json.dumps(plan(args.scope), indent=2, ensure_ascii=False))
         return 0
     if args.action == "summary":
         text = summary(args.out)
@@ -170,7 +175,7 @@ def main() -> int:
     arms = set(args.arms.split(",")) if args.arms else None
     if arms and arms - {a["id"] for a in plan()["arms"]}:
         parser.error("Unknown arm id")
-    return do_run(args.out, args.kitsune_project, args.limit, arms)
+    return do_run(args.out, args.kitsune_project, args.limit, arms, args.scope)
 
 
 if __name__ == "__main__":

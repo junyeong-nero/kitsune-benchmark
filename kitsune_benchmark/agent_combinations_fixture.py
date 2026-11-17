@@ -20,20 +20,24 @@ from .specs import Server
 
 
 @contextmanager
-def prepared_fixture(condition, surface, folder, project):
-    """Yield a fresh fixture and a relay configuration. Setup remains no-inference."""
+def prepared_fixture(condition, surface, folder, project, kitsune_seeding="user"):
+    """Yield a fresh fixture and a relay configuration. Setup remains no-inference.
+
+    kitsune_seeding "agent": personal starting tabs are opened as Kitsune's own (gallery's
+    task_tab path), so its read-only user-tab protection does not apply."""
     folder = Path(folder).resolve()
     folder.mkdir(mode=0o700, parents=True, exist_ok=False)
     target = "kitsune" if surface == "kitsune-zen" else surface
     if condition["track"] == "personal":
-        fixture = personal.PersonalServer(personal.selected_tasks([condition["task"]])[0], 0,
-                                           report_viewport=True, user_channel=target == "kitsune")
+        fixture = personal.PersonalServer(personal.selected_tasks([condition["task"]])[0], 0, report_viewport=True,
+                                           user_channel=target == "kitsune" and kitsune_seeding == "user")
     else:
         fixture = gallery.GalleryServer(gallery.select([condition["task"]])[0], 0, condition["layout"])
     with fixture:
         task = fixture.begin(target)
         trial = fixture.trials[fixture.by_target[target]]
-        port = ((fixture.bidi_ports[target] if condition["track"] == "personal" else fixture.kitsune_bidi_port)
+        port = ((fixture.bidi_ports[target] if condition["track"] == "personal" and kitsune_seeding == "user"
+                 else personal.free_port() if condition["track"] == "personal" else fixture.kitsune_bidi_port)
                 if target == "kitsune" else None)
         context = "bm-combinations-" + uuid.uuid4().hex
         images = folder / "images"
@@ -72,7 +76,7 @@ def prepared_fixture(condition, surface, folder, project):
                 "metadata_path": str(folder / (target + "-native-metadata.json"))}
             if target == "kitsune":
                 config["user_driver"] = {"bidi_url": f"ws://127.0.0.1:{port}"}
-                if condition["track"] == "personal":
+                if condition["track"] == "personal" and kitsune_seeding == "user":
                     config["seeding"] = "user_channel"
                 else:
                     config["task_tab"] = "agent"
