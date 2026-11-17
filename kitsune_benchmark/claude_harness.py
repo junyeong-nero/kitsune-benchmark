@@ -372,7 +372,8 @@ def token_attribution(request_inputs: list[int], call_tool: dict[str, tuple[str,
 
 
 def audit_events(path: Path, *, allowed_tools: tuple[str, ...] | None = None,
-                 expected_key_source: str | None = None) -> dict:
+                 expected_key_source: str | None = None,
+                 prefix: str = MCP_PREFIX, server_name: str = "browser") -> dict:
     """Conservative audit of Claude Code stream-json; never judges task success.
 
     expected_key_source pins the credential Claude Code reports in its init event
@@ -424,12 +425,12 @@ def audit_events(path: Path, *, allowed_tools: tuple[str, ...] | None = None,
                     if not init_tools:
                         harness_error = True
                     if not isinstance(tools, list) or any(
-                            not isinstance(t, str) or not t.startswith(MCP_PREFIX) for t in tools):
+                            not isinstance(t, str) or not t.startswith(prefix) for t in tools):
                         violations.add("unexpected_builtin_tools")
-                    elif allowed_tools is not None and any(t[len(MCP_PREFIX):] not in allowed_tools for t in tools):
+                    elif allowed_tools is not None and any(t[len(prefix):] not in allowed_tools for t in tools):
                         violations.add("tool_outside_benchmark_allowlist")
                     servers = event.get("mcp_servers")
-                    if not isinstance(servers, list) or [s.get("name") for s in servers if isinstance(s, dict)] != ["browser"]:
+                    if not isinstance(servers, list) or [s.get("name") for s in servers if isinstance(s, dict)] != [server_name]:
                         violations.add("unexpected_mcp_server")
                     elif servers[0].get("status") != "connected":
                         harness_error = True
@@ -496,7 +497,7 @@ def audit_events(path: Path, *, allowed_tools: tuple[str, ...] | None = None,
                         continue
                     name = block.get("name")
                     call_id = block.get("id")
-                    if not isinstance(name, str) or not name.startswith(MCP_PREFIX):
+                    if not isinstance(name, str) or not name.startswith(prefix):
                         violations.add("forbidden_or_unknown_item")
                         continue
                     if not isinstance(call_id, str):
@@ -509,9 +510,9 @@ def audit_events(path: Path, *, allowed_tools: tuple[str, ...] | None = None,
                         hallucinated_ids.add(call_id)
                         continue
                     calls.add(call_id)
-                    call_tool[call_id] = (name[len(MCP_PREFIX):], len(request_inputs) - 1)
+                    call_tool[call_id] = (name[len(prefix):], len(request_inputs) - 1)
                     if allowed_tools is not None:
-                        if name[len(MCP_PREFIX):] not in allowed_tools:
+                        if name[len(prefix):] not in allowed_tools:
                             violations.add("tool_outside_benchmark_allowlist")
                         arguments = block.get("input")
                         if isinstance(arguments, dict):
