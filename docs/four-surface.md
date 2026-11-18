@@ -36,6 +36,10 @@ Starting fixture tabs must keep their identities and URLs. Work only through the
 - Kitsune-only release comparison (not a fifth arm): v0.8.0 vs the candidate on a selected read-only user tab, a typing user and an exact-tab handoff that is not approved. Separate success, safety, view/input and safe-stop evidence. No tag or automatic release.
 - Keep planned, started, scorable, functional, safe, and primary successes separate. Unknown safety and unscorable starts are not passes; missing usage is not zero. Show all measured input and wall time and also costs on the **same** jointly successful task/repeat cells within each model. Include cache reads; never compare tokenizers or infer billed cost. One REPL call can group multiple actions. No pooled cross-model winner.
 
+## Repository-local CLI skills
+
+For a prepared native CLI task in this checkout, use [`kitsune-bench-ego`](../.agents/skills/kitsune-bench-ego/SKILL.md) or [`kitsune-bench-aside`](../.agents/skills/kitsune-bench-aside/SKILL.md). Codex and Pi discover the definitions in `.agents/skills/`; Claude Code sees the same files via relative links in `.claude/skills/`. Neither requires a user-level install. Each reads its installed vendor's guide on demand. The scored `four-surface-v1` runner disables skill discovery and uses MCP; discovering a project skill neither grants shell access nor qualifies a worker.
+
 ## Execution and publication
 
 Use the repository's locked Python/Node dependencies and private Playwright Firefox install (see [running](running.md)). Keep a clean checkout of the candidate at the configured SHA; `release` also requires a separate clean v0.8.0 checkout. Put Codex 0.170.0 and Claude Code 2.1.327 on PATH. Native arms use private Firefox; vendors use a fresh local Aside REPL or EgoLite TaskSpace in explicitly designated test profiles. Keys, accounts, viewport and browser engines are not measures of tool quality. Selection is **explicit** during setup; this is not an unselected-cursor experiment. Every attempt gets a fresh fixture token (toast codes are intentionally regenerated).

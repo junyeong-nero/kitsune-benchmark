@@ -24,6 +24,15 @@ def result(cell, **kw):
 
 
 class FourSurfaceTests(unittest.TestCase):
+    def test_browser_skills_resolve_inside_the_checkout(self):
+        for name in ('kitsune-bench-ego', 'kitsune-bench-aside'):
+            with self.subTest(name=name):
+                source = ROOT / '.agents/skills' / name / 'SKILL.md'
+                link = ROOT / '.claude/skills' / name
+                self.assertFalse(link.readlink().is_absolute())
+                self.assertEqual((link / 'SKILL.md').resolve(strict=True), source)
+                self.assertIn(f'\nname: {name}\n', source.read_text())
+
     def test_frozen_counts_and_pairing(self):
         for scope, size, tasks in [('pilot', 32, 4), ('main', 320, 20), ('replication', 320, 20), ('release', 12, 3)]:
             matrix = plan(scope)
