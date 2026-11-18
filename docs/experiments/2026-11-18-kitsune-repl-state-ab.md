@@ -33,6 +33,24 @@ of success. Report personal / isolated / crowded separately. Count how often a l
 actually reuses a name defined earlier. Without reuse, a difference is not attributable
 to the feature. One repeat: treat differences within ±10% as inconclusive.
 
+## Result (2026-11-18, `artifacts/repl-ab-v1`): not supported
+
+All 92 attempts ran; 91 were scorable (one base Codex `pb-handoff-01` timed out at 180 s).
+Success: Codex base 21/22, repl 22/23; Opus 23/23 both. The only shared miss is `ui-toast`
+in both Codex arms. Paired repl/base input on jointly scorable conditions:
+
+| Model | personal | isolated | crowded | all (median / geomean) | Δ calls (sum) | runs reusing a name |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Codex | 1.14 | 1.00 | 0.87 | 1.00 / 1.00 | −3 | 1/23 (1 of 108 calls) |
+| Opus | 0.83 | 1.21 | 1.03 | 1.00 / 1.02 | +3 | 9/23 (21 of 102 calls) |
+
+Codex almost never used the persisted state. Opus reused variables in 9 runs; the
+clearest case is `ui-infinite@crowded`, which reused a list collected in the previous
+call (6 calls vs 15 for base). Per-track ratios move in both directions without reuse, so
+they are single-repeat variance. No `state_reset` occurred. The decision rule (≤ 0.90) is
+not met: as exposed, persistence changes no efficiency. The models do not plan around the
+state, and Kitsune's per-call overhead is not dominated by re-fetching handles.
+
 ```sh
 uv run --locked python scripts/run-five-surface.py run --scope repl-ab --out artifacts/repl-ab-v1
 uv run --locked python scripts/run-five-surface.py summary --out artifacts/repl-ab-v1

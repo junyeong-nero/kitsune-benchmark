@@ -181,7 +181,7 @@ def main() -> int:
         print(text)
         return 0
     arms = set(args.arms.split(",")) if args.arms else None
-    if arms and arms - {a["id"] for a in plan()["arms"]}:
+    if arms and arms - {a["id"] for a in plan(args.scope)["arms"]}:
         parser.error("Unknown arm id")
     return do_run(args.out, args.kitsune_project, args.limit, arms, args.scope, args.candidate_project)
 
