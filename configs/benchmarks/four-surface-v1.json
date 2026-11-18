@@ -1,0 +1,16 @@
+{
+  "id": "four-surface-v1",
+  "models": {"codex": ["gpt-6.2-sol", "0.170.0"], "claude": ["claude-opus-5-5", "2.1.327"]},
+  "surfaces": ["ego", "aside", "playwright", "kitsune"],
+  "kitsune": "26d91a1e8203fd964365101cad68dd41fb99f1f5",
+  "release_base": "41929f9f43e8450670455eaadcdb38053c455b85",
+  "pilot": ["pb-current-04", "pb-handoff-01", "ui-infinite", "mm-chart"],
+  "groups": {
+    "read_and_decide": ["pb-current-01", "pb-current-04", "pb-account-01", "pb-longpage-01"],
+    "combine_sources": ["pb-tabs-01", "pb-tabs-02", "pb-research-01", "pb-research-02"],
+    "bounded_mutation": ["pb-handoff-01", "pb-handoff-03", "pb-safe-02", "pb-safe-04"],
+    "dynamic_ui": ["ui-table", "ui-autocomplete", "ui-infinite", "ui-sortable"],
+    "observation": ["ui-iframe", "ui-shadow", "ui-toast", "mm-chart"]
+  },
+  "release_tasks": ["pb-current-01", "co-typing-01", "tp-handoff-02"]
+}

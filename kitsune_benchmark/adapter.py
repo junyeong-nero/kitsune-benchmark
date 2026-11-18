@@ -26,6 +26,8 @@ from .resources import ResourceCollector, ResourceRoot
 from .specs import Server, Task, positive_int, text, toml_value
 
 PINNED_CODEX_VERSION = "0.163.0"
+CODEX_PINS = (PINNED_CODEX_VERSION, "0.170.0")
+CLAUDE_PINS = (claude_harness.PINNED_CLAUDE_VERSION, "2.1.327")
 DISABLED_FEATURES = (
     "shell_tool", "apps", "browser_use", "browser_use_external", "in_app_browser",
     "image_generation", "view_image", "multi_agent", "multi_agent_v2", "memories",
@@ -107,12 +109,12 @@ def harness_pins(spec: dict, harness: str) -> tuple[str, str]:
     """Return (model, effort) for a harness after checking its CLI version pin."""
     if harness in CLAUDE_HARNESSES:
         pins = spec.get("claude_code")
-        if not isinstance(pins, dict) or pins.get("version") != claude_harness.PINNED_CLAUDE_VERSION:
-            raise ValueError("Experiment lacks a Claude Code pin matching " + claude_harness.PINNED_CLAUDE_VERSION)
+        if not isinstance(pins, dict) or pins.get("version") not in CLAUDE_PINS:
+            raise ValueError("Experiment lacks a supported Claude Code pin.")
         return text(pins.get("model"), "model"), pins.get("effort", "medium")
     if harness != "codex":
         raise ValueError("Unknown harness.")
-    if spec["codex_version"] != PINNED_CODEX_VERSION or spec["reasoning_effort"] != "medium":
+    if spec["codex_version"] not in CODEX_PINS or spec["reasoning_effort"] != "medium":
         raise ValueError("Experiment differs from adapter pins.")
     return spec["model"], spec["reasoning_effort"]
 
@@ -168,21 +170,24 @@ def claude_budget(spec: dict, harness: str) -> float | None:
     return per_run_cap(spec)
 
 
-def claude_preflight(path: str, env: dict[str, str], *, api: bool = False, model: str | None = None) -> dict:
+def claude_preflight(path: str, env: dict[str, str], *, api: bool = False, model: str | None = None,
+                     pin: str = claude_harness.PINNED_CLAUDE_VERSION) -> dict:
     report = claude_harness.diagnose(path, env=env, api=api, model=model)
     if not report["prerequisites_ok"]:
         failures = ", ".join(c["name"] for c in report["checks"] if not c["passed"])
         raise ValueError("Claude Code preflight failed: " + failures)
     version = next(c["detail"] for c in report["checks"] if c["name"] == "claude_version")
-    if version != "claude-code " + claude_harness.PINNED_CLAUDE_VERSION:
-        raise ValueError("Claude Code version differs from the validated pin " + claude_harness.PINNED_CLAUDE_VERSION)
+    if pin not in CLAUDE_PINS or version != "claude-code " + pin:
+        raise ValueError("Claude Code version differs from the experiment pin " + pin)
     return report
 
 
-def harness_preflight(harness: str, path: str, env: dict[str, str], model: str | None = None) -> dict:
+def harness_preflight(harness: str, path: str, env: dict[str, str], model: str | None = None, *,
+                      cli_version: str | None = None) -> dict:
     if harness in CLAUDE_HARNESSES:
-        return claude_preflight(path, env, api=harness in API_HARNESSES, model=model)
-    return preflight(path, env)
+        return claude_preflight(path, env, api=harness in API_HARNESSES, model=model,
+                               pin=cli_version or claude_harness.PINNED_CLAUDE_VERSION)
+    return preflight(path, env, pin=cli_version or PINNED_CODEX_VERSION)
 
 
 def plan(server: Server, task: Task, model: str, executable: str = "codex", timeout: int = 300) -> dict:
@@ -201,14 +206,14 @@ def plan(server: Server, task: Task, model: str, executable: str = "codex", time
     }
 
 
-def preflight(path: str, env: dict[str, str]) -> dict:
+def preflight(path: str, env: dict[str, str], *, pin: str = PINNED_CODEX_VERSION) -> dict:
     report = diagnose(path, env=env)
     if not report["prerequisites_ok"]:
         failures = ", ".join(c["name"] for c in report["checks"] if not c["passed"])
         raise ValueError("Codex preflight failed: " + failures)
     version = next(c["detail"] for c in report["checks"] if c["name"] == "codex_version")
-    if version != "codex-cli " + PINNED_CODEX_VERSION:
-        raise ValueError("Codex version differs from the validated pin " + PINNED_CODEX_VERSION)
+    if pin not in CODEX_PINS or version != "codex-cli " + pin:
+        raise ValueError("Codex version differs from the experiment pin " + pin)
     result = subprocess.run([path, "exec", "--help"], env=env,
                             capture_output=True, text=True, timeout=15, check=False)
     if result.returncode or any(flag not in result.stdout for flag in REQUIRED_EXEC_FLAGS):
@@ -321,7 +326,8 @@ def model_request_observed(audit: dict) -> bool:
 def run(
     server: Server, task: Task, model: str, *, executable: str = "codex",
     codex_home: str | None = None, timeout: int = 300, output_root: str = "runs",
-    confirm_isolated_browser: bool = False,
+    confirm_isolated_browser: bool = False, confirm_vendor_context: bool = False,
+    cli_version: str | None = None,
     resource_roots: tuple[ResourceRoot, ...] = (),
     resource_observer: ResourceCollector | None = None,
     viewport: dict | None = None,
@@ -335,13 +341,16 @@ def run(
         raise ValueError("claude-api runs require a per-run dollar cap.")
     if os.name != "posix":
         raise ValueError("Process-group cleanup is currently supported only on POSIX.")
-    if not confirm_isolated_browser:
+    if confirm_vendor_context and (server.id not in {"aside", "ego"} or confirm_isolated_browser):
+        raise ValueError("Vendor context confirmation applies only to non-isolated vendor apps.")
+    if not (confirm_isolated_browser or confirm_vendor_context):
         raise ValueError("Use --confirm-isolated-browser only after setting up a dedicated test browser/profile.")
     positive_int(timeout, "timeout")
     text(model, "model")
     path = resolve(executable, harness)
     env = harness_environment(harness, path, server, codex_home)
-    preflight_report = harness_preflight(harness, path, env, model)
+    cli_version = cli_version or (claude_harness.PINNED_CLAUDE_VERSION if harness in CLAUDE_HARNESSES else PINNED_CODEX_VERSION)
+    preflight_report = harness_preflight(harness, path, env, model, cli_version=cli_version)
     root = Path(output_root).expanduser().absolute()
     root.mkdir(parents=True, exist_ok=True, mode=0o700)
     run_dir = root / (datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ-") + uuid.uuid4().hex[:12])
@@ -351,7 +360,7 @@ def run(
         api = harness in API_HARNESSES
         argv = claude_harness.command(path, server, model, COMMON_INSTRUCTIONS, effort,
                                       api=api, max_budget_usd=max_budget_usd, bare=harness == "claude-api")
-        versions = {"harness": "claude_code", "claude_code_version": claude_harness.PINNED_CLAUDE_VERSION,
+        versions = {"harness": "claude_code", "claude_code_version": cli_version,
                     "auth_policy": "anthropic_api_key_from_env_file" if api else "claude_ai_subscription_only",
                     "mcp_startup": {"connection_nonblocking": False,
                                     "timeout_ms": int(env["MCP_TIMEOUT"]),
@@ -362,7 +371,7 @@ def run(
             versions["anthropic_workspace_id"] = header.split(":", 1)[1].strip() if header else None
     else:
         argv = command(path, server, model, final_path)
-        versions = {"harness": "codex", "codex_version": PINNED_CODEX_VERSION,
+        versions = {"harness": "codex", "codex_version": cli_version,
                     "auth_policy": "chatgpt_subscription_only"}
     manifest = {
         "schema_version": 1, **versions,
@@ -377,7 +386,8 @@ def run(
         "prompt_sha256": hashlib.sha256(task.prompt.encode()).hexdigest(),
         "timeout_sec": timeout,
         "argv": argv, "preflight": preflight_report,
-        "isolated_browser_confirmed_by_operator": True,
+        "isolated_browser_confirmed_by_operator": confirm_isolated_browser,
+        **({"dedicated_vendor_context": True} if confirm_vendor_context else {}),
         "environment_reset": "not_implemented", "external_evaluation": "not_implemented",
         "token_budget": "not_enforced",
         "api_cost": ({"max_budget_usd_per_run": max_budget_usd, "source": "Claude Code total_cost_usd estimate"}

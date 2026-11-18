@@ -1,14 +1,13 @@
 # Kitsune Benchmark
 
-Does an AI agent do everyday browser work as well with **Kitsune MCP** as with **Playwright MCP**, and does it leave
-the user's browser alone while it works? This repository runs both on the same tasks, with the same model and tool
-allowlist. The results are checked from outside the agent: the apps' saved state, the tabs left behind and the user's
-view, along with tokens, time and local CPU/RAM.
+The [four-surface benchmark](docs/four-surface.md) compares **EgoLite, Aside, Playwright MCP and Kitsune** on 20 local browser tasks, separately for Codex and Claude Code. A 32-start pilot checks the instrumentation before the 320-start main cohort. A separate release check measures user-tab custody and coexistence. Grades come from saved application state and browser evidence, not an agent's final answer.
+
+Print the matrix without starting a browser or model: `uv run --locked python scripts/run-four-surface.py plan --scope main`. The studies below retain their original protocols and results.
 
 **Docs:** [Overview](docs/README.md) · [Running guide](docs/running.md) · [Results](docs/results/README.md) ·
 [Results by Kitsune version](docs/results/kitsune-versions.md)
 
-## Latest result: Kitsune v0.7.2
+## Historical result: Kitsune v0.7.2
 
 [![Kitsune v0.7.2 vs Playwright MCP 0.0.83, lite plan: kept the user's tab in front in 28 of 28 tasks vs 2 of 28; list-price cost on tasks both solved 0.97× personal, 0.56× crowded, 0.87× isolated; task success 96 of 98 vs 98 of 98](docs/assets/2026-11-04-v0.7.2-chart.png)](docs/results/2026-11-04-opus-subscription-v0.7.2.md)
 

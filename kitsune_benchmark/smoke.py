@@ -222,8 +222,10 @@ def run_pair(*, execute: bool = False, kitsune_project: str | None = None,
     spec = experiment() if experiment_spec is None else experiment_spec
     exhibition = set(targets) & set(EXHIBITION_TARGETS)
     if exhibition:
-        if artifact_scope != "external" or spec.get("selected_task", {}).get("kind") != "miniwob":
-            raise ValueError("Exhibition targets support only external MiniWoB tasks.")
+        four_surface = (artifact_scope == "four-surface-v1" and spec.get("id") == artifact_scope
+                        and prepare_server is not None and evaluate is not None and len(targets) == 1)
+        if not four_surface and (artifact_scope != "external" or spec.get("selected_task", {}).get("kind") != "miniwob"):
+            raise ValueError("Exhibition targets require external MiniWoB or the four-surface fixture relay.")
         from .miniwob import EXHIBITION_TOOLS
         if any((enabled_tools or {}).get(target) != EXHIBITION_TOOLS[target] for target in exhibition):
             raise ValueError("Exhibition targets require their code-tool allowlist.")
@@ -238,7 +240,8 @@ def run_pair(*, execute: bool = False, kitsune_project: str | None = None,
     timeout = spec["timeout_sec"] if timeout is None else positive_int(timeout, "timeout")
     path = resolve(executable, harness)
     env = harness_environment(harness, path)
-    harness_preflight(harness, path, env, model)
+    cli_version = spec["codex_version"] if harness == "codex" else spec["claude_code"]["version"]
+    harness_preflight(harness, path, env, model, cli_version=cli_version)
     if harness in API_HARNESSES:
         # The key is re-read per run from .env; keep it out of the shared pair environment.
         env.pop("ANTHROPIC_API_KEY", None)
@@ -303,7 +306,8 @@ def run_pair(*, execute: bool = False, kitsune_project: str | None = None,
         **({"kitsune_env": dict(sorted(kitsune_env.items()))} if kitsune_env else {}),
         **({"kitsune_firefox_args": list(kitsune_firefox_args)} if kitsune_firefox_args else {}),
         **({"kitsune_firefox_prefs": dict(kitsune_firefox_prefs)} if kitsune_firefox_prefs else {}),
-        "enabled_tools": enabled_tools, "browser_binary": str(firefox), "headless": True,
+        "enabled_tools": enabled_tools, "browser_binary": str(firefox) if not exhibition else None,
+        "headless": True if not exhibition else None,
         "kitsune_source": source_revision(project), "benchmark_source": benchmark_source(),
         "extension_patch": patch_info,
         "http_port": http_port, "ws_port": ws_port,
@@ -366,7 +370,8 @@ def run_pair(*, execute: bool = False, kitsune_project: str | None = None,
                 # Session relays (prepare_server) set up lazily and record it in their evidence file.
                 evidence = relay_evidence_path(server) if prepare_server is not None else None
                 result = run(server, task, model, executable=path, timeout=timeout,
-                             output_root=str(pair_dir / "runs"), confirm_isolated_browser=True,
+                             output_root=str(pair_dir / "runs"), confirm_isolated_browser=target not in EXHIBITION_TARGETS,
+                             confirm_vendor_context=target in EXHIBITION_TARGETS, cli_version=cli_version,
                              resource_roots=external, resource_observer=resources, viewport=viewports[target],
                              harness=harness, effort=effort, max_budget_usd=max_budget_usd,
                              session_setup=partial(session_setup, evidence) if evidence is not None else None)
