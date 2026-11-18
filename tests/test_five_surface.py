@@ -31,6 +31,10 @@ class FiveSurfacePlanTest(unittest.TestCase):
         # A/B order alternates per condition within each model.
         self.assertEqual([r["arm"] for r in rows[:2]], ["codex-kitsune-base", "codex-kitsune-repl"])
         self.assertEqual([r["arm"] for r in rows[4:6]], ["codex-kitsune-repl", "codex-kitsune-base"])
+        tabs = five_surface.plan("tabs-ab")
+        self.assertEqual(len(tabs["attempts"]), 92)
+        self.assertEqual({r["kitsune_sha"] for r in tabs["attempts"] if r["arm"].endswith("-tab")},
+                         {tabs["candidate_sha"]})
 
     def test_chrome_audit_prefix(self):
         events = [

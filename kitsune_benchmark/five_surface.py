@@ -75,8 +75,8 @@ def plan(scope: str = "main") -> dict:
             row["seq"] = seq
         return {"benchmark": BENCHMARK + "-kitsune-owned", "arms": [a for a in arms() if a["surface"] == "kitsune-zen"],
                 "conditions": 7, "attempts": rows}
-    if scope == "repl-ab":
-        return repl_ab_plan()
+    if scope in AB_CANDIDATES:
+        return ab_plan(scope)
     if scope != "main":
         raise ValueError("Unknown scope")
     rows = []
@@ -96,14 +96,20 @@ def plan(scope: str = "main") -> dict:
             "attempts": rows}
 
 
-# Kitsune persistent Python variables A/B: same tasks, both arms with agent-owned personal tabs.
-REPL_BASELINE = KITSUNE_SHA
-REPL_CANDIDATE = "5a9c5fca24d9d9dce638791d41fe593dad4542a4"  # feat/persistent-python-state
+# Kitsune A/Bs against main 14d9ceb: same tasks, both arms with agent-owned personal tabs.
+# scope -> (benchmark, arm suffix, base label, candidate label, candidate sha, default checkout)
+AB_CANDIDATES = {
+    "repl-ab": ("kitsune-repl-state-ab-v1", "repl", "Kitsune (variables reset)", "Kitsune (variables persist)",
+                "5a9c5fca24d9d9dce638791d41fe593dad4542a4", "kitsune-repl-state"),  # feat/persistent-python-state
+    "tabs-ab": ("kitsune-default-tab-ab-v1", "tab", "Kitsune (tab None before select)",
+                "Kitsune (tab defaults to viewed)",
+                "8d86930315b305d8f96d1d74c2ca9d5dcce57c3c", "kitsune-default-tab"),  # feat/python-default-tab
+}
 
 
-def repl_ab_plan() -> dict:
-    variants = (("base", "Kitsune (variables reset)", REPL_BASELINE),
-                ("repl", "Kitsune (variables persist)", REPL_CANDIDATE))
+def ab_plan(scope: str) -> dict:
+    benchmark, suffix, base_label, label, sha, _ = AB_CANDIDATES[scope]
+    variants = (("base", base_label, KITSUNE_SHA), (suffix, label, sha))
     ab_arms = [{"id": f"{harness}-kitsune-{name}", "harness": harness, "surface": "kitsune-zen", "label": label,
                 "model": MODELS[harness], "effort": "medium", "kitsune_sha": sha}
                for harness in HARNESS_SURFACES for name, label, sha in variants]
@@ -115,7 +121,7 @@ def repl_ab_plan() -> dict:
                 rows.append({"seq": len(rows) + 1, "arm": arm["id"], "harness": harness, "surface": "kitsune-zen",
                              "model": arm["model"], "effort": "medium", "variant": 0, "repeat": 0,
                              "kitsune_seeding": "agent", "kitsune_sha": arm["kitsune_sha"], **condition})
-    return {"benchmark": "kitsune-repl-state-ab-v1", "arms": ab_arms, "conditions": 23, "attempts": rows}
+    return {"benchmark": benchmark, "arms": ab_arms, "conditions": 23, "attempts": rows, "candidate_sha": sha}
 
 
 def relay_prompt(task, config):

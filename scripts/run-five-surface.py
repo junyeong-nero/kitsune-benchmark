@@ -24,7 +24,7 @@ sys.path.insert(0, str(ROOT))
 from kitsune_benchmark import adapter
 from kitsune_benchmark.agent_combinations import KITSUNE_SHA
 from kitsune_benchmark.agent_combinations_runtime import runtime_pins
-from kitsune_benchmark.five_surface import BENCHMARK, REPL_CANDIDATE, SURFACES, plan, run_attempt
+from kitsune_benchmark.five_surface import AB_CANDIDATES, BENCHMARK, SURFACES, plan, run_attempt
 from kitsune_benchmark.smoke import source_revision
 
 OPERATIONAL = {"setup_failed", "harness_error", "runner_error", "interrupted", "permission_blocked"}
@@ -55,14 +55,16 @@ def ensure_manifest(out: Path, project: Path, scope: str = "main", candidate: Pa
         return manifest
     if source_revision(project) != {"revision": KITSUNE_SHA, "dirty": False}:
         raise ValueError(f"Kitsune checkout must be clean at {KITSUNE_SHA}")
-    if scope == "repl-ab" and (candidate is None
-                                or source_revision(candidate) != {"revision": REPL_CANDIDATE, "dirty": False}):
-        raise ValueError(f"--candidate-project must be a clean checkout at {REPL_CANDIDATE}")
+    if scope in AB_CANDIDATES:
+        sha = AB_CANDIDATES[scope][4]
+        candidate = candidate or ROOT.parent / AB_CANDIDATES[scope][5]
+        if source_revision(candidate) != {"revision": sha, "dirty": False}:
+            raise ValueError(f"--candidate-project must be a clean checkout at {sha}")
     out.mkdir(mode=0o700, parents=True, exist_ok=True)
     manifest = {"benchmark": BENCHMARK, "created_at": datetime.now(timezone.utc).isoformat(),
                 "benchmark_revision": source_revision(ROOT), "kitsune_project": str(project.resolve()),
                 "kitsune_sha": KITSUNE_SHA, "pins": runtime_pins(), "plan": treatment, "api_budget_usd": 0,
-                "scope": scope, **({"candidate_project": str(candidate.resolve())} if scope == "repl-ab" else {})}
+                "scope": scope, **({"candidate_project": str(candidate.resolve())} if scope in AB_CANDIDATES else {})}
     adapter.write_json(path, manifest)
     return manifest
 
@@ -91,7 +93,9 @@ def do_run(out: Path, project: Path, limit: int | None, arms: set[str] | None, s
         started += 1
         print(f"[{row['seq']}/{total}] {row['arm']} {row['unit']}", flush=True)
         try:
-            project = manifest["candidate_project" if row.get("kitsune_sha") == REPL_CANDIDATE else "kitsune_project"]
+            candidate_sha = manifest["plan"].get("candidate_sha")
+            project = manifest["candidate_project" if candidate_sha and row.get("kitsune_sha") == candidate_sha
+                               else "kitsune_project"]
             result = run_attempt(row, folder / "work", Path(project))
         except Exception as error:  # Record and decide below; never retry the cell.
             (folder / "error.txt").write_text(traceback.format_exc())
@@ -166,11 +170,11 @@ def main() -> int:
     parser.add_argument("--kitsune-project", type=Path, default=ROOT.parent / "kitsune")
     parser.add_argument("--limit", type=int, help="maximum new attempts in this invocation")
     parser.add_argument("--arms", help="comma-separated arm ids (default: all nine)")
-    parser.add_argument("--scope", choices=("main", "kitsune-owned", "repl-ab"), default="main",
+    parser.add_argument("--scope", choices=("main", "kitsune-owned", *AB_CANDIDATES), default="main",
                         help="kitsune-owned: Kitsune personal re-run with agent-owned starting tabs; "
-                             "repl-ab: Kitsune variables reset vs persist A/B")
-    parser.add_argument("--candidate-project", type=Path, default=ROOT.parent / "kitsune-repl-state",
-                        help="repl-ab: clean Kitsune checkout of the candidate revision")
+                             "repl-ab / tabs-ab: Kitsune A/Bs against main")
+    parser.add_argument("--candidate-project", type=Path,
+                        help="A/B scopes: clean Kitsune checkout of the candidate (default: sibling worktree)")
     args = parser.parse_args()
     if args.action == "plan":
         print(json.dumps(plan(args.scope), indent=2, ensure_ascii=False))
