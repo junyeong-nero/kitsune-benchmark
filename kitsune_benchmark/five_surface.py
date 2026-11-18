@@ -108,7 +108,13 @@ AB_CANDIDATES = {
     "diff-ab": ("kitsune-snapshot-diff-ab-v1", "diff", "Kitsune (full snapshots)", "Kitsune (snapshot diffs)",
                 "132a3d4136f943e2720a95caa3217ad5f24bc146", "kitsune-snapshot-diff",  # feat/python-snapshot-diff
                 "26d91a1e8203fd964365101cad68dd41fb99f1f5"),
+    # Pre-release check of #552 where it can hurt: the starting tabs are the user's (read-only for writes).
+    "user-tab-ab": ("kitsune-552-user-tabs-v1", "552", "Kitsune 14d9ceb (before #552)", "Kitsune 26d91a1 (main, #552)",
+                    "26d91a1e8203fd964365101cad68dd41fb99f1f5", "kitsune",
+                    "14d9ceb29de7611d41d0564f3ed6c343180c276e"),
 }
+# Non-default A/B options: tracks, personal seeding and repeats (default: all 23, agent-owned, one repeat).
+AB_OPTIONS = {"user-tab-ab": {"track": "personal", "seeding": "user", "repeats": 2}}
 
 
 def ab_plan(scope: str) -> dict:
@@ -118,15 +124,19 @@ def ab_plan(scope: str) -> dict:
     ab_arms = [{"id": f"{harness}-kitsune-{name}", "harness": harness, "surface": "kitsune-zen", "label": label,
                 "model": MODELS[harness], "effort": "medium", "kitsune_sha": sha}
                for harness in HARNESS_SURFACES for name, label, sha in variants]
+    options = AB_OPTIONS.get(scope, {})
+    selected = [c for c in conditions("expanded") if options.get("track") in (None, c["track"])]
     rows = []
-    for index, condition in enumerate(conditions("expanded")):
-        for harness in HARNESS_SURFACES:
-            pair = [a for a in ab_arms if a["harness"] == harness]
-            for arm in (pair if index % 2 == 0 else pair[::-1]):  # alternate A/B order
-                rows.append({"seq": len(rows) + 1, "arm": arm["id"], "harness": harness, "surface": "kitsune-zen",
-                             "model": arm["model"], "effort": "medium", "variant": 0, "repeat": 0,
-                             "kitsune_seeding": "agent", "kitsune_sha": arm["kitsune_sha"], **condition})
-    return {"benchmark": benchmark, "arms": ab_arms, "conditions": 23, "attempts": rows, "candidate_sha": sha,
+    for repeat in range(options.get("repeats", 1)):
+        for index, condition in enumerate(selected):
+            for harness in HARNESS_SURFACES:
+                pair = [a for a in ab_arms if a["harness"] == harness]
+                for arm in (pair if (index + repeat) % 2 == 0 else pair[::-1]):  # alternate A/B order
+                    rows.append({"seq": len(rows) + 1, "arm": arm["id"], "harness": harness, "surface": "kitsune-zen",
+                                 "model": arm["model"], "effort": "medium", "variant": 0, "repeat": repeat,
+                                 "kitsune_seeding": options.get("seeding", "agent"),
+                                 "kitsune_sha": arm["kitsune_sha"], **condition})
+    return {"benchmark": benchmark, "arms": ab_arms, "conditions": len(selected), "attempts": rows, "candidate_sha": sha,
             **({"base_sha": base_sha} if base else {})}
 
 
