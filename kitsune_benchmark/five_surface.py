@@ -97,19 +97,24 @@ def plan(scope: str = "main") -> dict:
 
 
 # Kitsune A/Bs against main 14d9ceb: same tasks, both arms with agent-owned personal tabs.
-# scope -> (benchmark, arm suffix, base label, candidate label, candidate sha, default checkout)
+# scope -> (benchmark, arm suffix, base label, candidate label, candidate sha, default checkout[, base sha])
 AB_CANDIDATES = {
     "repl-ab": ("kitsune-repl-state-ab-v1", "repl", "Kitsune (variables reset)", "Kitsune (variables persist)",
                 "5a9c5fca24d9d9dce638791d41fe593dad4542a4", "kitsune-repl-state"),  # feat/persistent-python-state
     "tabs-ab": ("kitsune-default-tab-ab-v1", "tab", "Kitsune (tab None before select)",
                 "Kitsune (tab defaults to viewed)",
                 "8d86930315b305d8f96d1d74c2ca9d5dcce57c3c", "kitsune-default-tab"),  # feat/python-default-tab
+    # Against main after merging #552 (the default script tab).
+    "diff-ab": ("kitsune-snapshot-diff-ab-v1", "diff", "Kitsune (full snapshots)", "Kitsune (snapshot diffs)",
+                "132a3d4136f943e2720a95caa3217ad5f24bc146", "kitsune-snapshot-diff",  # feat/python-snapshot-diff
+                "26d91a1e8203fd964365101cad68dd41fb99f1f5"),
 }
 
 
 def ab_plan(scope: str) -> dict:
-    benchmark, suffix, base_label, label, sha, _ = AB_CANDIDATES[scope]
-    variants = (("base", base_label, KITSUNE_SHA), (suffix, label, sha))
+    benchmark, suffix, base_label, label, sha, _, *base = AB_CANDIDATES[scope]
+    base_sha = base[0] if base else KITSUNE_SHA
+    variants = (("base", base_label, base_sha), (suffix, label, sha))
     ab_arms = [{"id": f"{harness}-kitsune-{name}", "harness": harness, "surface": "kitsune-zen", "label": label,
                 "model": MODELS[harness], "effort": "medium", "kitsune_sha": sha}
                for harness in HARNESS_SURFACES for name, label, sha in variants]
@@ -121,7 +126,8 @@ def ab_plan(scope: str) -> dict:
                 rows.append({"seq": len(rows) + 1, "arm": arm["id"], "harness": harness, "surface": "kitsune-zen",
                              "model": arm["model"], "effort": "medium", "variant": 0, "repeat": 0,
                              "kitsune_seeding": "agent", "kitsune_sha": arm["kitsune_sha"], **condition})
-    return {"benchmark": benchmark, "arms": ab_arms, "conditions": 23, "attempts": rows, "candidate_sha": sha}
+    return {"benchmark": benchmark, "arms": ab_arms, "conditions": 23, "attempts": rows, "candidate_sha": sha,
+            **({"base_sha": base_sha} if base else {})}
 
 
 def relay_prompt(task, config):

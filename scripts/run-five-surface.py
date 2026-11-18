@@ -53,8 +53,9 @@ def ensure_manifest(out: Path, project: Path, scope: str = "main", candidate: Pa
         if manifest["plan"] != json.loads(json.dumps(treatment)):
             raise ValueError("Matrix changed since this output directory was created")
         return manifest
-    if source_revision(project) != {"revision": KITSUNE_SHA, "dirty": False}:
-        raise ValueError(f"Kitsune checkout must be clean at {KITSUNE_SHA}")
+    base_sha = treatment.get("base_sha", KITSUNE_SHA)
+    if source_revision(project) != {"revision": base_sha, "dirty": False}:
+        raise ValueError(f"Kitsune checkout must be clean at {base_sha}")
     if scope in AB_CANDIDATES:
         sha = AB_CANDIDATES[scope][4]
         candidate = candidate or ROOT.parent / AB_CANDIDATES[scope][5]
@@ -63,7 +64,7 @@ def ensure_manifest(out: Path, project: Path, scope: str = "main", candidate: Pa
     out.mkdir(mode=0o700, parents=True, exist_ok=True)
     manifest = {"benchmark": BENCHMARK, "created_at": datetime.now(timezone.utc).isoformat(),
                 "benchmark_revision": source_revision(ROOT), "kitsune_project": str(project.resolve()),
-                "kitsune_sha": KITSUNE_SHA, "pins": runtime_pins(), "plan": treatment, "api_budget_usd": 0,
+                "kitsune_sha": base_sha, "pins": runtime_pins(), "plan": treatment, "api_budget_usd": 0,
                 "scope": scope, **({"candidate_project": str(candidate.resolve())} if scope in AB_CANDIDATES else {})}
     adapter.write_json(path, manifest)
     return manifest
