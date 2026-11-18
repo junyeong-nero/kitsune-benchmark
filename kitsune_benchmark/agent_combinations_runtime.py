@@ -112,10 +112,10 @@ def chrome_runtime(folder: Path, surface: str):
 
 
 @contextmanager
-def zen_runtime(folder: Path, project: Path, *, bidi_port: int):
+def zen_runtime(folder: Path, project: Path, *, bidi_port: int, sha: str = KITSUNE_SHA):
     """Yield a raw Kitsune stdio command and its explicitly isolated environment."""
     folder, project = folder.resolve(), project.resolve()
-    if source_revision(project) != {"revision": KITSUNE_SHA, "dirty": False}:
+    if source_revision(project) != {"revision": sha, "dirty": False}:
         raise ValueError("Kitsune must be clean at the pilot's pinned source")
     if not ZEN.is_file():
         raise ValueError("The pilot requires Zen, not a substituted Firefox binary")
@@ -155,7 +155,7 @@ def zen_runtime(folder: Path, project: Path, *, bidi_port: int):
                 "--args=--remote-allow-system-access", "--pref=remote.prefs.recommended=false"]
             browser = spawn(argv, "zen")
             write_json(folder / "runtime.json", {"model_invoked": False, "browser": str(ZEN),
-                "kitsune_source": KITSUNE_SHA, "profile": str(profile), "argv": argv,
+                "kitsune_source": sha, "profile": str(profile), "argv": argv,
                 "extension_copy": patched, "bidi_port": bidi_port,
                 "processes": [{"role": name, "pid": p.pid} for name, p in processes]})
             await_bridge(http, env["KITSUNE_TOKEN"], browser, extension=True)

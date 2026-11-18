@@ -22,6 +22,16 @@ class FiveSurfacePlanTest(unittest.TestCase):
         self.assertEqual({r["model"] for r in rows if r["harness"] == "codex"}, {"gpt-6.1-sol"})
         self.assertEqual({r["model"] for r in rows if r["harness"] == "claude"}, {"claude-opus-5-5"})
 
+    def test_repl_ab_matrix(self):
+        rows = five_surface.plan("repl-ab")["attempts"]
+        self.assertEqual(len(rows), 92)
+        for arm in ("codex-kitsune-base", "codex-kitsune-repl", "claude-kitsune-base", "claude-kitsune-repl"):
+            self.assertEqual(sum(r["arm"] == arm for r in rows), 23)
+        self.assertEqual({r["kitsune_seeding"] for r in rows}, {"agent"})
+        # A/B order alternates per condition within each model.
+        self.assertEqual([r["arm"] for r in rows[:2]], ["codex-kitsune-base", "codex-kitsune-repl"])
+        self.assertEqual([r["arm"] for r in rows[4:6]], ["codex-kitsune-repl", "codex-kitsune-base"])
+
     def test_chrome_audit_prefix(self):
         events = [
             {"type": "system", "subtype": "init", "apiKeySource": "none",

@@ -20,7 +20,7 @@ from .specs import Server
 
 
 @contextmanager
-def prepared_fixture(condition, surface, folder, project, kitsune_seeding="user"):
+def prepared_fixture(condition, surface, folder, project, kitsune_seeding="user", kitsune_sha=None):
     """Yield a fresh fixture and a relay configuration. Setup remains no-inference.
 
     kitsune_seeding "agent": personal starting tabs are opened as Kitsune's own (gallery's
@@ -48,7 +48,8 @@ def prepared_fixture(condition, surface, folder, project, kitsune_seeding="user"
         @contextmanager
         def runtime():
             if target == "kitsune":
-                with zen_runtime(folder / "runtime", project, bidi_port=port) as (command, env):
+                with zen_runtime(folder / "runtime", project, bidi_port=port,
+                                 **({"sha": kitsune_sha} if kitsune_sha else {})) as (command, env):
                     yield command, env
             elif target in {"aside", "ego"}:
                 command = ([str(Path.home() / ".local/bin/aside"), "mcp"] if target == "aside" else

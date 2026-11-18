@@ -24,7 +24,7 @@ sys.path.insert(0, str(ROOT))
 from kitsune_benchmark import adapter
 from kitsune_benchmark.agent_combinations import KITSUNE_SHA
 from kitsune_benchmark.agent_combinations_runtime import runtime_pins
-from kitsune_benchmark.five_surface import BENCHMARK, SURFACES, plan, run_attempt
+from kitsune_benchmark.five_surface import BENCHMARK, REPL_CANDIDATE, SURFACES, plan, run_attempt
 from kitsune_benchmark.smoke import source_revision
 
 OPERATIONAL = {"setup_failed", "harness_error", "runner_error", "interrupted", "permission_blocked"}
@@ -45,7 +45,7 @@ def usage_limited(row: dict) -> bool:
     return any(word in text for word in ("usage_limit", "rate_limit", "quota", "usage limit"))
 
 
-def ensure_manifest(out: Path, project: Path, scope: str = "main") -> dict:
+def ensure_manifest(out: Path, project: Path, scope: str = "main", candidate: Path | None = None) -> dict:
     treatment = plan(scope)
     path = out / "manifest.json"
     if path.exists():
@@ -55,17 +55,21 @@ def ensure_manifest(out: Path, project: Path, scope: str = "main") -> dict:
         return manifest
     if source_revision(project) != {"revision": KITSUNE_SHA, "dirty": False}:
         raise ValueError(f"Kitsune checkout must be clean at {KITSUNE_SHA}")
+    if scope == "repl-ab" and (candidate is None
+                                or source_revision(candidate) != {"revision": REPL_CANDIDATE, "dirty": False}):
+        raise ValueError(f"--candidate-project must be a clean checkout at {REPL_CANDIDATE}")
     out.mkdir(mode=0o700, parents=True, exist_ok=True)
     manifest = {"benchmark": BENCHMARK, "created_at": datetime.now(timezone.utc).isoformat(),
                 "benchmark_revision": source_revision(ROOT), "kitsune_project": str(project.resolve()),
                 "kitsune_sha": KITSUNE_SHA, "pins": runtime_pins(), "plan": treatment, "api_budget_usd": 0,
-                "scope": scope}
+                "scope": scope, **({"candidate_project": str(candidate.resolve())} if scope == "repl-ab" else {})}
     adapter.write_json(path, manifest)
     return manifest
 
 
-def do_run(out: Path, project: Path, limit: int | None, arms: set[str] | None, scope: str = "main") -> int:
-    manifest = ensure_manifest(out, project, scope)
+def do_run(out: Path, project: Path, limit: int | None, arms: set[str] | None, scope: str = "main",
+           candidate: Path | None = None) -> int:
+    manifest = ensure_manifest(out, project, scope, candidate)
     total = len(manifest["plan"]["attempts"])
     done = {r["seq"] for r in load_rows(out)}
     pending = [r for r in manifest["plan"]["attempts"]
@@ -87,7 +91,8 @@ def do_run(out: Path, project: Path, limit: int | None, arms: set[str] | None, s
         started += 1
         print(f"[{row['seq']}/{total}] {row['arm']} {row['unit']}", flush=True)
         try:
-            result = run_attempt(row, folder / "work", Path(manifest["kitsune_project"]))
+            project = manifest["candidate_project" if row.get("kitsune_sha") == REPL_CANDIDATE else "kitsune_project"]
+            result = run_attempt(row, folder / "work", Path(project))
         except Exception as error:  # Record and decide below; never retry the cell.
             (folder / "error.txt").write_text(traceback.format_exc())
             result = {**row, "execution_status": "runner_error", "scorable": False,
@@ -135,7 +140,7 @@ def summary(out: Path) -> str:
         scorable = [r for r in mine if r.get("scorable")]
         functional = sum(r.get("functional_success") is True for r in scorable)
         success = sum(r.get("success") is True for r in scorable)
-        lines.append(f"| {arm['model']} | {SURFACES[arm['surface']]} | {len(mine)} | {len(scorable)} | "
+        lines.append(f"| {arm['model']} | {arm.get('label') or SURFACES[arm['surface']]} | {len(mine)} | {len(scorable)} | "
                      f"{functional}/{len(scorable)} | {success}/{len(scorable)} | "
                      f"{fmt(median(r.get('input') for r in scorable))} | {fmt(median(r.get('output') for r in scorable))} | "
                      f"{fmt(median(r.get('calls') for r in scorable), 1)} | "
@@ -146,7 +151,7 @@ def summary(out: Path) -> str:
         for track, layout in (("personal", None), ("gallery", "isolated"), ("gallery", "crowded")):
             mine = [r for r in rows if r["arm"] == arm["id"] and r["track"] == track and r.get("layout") == layout]
             cells.append(f"{sum(r.get('functional_success') is True for r in mine)}/{len(mine)}")
-        tracks.append(f"| {arm['model']} | {SURFACES[arm['surface']]} | " + " | ".join(cells) + " |")
+        tracks.append(f"| {arm['model']} | {arm.get('label') or SURFACES[arm['surface']]} | " + " | ".join(cells) + " |")
     statuses = {}
     for r in rows:
         statuses[r["execution_status"]] = statuses.get(r["execution_status"], 0) + 1
@@ -161,8 +166,11 @@ def main() -> int:
     parser.add_argument("--kitsune-project", type=Path, default=ROOT.parent / "kitsune")
     parser.add_argument("--limit", type=int, help="maximum new attempts in this invocation")
     parser.add_argument("--arms", help="comma-separated arm ids (default: all nine)")
-    parser.add_argument("--scope", choices=("main", "kitsune-owned"), default="main",
-                        help="kitsune-owned: Kitsune personal re-run with agent-owned starting tabs")
+    parser.add_argument("--scope", choices=("main", "kitsune-owned", "repl-ab"), default="main",
+                        help="kitsune-owned: Kitsune personal re-run with agent-owned starting tabs; "
+                             "repl-ab: Kitsune variables reset vs persist A/B")
+    parser.add_argument("--candidate-project", type=Path, default=ROOT.parent / "kitsune-repl-state",
+                        help="repl-ab: clean Kitsune checkout of the candidate revision")
     args = parser.parse_args()
     if args.action == "plan":
         print(json.dumps(plan(args.scope), indent=2, ensure_ascii=False))
@@ -175,7 +183,7 @@ def main() -> int:
     arms = set(args.arms.split(",")) if args.arms else None
     if arms and arms - {a["id"] for a in plan()["arms"]}:
         parser.error("Unknown arm id")
-    return do_run(args.out, args.kitsune_project, args.limit, arms, args.scope)
+    return do_run(args.out, args.kitsune_project, args.limit, arms, args.scope, args.candidate_project)
 
 
 if __name__ == "__main__":

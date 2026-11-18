@@ -23,7 +23,7 @@ import time
 from urllib.parse import urlsplit
 
 from . import adapter, claude_harness, gallery, personal
-from .agent_combinations import MODELS
+from .agent_combinations import KITSUNE_SHA, MODELS
 from .agent_combinations_expanded import conditions
 
 BENCHMARK = "five-surface-v1"
@@ -75,6 +75,8 @@ def plan(scope: str = "main") -> dict:
             row["seq"] = seq
         return {"benchmark": BENCHMARK + "-kitsune-owned", "arms": [a for a in arms() if a["surface"] == "kitsune-zen"],
                 "conditions": 7, "attempts": rows}
+    if scope == "repl-ab":
+        return repl_ab_plan()
     if scope != "main":
         raise ValueError("Unknown scope")
     rows = []
@@ -94,6 +96,28 @@ def plan(scope: str = "main") -> dict:
             "attempts": rows}
 
 
+# Kitsune persistent Python variables A/B: same tasks, both arms with agent-owned personal tabs.
+REPL_BASELINE = KITSUNE_SHA
+REPL_CANDIDATE = "5a9c5fca24d9d9dce638791d41fe593dad4542a4"  # feat/persistent-python-state
+
+
+def repl_ab_plan() -> dict:
+    variants = (("base", "Kitsune (variables reset)", REPL_BASELINE),
+                ("repl", "Kitsune (variables persist)", REPL_CANDIDATE))
+    ab_arms = [{"id": f"{harness}-kitsune-{name}", "harness": harness, "surface": "kitsune-zen", "label": label,
+                "model": MODELS[harness], "effort": "medium", "kitsune_sha": sha}
+               for harness in HARNESS_SURFACES for name, label, sha in variants]
+    rows = []
+    for index, condition in enumerate(conditions("expanded")):
+        for harness in HARNESS_SURFACES:
+            pair = [a for a in ab_arms if a["harness"] == harness]
+            for arm in (pair if index % 2 == 0 else pair[::-1]):  # alternate A/B order
+                rows.append({"seq": len(rows) + 1, "arm": arm["id"], "harness": harness, "surface": "kitsune-zen",
+                             "model": arm["model"], "effort": "medium", "variant": 0, "repeat": 0,
+                             "kitsune_seeding": "agent", "kitsune_sha": arm["kitsune_sha"], **condition})
+    return {"benchmark": "kitsune-repl-state-ab-v1", "arms": ab_arms, "conditions": 23, "attempts": rows}
+
+
 def relay_prompt(task, config):
     from dataclasses import replace
     suffix = POLICY
@@ -110,8 +134,8 @@ def run_relay(row: dict, folder: Path, project: Path) -> dict:
     from .agent_combinations_fixture import await_relay_close, prepared_fixture, relay_server
     from .cost_metrics import run_timing
     from .smoke import session_setup
-    with prepared_fixture(row, row["surface"], folder, project, row.get("kitsune_seeding", "user")) \
-            as (fixture, task, config, config_path):
+    with prepared_fixture(row, row["surface"], folder, project, row.get("kitsune_seeding", "user"),
+                          row.get("kitsune_sha")) as (fixture, task, config, config_path):
         target = config["target"]
         server = relay_server(config, config_path, folder)
         result = adapter.run(server, relay_prompt(task, config), row["model"], executable=row["harness"],
