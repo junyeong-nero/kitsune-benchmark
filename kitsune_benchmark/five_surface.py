@@ -112,9 +112,14 @@ AB_CANDIDATES = {
     "user-tab-ab": ("kitsune-552-user-tabs-v1", "552", "Kitsune 14d9ceb (before #552)", "Kitsune 26d91a1 (main, #552)",
                     "26d91a1e8203fd964365101cad68dd41fb99f1f5", "kitsune",
                     "14d9ceb29de7611d41d0564f3ed6c343180c276e"),
+    # The follow-up fix: default only to a viewed tab the client owns.
+    "own-tab-ab": ("kitsune-552-own-tab-v1", "own", "Kitsune 14d9ceb (before #552)",
+                   "Kitsune e9017dd (#552 + own-tab fix)",
+                   "e9017ddfe15f20716761c25a9db716a60b483a18", "kitsune-own-tab",  # fix/552-own-viewed-tab
+                   "14d9ceb29de7611d41d0564f3ed6c343180c276e"),
 }
 # Non-default A/B options: tracks, personal seeding and repeats (default: all 23, agent-owned, one repeat).
-AB_OPTIONS = {"user-tab-ab": {"track": "personal", "seeding": "user", "repeats": 2}}
+AB_OPTIONS = {scope: {"track": "personal", "seeding": "user", "repeats": 2} for scope in ("user-tab-ab", "own-tab-ab")}
 
 
 def ab_plan(scope: str) -> dict:
