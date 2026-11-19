@@ -8,7 +8,21 @@ view, along with tokens, time and local CPU/RAM.
 **Docs:** [Overview](docs/README.md) · [Running guide](docs/running.md) · [Results](docs/results/README.md) ·
 [Results by Kitsune version](docs/results/kitsune-versions.md)
 
-## Latest result: Kitsune v0.7.2
+## Latest result: four-way, 12 tasks (2026-11-19)
+
+[![Four-way benchmark, 12 local tasks, 96 attempts: Kitsune used the fewest tool calls and least input under Claude Code and Codex, and missed one task (a native confirm() dialog) under both](docs/assets/2026-11-19-four-way.svg)](docs/results/2026-11-19-four-way-12-task.md)
+
+Aside, EgoLite, Playwright MCP and Kitsune on 12 original local tasks, under Claude Code (`claude-opus-5-5`) and
+Codex (`gpt-6.1-sol`), graded by what the server received ([report](docs/results/2026-11-19-four-way-12-task.md),
+[suite](four-way/README.md)):
+
+- **Success:** 90/96. Kitsune 11/12 and 10/12; it missed the native `confirm()` task under both agents.
+- **Cost:** Kitsune had the fewest tool calls (3.2 / 2.9 per attempt) and the least input (31k / 66k tokens incl.
+  cache). Playwright MCP made the most calls (7.1 / 5.9).
+- **Problems found:** a blocking dialog in Kitsune, checkbox state missing from EgoLite snapshots, and lost refs
+  between Aside's one-shot REPL calls.
+
+## Kitsune v0.7.2 release
 
 [![Kitsune v0.7.2 vs Playwright MCP 0.0.83, lite plan: kept the user's tab in front in 28 of 28 tasks vs 2 of 28; list-price cost on tasks both solved 0.97× personal, 0.56× crowded, 0.87× isolated; task success 96 of 98 vs 98 of 98](docs/assets/2026-11-04-v0.7.2-chart.png)](docs/results/2026-11-04-opus-subscription-v0.7.2.md)
 

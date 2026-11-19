@@ -54,6 +54,16 @@ class BenchmarkTests(unittest.TestCase):
         self.assertIn('ERR setup', text)
         self.assertEqual(signature('{"error":"timed out","code":"timeout"}'), 'timeout: timed out')
 
+    def test_figure_renders_every_arm(self):
+        import xml.etree.ElementTree as ET
+        from scripts.figure import render
+        cell = {'attempts':12, 'pass':11, 'fail':1, 'error':0, 'mean_input_tokens':50_000, 'mean_tool_calls':4.0}
+        svg = render({f'{h}/{a}': cell for h in ('claude','codex') for a in run.ARMS})
+        ET.fromstring(svg)
+        for name in ('Kitsune', 'Aside', 'EgoLite', 'Playwright MCP', '11/12', '50k', '1 fail'):
+            self.assertIn(name, svg)
+        self.assertNotIn('<svg xmlns', svg[10:])  # icons inlined as groups, not nested documents
+
     def test_existing_profile_routes_and_isolated_default(self):
         from framework.arms import config
         with patch.dict('os.environ', {}, clear=True), patch('framework.arms.binary', side_effect=str), \

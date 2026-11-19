@@ -10,6 +10,7 @@ interface, not only browser speed.
 - `scripts/run.py`: plans and runs attempts, rotates arm order, writes JSONL results and raw transcripts
 - `scripts/analyze.py`: report on success, tool calls, token usage, recurring tool errors and failure causes
 - `scripts/publish.py`: builds the test set and run logs as a Hugging Face dataset and uploads it
+- `scripts/figure.py`: renders the summary SVG from `summary.json`, with icons from `figure-icons/`
 
 Run every command from this directory. Results: [2026-11-19 report](../docs/results/2026-11-19-four-way-12-task.md).
 
@@ -121,6 +122,7 @@ the final message. For CLI arms one tool call is one `./browser` script, which m
 
 ```sh
 python3 scripts/analyze.py runs/v1/*.jsonl --out runs/v1/analysis     # report.md + summary.json
+python3 scripts/figure.py runs/v1/analysis/summary.json ../docs/assets/2026-11-19-four-way.svg
 python3 scripts/publish.py runs/v1/*.jsonl --notes findings.md --repo junyeong-nero/kitsune-browser-bench
 ```
 
