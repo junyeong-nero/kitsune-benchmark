@@ -1,0 +1,14 @@
+[
+  {"id":"dispatch", "skill":"date input plus mixed form controls", "prompt":"Schedule courier pickup for Mira on 2027-04-12, using Express delivery. Leave insurance unchecked.", "expected":{"contact":"Mira","date":"2027-04-12","speed":"Express"}},
+  {"id":"preferences", "skill":"editing existing state, unchecking defaults", "prompt":"Keep exactly email and weekly digest enabled. Save the notification settings.", "expected":{"channels":["digest","email"]}},
+  {"id":"directory", "skill":"dynamic autocomplete, similar names", "prompt":"Use the branch finder to choose York Central, not York North, and confirm the branch.", "expected":{"branch":"YC"}},
+  {"id":"catalog", "skill":"combining table constraints, reserve not buy", "prompt":"Reserve the cheapest in-stock lamp with a two-year warranty. Reserve one unit, without buying it.", "expected":{"item":"Reed","action":"Reserve","quantity":"1"}},
+  {"id":"ticket", "skill":"similar records, collapsed details, carrying values to a form", "prompt":"Look up incident INC-42. In the handoff form, enter its current owner and next checkpoint and save the handoff.", "expected":{"owner":"Nora Li","checkpoint":"16:45"}},
+  {"id":"mail", "skill":"reading a correction, draft vs send", "prompt":"Find the revised pickup code in the Dock thread. Draft a reply to Logistics containing only that code. Do not send it.", "expected":{"recipient":"Logistics","message":"KILO-73","action":"Save draft"}},
+  {"id":"pager", "skill":"client-side pagination, near-duplicate rows", "prompt":"Find Hana Kim's $84.10 order in the paginated order table and request a refund for that order ID.", "expected":{"order":"ORD-1027"}},
+  {"id":"confirm", "skill":"native JavaScript confirm() dialog", "prompt":"Archive project Beta and accept the confirmation dialog. Do not archive any other project.", "expected":{"project":"beta"}},
+  {"id":"lazy", "skill":"waiting for delayed (2.5 s) content", "prompt":"Load the shipments and open a claim for the delayed shipment going to Busan.", "expected":{"tracking":"SHP-482"}},
+  {"id":"shadow", "skill":"controls inside an open shadow root", "prompt":"In the plan picker, choose the Team plan with annual billing, then subscribe.", "expected":{"plan":"team-annual"}},
+  {"id":"frame", "skill":"form inside a same-origin iframe", "prompt":"In the embedded signup widget, create an account for ops@example.test and accept the terms.", "expected":{"email":"ops@example.test","terms":"accepted"}},
+  {"id":"wizard", "skill":"multi-step wizard with hidden steps", "prompt":"Use the booking wizard to book a Twin room for 2 guests with breakfast.", "expected":{"room":"Twin","guests":"2","breakfast":"yes"}}
+]
