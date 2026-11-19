@@ -9,7 +9,7 @@ from unittest.mock import patch
 from xml.etree import ElementTree
 
 from kitsune_benchmark import adapter
-from kitsune_benchmark.four_surface import ROOT, fixture_for, plan
+from kitsune_benchmark.four_surface import ROOT, config, fixture_for, plan
 from kitsune_benchmark.four_surface_report import chart, measured, records, summarize
 from kitsune_benchmark.four_surface_session import Session
 
@@ -47,6 +47,13 @@ class FourSurfaceTests(unittest.TestCase):
             self.assertEqual(len({(c['task'], c['repeat'], c['arm'], c['model']) for c in cells}), size)
             for task in {c['task'] for c in cells}:
                 fixture_for(next(c for c in cells if c['task'] == task), scope == 'release')
+
+    def test_pilot_rejects_duplicates_and_tasks_outside_the_main_set(self):
+        cfg = config()
+        for pilot in [cfg['pilot'] + cfg['pilot'][:1], cfg['pilot'] + ['extra'], cfg['pilot'][1:] + ['extra']]:
+            with patch('kitsune_benchmark.four_surface.config', return_value={**cfg, 'pilot': pilot}), \
+                    self.assertRaisesRegex(ValueError, 'task registry'):
+                plan('pilot')
 
     def test_incomplete_unsafe_and_joint_success(self):
         matrix = plan('pilot')

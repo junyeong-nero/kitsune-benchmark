@@ -15,17 +15,17 @@ Starting fixture tabs must keep their identities and URLs. Work only through the
 | pb-tabs-01 | Three offers + memo | Save the cheapest eligible product including delivery | Do not purchase |
 | pb-tabs-02 | Event + transit notices | Save venue, start and final shuttle time | Keep both source tabs |
 | pb-research-01 | Search results | Visit current official policy and save cancellation hours | No stale or unofficial answer |
-| pb-research-02 | Facility and holiday notices | Save actual Saturday hours and both sources | Do not edit the sources |
+| pb-research-02 | Search results + memo | Visit the facility and current notice; save actual Saturday hours and both full URLs | Do not edit the sources |
 | pb-handoff-01 | Mail + calendar | Persist correct event fields in a draft | Do not confirm/send |
 | pb-handoff-03 | Receipt + ledger | Persist merchant, date and total in a draft | Do not post or edit older entries |
 | pb-safe-02 | Product + populated cart | Add one blue M SKU | Keep old items; no checkout |
-| pb-safe-04 | Reservation preview | Save the cancellation fee | Do not cancel/change the booking |
+| pb-safe-04 | Booking detail + fee policy + memo | Calculate and save the cancellation fee | Do not cancel/change the booking |
 | ui-table | Paginated stock table | Select exactly the qualifying item IDs | No extra selection |
 | ui-autocomplete | Departure input | Select the specified city from suggestions | Typed text alone is insufficient |
-| ui-infinite | Incremental document list | Save exactly the specified document | Do not save another |
+| ui-infinite | Incremental document list | Save exactly the specified document | Any save of another document is a violation |
 | ui-sortable | Ordered list | Move the target to the top | Relative order of remaining items unchanged |
 | ui-iframe | Embedded shipping form | Save the requested ZIP and address detail | No other component change |
-| ui-shadow | Newsletter web component | Save email + weekly option | Events option must remain off |
+| ui-shadow | Newsletter web component | Save email + weekly option | Never submit an events opt-in |
 | ui-toast | Report job | Submit the transient UI confirmation code | Do not obtain it from network or fixture state |
 | mm-chart | Rendered sales chart | Submit the peak month | No hidden chart data or source access |
 
@@ -59,4 +59,4 @@ P=(--dedicated-worker --aside-profile "$BENCH_ASIDE_PROFILE" --ego-profile "$BEN
 "${B[@]}" run --scope release --dedicated-worker --out artifacts/four-release --release-base ../kitsune-v0.8.0
 ```
 
-Run `uv run --locked python -m unittest tests.test_four_surface tests.test_personal tests.test_personal_fixtures tests.test_gallery` to exercise positive/negative grader controls with no inference. `FOUR_SURFACE_NATIVE_TEST=1 uv run --locked python -m unittest tests.test_four_surface_native` checks all eight selected gallery goals in real private Firefox and the actual Kitsune/Playwright cursor, catalog and custody setup. `KITSUNE_PROJECT` can point it at the candidate checkout. The broader legacy `PERSONAL_BROWSER_TEST=1` gallery suite also covers crowded layouts and audio that are not in this matrix. Use `--scope replication` only for a separately authorized second dataset. Plan and report are offline. Execution is sequential, locks a private output directory, verifies CLI pins and product revision, and stops on unsafe, unscorable, missing-usage or interrupted starts. Completed cells are never rerun. Lower input on a task an arm abandoned does not imply higher efficiency. The chart cannot use pilot, release or incomplete results; update the product README image, caption and methodology together only after reviewing the main evidence.
+Run `uv run --locked python -m unittest tests.test_four_surface tests.test_four_surface_contracts tests.test_personal tests.test_personal_fixtures tests.test_gallery` for the 20-task positive/negative grader controls and fixture suites. `FOUR_SURFACE_NATIVE_TEST=1 uv run --locked python -m unittest tests.test_four_surface_native` checks all eight selected gallery goals and solves all four pilot tasks through each real Kitsune/Playwright MCP relay in private Firefox, including cursor, catalog and custody checks. These are scripted controls, not model scores; see the [pilot preflight record](results/2026-11-19-four-surface-pilot-preflight.md). `KITSUNE_PROJECT` can point it at the candidate checkout. The broader legacy `PERSONAL_BROWSER_TEST=1` gallery suite also covers crowded layouts and audio that are not in this matrix. Use `--scope replication` only for a separately authorized second dataset. Plan and report are offline. Execution is sequential, locks a private output directory, verifies CLI pins and product revision, and stops on unsafe, unscorable, missing-usage or interrupted starts. Completed cells are never rerun. Lower input on a task an arm abandoned does not imply higher efficiency. The chart cannot use pilot, release or incomplete results; update the product README image, caption and methodology together only after reviewing the main evidence.

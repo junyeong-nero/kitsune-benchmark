@@ -560,10 +560,10 @@ class PersonalServer:
         self.thread.start()
         return self
 
-    def begin(self, target: str) -> Task:
+    def begin(self, target: str, *, trial_type=PersonalTrial, result_instruction: str | None = None) -> Task:
         token = secrets.token_hex(16)
         with self.lock:
-            trial = PersonalTrial(self.task, self.variant, token, self.origin + "/t/" + token)
+            trial = trial_type(self.task, self.variant, token, self.origin + "/t/" + token)
             self.trials[token] = trial
             self.by_target[target] = token
         answer = ("결과는 브라우저 탭 상태로 채점합니다. " if trial.impl is not None and trial.impl.answer_in_tabs
@@ -573,7 +573,7 @@ class PersonalServer:
             "모든 시작 탭의 주소를 유지하고 닫지 마세요. 추가 자료는 새 탭으로 열어 주세요. "
             "모든 조회와 작업은 이 로컬 테스트 사이트 안에서만 하세요. "
             "페이지 UI만 사용하고 소스 코드, 쿠키, 평가 데이터 또는 계측 파일을 검사/변경하지 마세요. "
-            + answer + "최종 채팅 답변은 채점에 사용하지 않습니다.")
+            + (result_instruction or answer) + "최종 채팅 답변은 채점에 사용하지 않습니다.")
 
     def prepare_server(self, target: str, server: Server, task: Task, pair_dir: Path) -> Server:
         trial = self.trials[self.by_target[target]]

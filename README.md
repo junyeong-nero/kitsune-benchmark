@@ -2,7 +2,7 @@
 
 The [four-surface benchmark](docs/four-surface.md) compares **EgoLite, Aside, Playwright MCP and Kitsune** on 20 local browser tasks, separately for Codex and Claude Code. A 32-start pilot checks the instrumentation before the 320-start main cohort. A separate release check measures user-tab custody and coexistence. Grades come from saved application state and browser evidence, not an agent's final answer.
 
-Print the matrix without starting a browser or model: `uv run --locked python scripts/run-four-surface.py plan --scope main`. The studies below retain their original protocols and results.
+[Pilot preflight](docs/results/2026-11-19-four-surface-pilot-preflight.md): all 20 graders passed their controls, and both native Firefox surfaces completed the four scripted pilot tasks. The vendor isolation check blocked inference: **0 of 32 model cells started**. Print the matrix without starting a browser or model: `uv run --locked python scripts/run-four-surface.py plan --scope main`. The studies below retain their original protocols and results.
 
 **Docs:** [Overview](docs/README.md) · [Running guide](docs/running.md) · [Results](docs/results/README.md) ·
 [Results by Kitsune version](docs/results/kitsune-versions.md)

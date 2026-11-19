@@ -53,7 +53,7 @@ B=(uv run --locked python scripts/run-four-surface.py)
 for scope in pilot main release; do
   "${B[@]}" plan --scope "$scope" | jq -r '[.scope, (.cells | length)] | @tsv'
 done
-uv run --locked python -m unittest tests.test_four_surface tests.test_personal tests.test_personal_fixtures tests.test_gallery
+uv run --locked python -m unittest tests.test_four_surface tests.test_four_surface_contracts tests.test_personal tests.test_personal_fixtures tests.test_gallery
 KITSUNE_PROJECT="$(cd ../kitsune && pwd)" FOUR_SURFACE_NATIVE_TEST=1 \
   uv run --locked python -m unittest -v tests.test_four_surface_native
 ```
@@ -63,7 +63,7 @@ KITSUNE_PROJECT="$(cd ../kitsune && pwd)" FOUR_SURFACE_NATIVE_TEST=1 \
 | Grader isolation | `check-worker` exits 0: the real EgoLite helper cannot access a synthetic private file in `artifacts/`. A visible file, an unrecognized result or a missing helper is a stop. The command tests **only that file and EgoLite**, not Aside, network isolation or a separate output mount. Verify those boundaries under the actual runtime identities using **disposable markers**, never real secrets, and retain the access-denial evidence privately. |
 | Network and routing | From each actual browser/runtime, a harmless local test fixture loads; an operator-controlled destination outside the allowlist is denied by policy (confirm with the policy log). The controller's subscription login checks still work. Do not probe third-party sites. No localhost-wide or internet-wide exception to make the checks pass. |
 | Profiles and PNG | Verify only the new test contexts are in use. From the isolated EgoLite runtime, write a synthetic PNG in the drop and confirm the controller can read it. Use a separate disposable marker to confirm that the runtime cannot read or write the evidence directory. Remove only the test files. Neither profile ID, file path nor screenshot belongs in the PR. |
-| Protocol | Plan counts are **32 / 320 / 12** in the order above. The offline tests pass and both opt-in native tests run (not skipped): all eight selected gallery goals and the Kitsune/Playwright cursor, catalog and tab-ownership checks. This does not test vendor model performance. |
+| Protocol | Plan counts are **32 / 320 / 12** in the order above. All 20 graders pass state and custody controls. Both opt-in native tests run (not skipped): all eight selected gallery goals, and the four pilot goals through each Kitsune/Playwright MCP relay with the starting cursor, catalog and tab custody checked. These are not vendor qualification or model scores. |
 
 For the routing check, the operator can serve an empty temporary directory with `python3 -m http.server PORT --bind 127.0.0.1 --directory EMPTY_DIR`. Use one assigned fixture-test port and a second, deliberately disallowed test port under your control. Verify the first page renders in the designated profile and the second is blocked **while the listener is running**, not merely absent. Stop both temporary servers after the check. An additional deny rule for off-host traffic must cover the browser **and** native script processes; a failed loopback request alone does not establish that rule.
 
