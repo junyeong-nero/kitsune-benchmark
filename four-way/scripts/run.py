@@ -14,12 +14,25 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from framework import codex, transcript
 from framework.arms import ARMS, binary, config, surface
-from framework.fixture import fixture
+from framework.fixture import fixture, launch
 
-TASKS = json.loads((ROOT / 'testset/tasks.json').read_text())
+SUITES = {'fixtures': 'testset/tasks.json', 'webarena-pro': 'testset/webarena-pro.json'}
 POLICY = ('Use only the designated browser and the rendered fixture UI. No other tabs, profiles, agents, shell commands, '
           'filesystem, page evaluation, source, storage, direct HTTP, or network inspection. Stop after one submission. '
           'The harness owns teardown. If blocked, report it; do not switch tools.')
+WAP_POLICY = ('Use only the designated browser and the task websites\' UI. No other websites, tabs you did not open, '
+              'profiles, agents, shell commands, filesystem, page evaluation, source, storage, direct HTTP or site API calls. '
+              'You are already signed in; do not sign out. The harness owns setup and teardown. If blocked, report it; '
+              'do not switch tools.')
+WAP_FINISH = ('When you are done, end your reply with one line: FINAL ANSWER: <answer>. If the task only asks you to '
+              'change something, write FINAL ANSWER: done.')
+
+
+def load_tasks(suite):
+    return json.loads((ROOT / SUITES[suite]).read_text())
+
+
+TASKS = load_tasks('fixtures')
 
 
 def matrix(tasks, arms, repeats):
@@ -54,29 +67,69 @@ def invoke(argv, cwd, env, timeout):
     return {'stdout': stdout, 'stderr': stderr, 'returncode': p.returncode, 'timed_out': timed_out}
 
 
-def attempt(task, arm, settings, executable, model, timeout, harness='claude', browser_mode='isolated', log=None):
+def run_agent(harness, executable, model, surfaced, prompt, tmp, timeout):
+    servers, tools, allow, _ = surfaced
     env = {k: v for k, v in os.environ.items() if k in {'HOME','PATH','TMPDIR','LANG','USER','SHELL','CLAUDE_CODE_OAUTH_TOKEN'}}
+    if harness == 'codex':
+        env.pop('CLAUDE_CODE_OAUTH_TOKEN', None)
+        argv = codex.command(executable, model, servers, env, prompt)
+    else:
+        mcp_config = Path(tmp) / 'mcp.json'
+        mcp_config.write_text(json.dumps({'mcpServers': servers}))
+        argv = [executable, '-p', '--model', model, '--output-format', 'stream-json', '--verbose', '--no-session-persistence',
+                '--setting-sources', '', '--disable-slash-commands', '--permission-mode', 'dontAsk',
+                '--strict-mcp-config', '--mcp-config', str(mcp_config),
+                '--tools', tools, '--allowedTools', allow, '--', prompt]
+    start = time.monotonic()
+    run = invoke(argv, tmp, env, timeout)
+    return run, round(time.monotonic() - start, 3)
+
+
+def wap_core(*args):
+    """WebArena-Pro Core runs in its own Python 3.12 environment (BENCH_WAP_CORE = webarena-pro-core checkout)."""
+    core = os.environ.get('BENCH_WAP_CORE')
+    if not core:
+        raise ValueError('Set BENCH_WAP_CORE to a synced webarena-pro-core checkout.')
+    p = subprocess.run(['uv', 'run', '--locked', '--directory', core, 'python', str(ROOT / 'framework/wap_core.py'), *args],
+                       capture_output=True, text=True, check=True, timeout=900, env={**os.environ, 'WP_URL_MODE': 'port'})
+    return json.loads(p.stdout.strip().splitlines()[-1])
+
+
+def attempt(task, arm, settings, executable, model, timeout, harness='claude', browser_mode='isolated', log=None):
+    if task.get('suite') == 'webarena-pro':
+        return attempt_wap(task, arm, settings, executable, model, timeout, harness, browser_mode, log)
     with tempfile.TemporaryDirectory(prefix='browser-bench-') as tmp, fixture(task['id']) as (url, submissions):
-        with surface(arm, settings, Path(tmp), url, browser_mode) as (servers, tools, allow, instructions):
-            prompt = f'{instructions}\n\nFixture: {url}\nRules: {POLICY}\nTask: {task["prompt"]}'
-            if harness == 'codex':
-                env.pop('CLAUDE_CODE_OAUTH_TOKEN', None)
-                argv = codex.command(executable, model, servers, env, prompt)
-            else:
-                mcp_config = Path(tmp) / 'mcp.json'
-                mcp_config.write_text(json.dumps({'mcpServers': servers}))
-                argv = [executable, '-p', '--model', model, '--output-format', 'stream-json', '--verbose', '--no-session-persistence',
-                        '--setting-sources', '', '--disable-slash-commands', '--permission-mode', 'dontAsk',
-                        '--strict-mcp-config', '--mcp-config', str(mcp_config),
-                        '--tools', tools, '--allowedTools', allow, '--', prompt]
-            start = time.monotonic()
-            run = invoke(argv, tmp, env, timeout)
-            seconds = round(time.monotonic()-start, 3)
+        with surface(arm, settings, Path(tmp), url, browser_mode) as surfaced:
+            prompt = f'{surfaced[3]}\n\nFixture: {url}\nRules: {POLICY}\nTask: {task["prompt"]}'
+            run, seconds = run_agent(harness, executable, model, surfaced, prompt, tmp, timeout)
+    graded = 'pass' if submissions == [task['expected']] else 'fail'
+    return finish(run, seconds, harness, log, {'graded': graded, 'submissions': list(submissions)})
+
+
+def attempt_wap(task, arm, settings, executable, model, timeout, harness, browser_mode, log):
+    """Reset the task's sites, sign the arm in, run the agent, then grade the sites' state and the final answer."""
+    with tempfile.TemporaryDirectory(prefix='browser-bench-') as tmp, launch() as launch_url:
+        state = Path(tmp) / 'wap'
+        wap_core('prepare', task['task_id'], str(state))
+        prepared = json.loads((state / 'prepare.json').read_text())
+        urls = prepared['urls']
+        login = {'states': {s: str(state / f'{s}.json') for s in task['sites']}, 'urls': urls,
+                 'credentials': prepared['credentials'], 'launch': launch_url}
+        with surface(arm, settings, Path(tmp), urls[task['sites'][0]], browser_mode, login) as surfaced:
+            sites = '\n'.join(f'- {s}: {urls[s]}' for s in task['sites'])
+            prompt = (f'{surfaced[3]}\n\nTask websites:\n{sites}\nRules: {WAP_POLICY}\nTask: {task["intent"]}\n{WAP_FINISH}')
+            run, seconds = run_agent(harness, executable, model, surfaced, prompt, tmp, timeout)
+        answer = transcript.summarize(harness, run['stdout']).get('final_answer') or ''
+        grade = wap_core('grade', task['task_id'], str(state), answer)
+    return finish(run, seconds, harness, log, {'graded': 'pass' if grade['success'] else 'fail', 'score': grade['score'],
+                                               'answer': answer[:600], 'rubrics': grade['nodes']})
+
+
+def finish(run, seconds, harness, log, graded):
     if log:
         log.write_text(run['stdout'] + ('\n# stderr\n' + run['stderr'] if run['stderr'] else ''))
     summary = transcript.summarize(harness, run['stdout'])
-    graded = 'pass' if submissions == [task['expected']] else 'fail'
-    record = {'status': graded, 'graded': graded, 'submissions': list(submissions), 'agent_seconds': seconds, **summary}
+    record = {'status': graded['graded'], **graded, 'agent_seconds': seconds, **summary}
     if run['timed_out'] or run['returncode'] or not summary['completed']:
         record['status'] = 'error'
         record['error'] = 'timeout' if run['timed_out'] else f'agent_exit_{run["returncode"]}' if run['returncode'] else 'incomplete'
@@ -97,7 +150,7 @@ def metadata(args):
                 'egolite': ['ego-browser', '--version'], 'kitsune': ['git', '-C', str(ROOT.parent.parent / 'kitsune'), 'describe', '--always', '--dirty'],
                 'playwright-mcp': [str(ROOT.parent / 'node_modules/.bin/playwright-mcp'), '--version']}
     return {'git_revision': version(['git', '-C', str(ROOT), 'rev-parse', '--short', 'HEAD']),
-            'started_at': time.strftime('%Y-%m-%dT%H:%M:%S%z'), 'harness': args.harness, 'model': args.model,
+            'started_at': time.strftime('%Y-%m-%dT%H:%M:%S%z'), 'suite': args.suite, 'harness': args.harness, 'model': args.model,
             'browser_mode': args.modes, 'timeout': args.timeout, 'repeat': args.repeat,
             'versions': {k: version(v) for k, v in versions.items()}}
 
@@ -105,10 +158,12 @@ def metadata(args):
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--execute', action='store_true')
+    p.add_argument('--suite', choices=SUITES, default='fixtures',
+                   help='fixtures: 12 local pages; webarena-pro: the deterministic WebArena-Pro subset (needs Docker)')
     p.add_argument('--arm', choices=ARMS, action='append')
-    p.add_argument('--task', choices=[t['id'] for t in TASKS], action='append')
+    p.add_argument('--task', action='append', help='Task ID; repeatable')
     p.add_argument('--repeat', type=int, default=1)
-    p.add_argument('--timeout', type=int, default=180, help='Agent time limit per attempt in seconds')
+    p.add_argument('--timeout', type=int, help='Agent time limit per attempt in seconds (180 fixtures, 600 webarena-pro)')
     p.add_argument('--browser-mode', choices=('isolated', 'existing-profile'), default='isolated',
                    help='existing-profile uses the installed products’ normal local browser connection')
     p.add_argument('--arm-mode', action='append', default=[], metavar='ARM=MODE',
@@ -117,8 +172,13 @@ def main():
     p.add_argument('--model', help='Same model ID for every arm; required for execution')
     p.add_argument('--out', type=Path, help='New JSONL file; never appended to or overwritten')
     args = p.parse_args()
+    tasks = load_tasks(args.suite)
+    args.timeout = args.timeout or (600 if args.suite == 'webarena-pro' else 180)
     if min(args.repeat, args.timeout) < 1:
         p.error('repeat and timeout must be positive')
+    unknown = set(args.task or ()) - {t['id'] for t in tasks}
+    if unknown:
+        p.error(f'unknown task(s) for {args.suite}: {", ".join(sorted(unknown))}')
     arms = [a for a in ARMS if not args.arm or a in args.arm]
     modes = {a: args.browser_mode for a in ARMS}
     for item in args.arm_mode:
@@ -127,7 +187,7 @@ def main():
             p.error(f'invalid --arm-mode {item}')
         modes[arm] = mode
     args.modes = {a: modes[a] for a in arms}
-    rows = list(matrix([t for t in TASKS if not args.task or t['id'] in args.task], arms, args.repeat))
+    rows = list(matrix([t for t in tasks if not args.task or t['id'] in args.task], arms, args.repeat))
     if not args.execute:
         print(json.dumps([{'task': t['id'], 'arm': a, 'repeat': r, 'harness': args.harness, 'model': args.model, 'browser_mode': modes[a]} for t,a,r in rows], indent=2))
         return 0

@@ -87,8 +87,31 @@ def aside_target(settings, url):
     raise ValueError('Aside did not report the fixture tab')
 
 
+def _cookies(login):
+    """(site URL, Playwright cookie) pairs from the harness's per-site storage states."""
+    return [(login['urls'][site], c) for site, path in login['states'].items()
+            for c in json.loads(Path(path).read_text())['cookies']]
+
+
+def pre_login(arm, settings, folder, login):
+    """Sign the arm's browser in before the agent starts (WebArena-Pro); returns settings for this attempt."""
+    if arm == 'playwright':
+        merged = folder / 'storage-state.json'
+        merged.write_text(json.dumps({'cookies': [c for _, c in _cookies(login)], 'origins': []}))
+        return {**settings, 'args': [*settings.get('args', []), '--storage-state', str(merged)]}
+    if arm == 'kitsune':
+        code = ('import json, sys, kitsune\nb = kitsune.connect()\nfor url, c in json.load(sys.stdin):\n'
+                '    r = b.cookies.set(url, c["name"], c["value"], path=c["path"])\n'
+                '    assert r.get("ok"), r\n')
+        subprocess.run([str(Path(settings['command']).with_name('python')), '-c', code], input=json.dumps(_cookies(login)),
+                       text=True, capture_output=True, check=True, timeout=60, env={**os.environ, **settings.get('env', {})})
+    return settings
+
+
 @contextmanager
-def surface(arm, settings, folder, url, mode='isolated'):
+def surface(arm, settings, folder, url, mode='isolated', login=None):
+    if login:
+        settings = pre_login(arm, settings, folder, login)
     if isinstance(settings, dict):
         hint = f'Open {url} in a fresh benchmark tab using the browser MCP tools.'
         if mode == 'existing-profile':
@@ -102,8 +125,17 @@ def surface(arm, settings, folder, url, mode='isolated'):
     prefix = ''
     if arm == 'aside':
         guide = vendor([settings[0], 'guide', 'repl'])
-        target = aside_target(settings, url)
-        prefix = f'printf "%s\\n" {shlex.quote(f"await attachBrowserTab({json.dumps(target)});")}; '
+        target = aside_target(settings, login['launch'] if login else url)
+        attach = f'await attachBrowserTab({json.dumps(target)});\n'
+        if login:  # Aside's REPL exposes no cookie or CDP API, so sign in through each site's login form.
+            flow = (Path(__file__).with_name('wap_login.js')).read_text()
+            for site in login['states']:
+                head = (f'const SITE={json.dumps(site)}, BASE={json.dumps(login["urls"][site])}, '
+                        f'CRED={json.dumps(login["credentials"][site])};\n')
+                if 'LOGIN_OK' not in vendor(settings, attach + head + flow):
+                    raise ValueError(f'Aside UI login failed for {site}')
+            vendor(settings, attach + f'await page.goto({json.dumps(url)})')
+        prefix = f'printf "%s\\n" {shlex.quote(attach.strip())}; '
         hint = ('Every ./browser call is a fresh REPL session that the wrapper first attaches to the fixture tab, so `page` '
                 'is already the fixture. Variables do not persist between calls. Never call openTab, closeTab, '
                 'listBrowserTabs or attachBrowserTab yourself.')
@@ -124,7 +156,12 @@ def surface(arm, settings, folder, url, mode='isolated'):
     wrapper.chmod(0o700)
     try:
         if arm == 'egolite':
-            vendor(settings, f'await (await taskSpace({space})).page("p1").goto({json.dumps(url)})')
+            page = f'const p=(await taskSpace({space})).page("p1");\n'
+            if login:
+                cookies = [{k: c[k] for k in ('name', 'value', 'domain', 'path', 'httpOnly', 'secure', 'sameSite')}
+                           | ({'expires': c['expires']} if c.get('expires', -1) > 0 else {}) for _, c in _cookies(login)]
+                vendor(settings, page + f'for (const c of {json.dumps(cookies)}) await p.cdp("Network.setCookie", c);')
+            vendor(settings, page + f'await p.goto({json.dumps(url)})')
         yield ({}, 'Bash', 'Bash(./browser:*)', f'Use Bash only as ./browser followed by one quoted JavaScript argument. {hint}\nCLI reference:\n{guide}')
     finally:
         # Best effort: a cleanup failure must not discard the attempt's result.

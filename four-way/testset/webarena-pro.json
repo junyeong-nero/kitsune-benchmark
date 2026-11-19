@@ -1,0 +1,374 @@
+[
+ {
+  "id": "wap-065",
+  "suite": "webarena-pro",
+  "task_id": "065",
+  "split": "test",
+  "sites": [
+   "flight-search"
+  ],
+  "users": {
+   "flight-search": null
+  },
+  "intent": "Find the latest-arriving one-way economy flight from Denver (DEN) to Las Vegas (LAS) on 2026-06-15.",
+  "source": "McGill-NLP/webarena-pro@42f4a076"
+ },
+ {
+  "id": "wap-069",
+  "suite": "webarena-pro",
+  "task_id": "069",
+  "split": "test",
+  "sites": [
+   "flight-search",
+   "password-manager",
+   "travelmap"
+  ],
+  "users": {
+   "password-manager": "agent1",
+   "travelmap": "avery@example.com",
+   "flight-search": null
+  },
+  "intent": "Find the cheapest weekend fully in June to travel from Vancouver to Toronto (depart Friday, return Sunday), and book both the flights and accommodation for that trip.",
+  "source": "McGill-NLP/webarena-pro@42f4a076"
+ },
+ {
+  "id": "wap-077",
+  "suite": "webarena-pro",
+  "task_id": "077",
+  "split": "test",
+  "sites": [
+   "flight-search"
+  ],
+  "users": {
+   "flight-search": null
+  },
+  "intent": "Set the displayed currency to USD. Find the fastest one-way economy flight from New York (JFK) to Los Angeles (LAX) on 2026-06-15. If multiple flights are tied for the shortest total travel time, choose the first tied flight shown after sorting by Fastest.",
+  "source": "McGill-NLP/webarena-pro@42f4a076"
+ },
+ {
+  "id": "wap-095",
+  "suite": "webarena-pro",
+  "task_id": "095",
+  "split": "test",
+  "sites": [
+   "jobportal"
+  ],
+  "users": {
+   "jobportal": "alice_seeker"
+  },
+  "intent": "Review the job I previously applied to, then find similar jobs and apply to the one with the highest yearly income.",
+  "source": "McGill-NLP/webarena-pro@42f4a076"
+ },
+ {
+  "id": "wap-096",
+  "suite": "webarena-pro",
+  "task_id": "096",
+  "split": "test",
+  "sites": [
+   "jobportal"
+  ],
+  "users": {
+   "jobportal": "employer_acme"
+  },
+  "intent": "Close the two intern job postings with the earliest application deadlines. Then create new part-time versions of those roles that require at least 1 year of experience, with the income increased by 25% compared to the original postings. Set the application deadline for the new postings to two months from now.",
+  "source": "McGill-NLP/webarena-pro@42f4a076"
+ },
+ {
+  "id": "wap-138",
+  "suite": "webarena-pro",
+  "task_id": "138",
+  "split": "test",
+  "sites": [
+   "minerva-lite"
+  ],
+  "users": {
+   "minerva-lite": "260123456"
+  },
+  "intent": "Leave the original waitlist and register for an open section of the same subject with the same professor, as long as it fits my schedule. I prefer a section with a meeting time similar to the original waitlisted class.",
+  "source": "McGill-NLP/webarena-pro@42f4a076"
+ },
+ {
+  "id": "wap-139",
+  "suite": "webarena-pro",
+  "task_id": "139",
+  "split": "test",
+  "sites": [
+   "minerva-lite"
+  ],
+  "users": {
+   "minerva-lite": "260123456"
+  },
+  "intent": "For next semester, please register me for a course that helps satisfy an unmet requirement for my major. I prefer a section that keeps my schedule clustered on as few days as possible.",
+  "source": "McGill-NLP/webarena-pro@42f4a076"
+ },
+ {
+  "id": "wap-140",
+  "suite": "webarena-pro",
+  "task_id": "140",
+  "split": "test",
+  "sites": [
+   "minerva-lite",
+   "flight-search"
+  ],
+  "users": {
+   "minerva-lite": "260123456",
+   "flight-search": "260123456"
+  },
+  "intent": "Find the cheapest 4-day round-trip flight from ICN to Osaka during the first week of October 2026 that minimizes missed classes based on my current schedule. Book the travel, and then report which classes I would miss.",
+  "source": "McGill-NLP/webarena-pro@42f4a076"
+ },
+ {
+  "id": "wap-229",
+  "suite": "webarena-pro",
+  "task_id": "229",
+  "split": "test",
+  "sites": [
+   "pipedrive"
+  ],
+  "users": {
+   "pipedrive": "admin@local.host"
+  },
+  "intent": "Find the expected close date and status of the deal named Radiant Solar - Custom Development Agreement.",
+  "source": "McGill-NLP/webarena-pro@42f4a076"
+ },
+ {
+  "id": "wap-230",
+  "suite": "webarena-pro",
+  "task_id": "230",
+  "split": "test",
+  "sites": [
+   "pipedrive"
+  ],
+  "users": {
+   "pipedrive": "admin@local.host"
+  },
+  "intent": "For the organization Nimbus Cloud Services, find its two open deals, determine which one has the lower value, and add a task activity to that lower-value deal due on 2026-05-20 with subject exactly: Benchmark task: follow up on lower-value Nimbus deal.",
+  "source": "McGill-NLP/webarena-pro@42f4a076"
+ },
+ {
+  "id": "wap-231",
+  "suite": "webarena-pro",
+  "task_id": "231",
+  "split": "test",
+  "sites": [
+   "pipedrive"
+  ],
+  "users": {
+   "pipedrive": "admin@local.host"
+  },
+  "intent": "There are two deals named TechCorp Inc. - Enterprise License Agreement. open the WON one and mark its activity named Initial discovery call as done. Then, find the open one and confirm its stage and value.",
+  "source": "McGill-NLP/webarena-pro@42f4a076"
+ },
+ {
+  "id": "wap-238",
+  "suite": "webarena-pro",
+  "task_id": "238",
+  "split": "test",
+  "sites": [
+   "thunderbird"
+  ],
+  "users": {
+   "thunderbird": "bob@techcorp.local"
+  },
+  "intent": "For each unread email, send a reply informing the sender that I am on vacation and will respond as soon as possible. For each read email received after February 20, send a reply informing the sender only that I am on vacation.",
+  "source": "McGill-NLP/webarena-pro@42f4a076"
+ },
+ {
+  "id": "wap-239",
+  "suite": "webarena-pro",
+  "task_id": "239",
+  "split": "test",
+  "sites": [
+   "thunderbird"
+  ],
+  "users": {
+   "thunderbird": "david@techcorp.local"
+  },
+  "intent": "For each unread email, draft and save a reply informing the sender that I am on vacation and will respond as soon as possible. For each read email received after January 15, draft and save a reply informing the sender that I am on vacation. Do not send the drafts.",
+  "source": "McGill-NLP/webarena-pro@42f4a076"
+ },
+ {
+  "id": "wap-247",
+  "suite": "webarena-pro",
+  "task_id": "247",
+  "split": "test",
+  "sites": [
+   "travelmap"
+  ],
+  "users": {
+   "travelmap": null
+  },
+  "intent": "What city has the cheapest average house price and what is it rounded to the dollar give answer in format: City; $XXX",
+  "source": "McGill-NLP/webarena-pro@42f4a076"
+ },
+ {
+  "id": "wap-258",
+  "suite": "webarena-pro",
+  "task_id": "258",
+  "split": "test",
+  "sites": [
+   "x-lite"
+  ],
+  "users": {
+   "x-lite": "techvalueinvestor"
+  },
+  "intent": "Collect the most actionable local transit updates and tell City Desk what I saved.",
+  "source": "McGill-NLP/webarena-pro@42f4a076"
+ },
+ {
+  "id": "wap-260",
+  "suite": "webarena-pro",
+  "task_id": "260",
+  "split": "test",
+  "sites": [
+   "x-lite"
+  ],
+  "users": {
+   "x-lite": "techvalueinvestor"
+  },
+  "intent": "Save two AI-related posts and send AI Product Pulse a short message about them.",
+  "source": "McGill-NLP/webarena-pro@42f4a076"
+ },
+ {
+  "id": "wap-261",
+  "suite": "webarena-pro",
+  "task_id": "261",
+  "split": "test",
+  "sites": [
+   "x-lite"
+  ],
+  "users": {
+   "x-lite": "techvalueinvestor"
+  },
+  "intent": "Collect three useful AI agent evaluation posts and follow up with AI Product Pulse",
+  "source": "McGill-NLP/webarena-pro@42f4a076"
+ },
+ {
+  "id": "wap-341",
+  "suite": "webarena-pro",
+  "task_id": "341",
+  "split": "test",
+  "sites": [
+   "travelmap",
+   "flight-search"
+  ],
+  "users": {
+   "travelmap": "avery@example.com",
+   "flight-search": "avery@example.com"
+  },
+  "intent": "Of the North American cities with over 1 million people east of the Mississippi River. What city is the cheapest to travel to and stay in from NYC for a vacation between September 4 and 6. Please tell me the city and the overall price.",
+  "source": "McGill-NLP/webarena-pro@42f4a076"
+ },
+ {
+  "id": "wap-344",
+  "suite": "webarena-pro",
+  "task_id": "344",
+  "split": "test",
+  "sites": [
+   "flight-search"
+  ],
+  "users": {
+   "flight-search": "flyingagents"
+  },
+  "intent": "In Flight Search, find a city reachable from Montreal (YUL) by a nonstop flight with a displayed duration between 3 and 4 hours, inclusive. Then book a one-way flight from that city to Boston (BOS), using any available departure date and fare. Montreal is only the reference point for choosing the origin city; book only the chosen city-to-Boston leg.",
+  "source": "McGill-NLP/webarena-pro@42f4a076"
+ },
+ {
+  "id": "wap-079",
+  "suite": "webarena-pro",
+  "task_id": "079",
+  "split": "dev",
+  "sites": [
+   "flight-search"
+  ],
+  "users": {
+   "flight-search": null
+  },
+  "intent": "choose a ticket for montreal(YUL) to Toronto(YYZ)  between 05/03/2026 and 05/05/2026,",
+  "source": "McGill-NLP/webarena-pro@42f4a076"
+ },
+ {
+  "id": "wap-142",
+  "suite": "webarena-pro",
+  "task_id": "142",
+  "split": "dev",
+  "sites": [
+   "minerva-lite"
+  ],
+  "users": {
+   "minerva-lite": "260123456"
+  },
+  "intent": "Register for the same subject next semester with the professor whose class I was waitlisted for in Fall 2026. Since I prefer to cluster my classes on the same days, please choose a section that meets on the same days as my existing classes whenever possible.",
+  "source": "McGill-NLP/webarena-pro@42f4a076"
+ },
+ {
+  "id": "wap-143",
+  "suite": "webarena-pro",
+  "task_id": "143",
+  "split": "dev",
+  "sites": [
+   "minerva-lite"
+  ],
+  "users": {
+   "minerva-lite": "260123456"
+  },
+  "intent": "Register for Dr. Aven Quenvar professor's course (subject: COMP) that doesn't conflict with our current schedule for FALL 2026.",
+  "source": "McGill-NLP/webarena-pro@42f4a076"
+ },
+ {
+  "id": "wap-144",
+  "suite": "webarena-pro",
+  "task_id": "144",
+  "split": "dev",
+  "sites": [
+   "minerva-lite"
+  ],
+  "users": {
+   "minerva-lite": "260123456"
+  },
+  "intent": "Register for a Fall 2026 course taught by Dr. Aven Quenvar that belongs to my major and does not conflict with my current schedule.",
+  "source": "McGill-NLP/webarena-pro@42f4a076"
+ },
+ {
+  "id": "wap-199",
+  "suite": "webarena-pro",
+  "task_id": "199",
+  "split": "dev",
+  "sites": [
+   "password-manager"
+  ],
+  "users": {
+   "password-manager": "agent1"
+  },
+  "intent": "Find the saved Flight Search login username",
+  "source": "McGill-NLP/webarena-pro@42f4a076"
+ },
+ {
+  "id": "wap-233",
+  "suite": "webarena-pro",
+  "task_id": "233",
+  "split": "dev",
+  "sites": [
+   "pipedrive"
+  ],
+  "users": {
+   "pipedrive": "admin@local.host"
+  },
+  "intent": "Compare the number of open deals in the Lead and Negotiation stages. Then create a new deal titled Benchmark Deal - stage count adjustment in the stage that currently has fewer open deals, linked to TechCorp Inc., with value $7,777 and expected close date 2026-06-07.",
+  "source": "McGill-NLP/webarena-pro@42f4a076"
+ },
+ {
+  "id": "wap-244",
+  "suite": "webarena-pro",
+  "task_id": "244",
+  "split": "dev",
+  "sites": [
+   "thunderbird"
+  ],
+  "users": {
+   "thunderbird": "bob@techcorp.local"
+  },
+  "intent": "For each unread email, draft and save a reply notifying the sender that I am on vacation and will respond as soon as possible.",
+  "source": "McGill-NLP/webarena-pro@42f4a076"
+ }
+]
