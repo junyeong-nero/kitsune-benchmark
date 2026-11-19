@@ -1,15 +1,16 @@
 """Versioned four-product comparison on fresh, synthetic localhost fixtures."""
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import dataclass, replace
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import sys
 import uuid
 
-from . import adapter, coexistence, gallery, personal, tab_permissions
+from . import adapter, coexistence, ego_mcp, gallery, personal, tab_permissions
 from .four_surface_session import VENDOR
 from .personal_fixtures import Hours
 from .smoke import ROOT, run_pair, source_revision
@@ -101,9 +102,45 @@ def fixture_for(row, release):
     return gallery.GalleryServer(component, variant, 'isolated')
 
 
-def run_cell(row, project, profiles, image_drop=None):
+def worker_executable(path, label):
+    p = Path(path).expanduser() if path else None
+    if p is None or not p.is_absolute() or not p.is_file() or not os.access(p, os.X_OK):
+        raise ValueError(f'Supply an absolute executable path for the verified {label} test route')
+    return str(p.resolve(strict=True))
+
+
+@dataclass(frozen=True)
+class VendorWorker:
+    aside_cli: str
+    ego_cli: str
+    ego_service: str
+    aside_profile: str
+    ego_profile: str
+
+    @classmethod
+    def from_args(cls, args):
+        service = ego_mcp.validate_service(args.ego_server_name)
+        if not all(p and p == p.strip() and not p.startswith('-') and '\x00' not in p
+                   for p in (args.aside_profile, args.ego_profile)):
+            raise ValueError('Supply both designated vendor test profiles; refusing default profiles')
+        return cls(worker_executable(args.aside_cli, 'Aside'), worker_executable(args.ego_cli, 'EgoLite'),
+                   service, args.aside_profile, args.ego_profile)
+
+    def upstream(self, target):
+        if target == 'aside':
+            return ['/usr/bin/env', '-i', *(f'{k}={v}' for k, v in ego_mcp.worker_environment().items()),
+                    self.aside_cli, 'mcp', '--host', 'local', '--profile', self.aside_profile]
+        if target == 'ego':
+            return [sys.executable, str(ROOT/'kitsune_benchmark/ego_mcp.py'), '--binary', self.ego_cli,
+                    '--ego-server-name', self.ego_service]
+        raise ValueError('Not a vendor surface')
+
+
+def run_cell(row, project, worker, image_drop=None):
     target, h = row['surface'], row['harness']
     release = row['arm'] in {'base', 'candidate'}
+    if target in VENDOR and worker is None:
+        raise ValueError('A routed vendor worker is required')
     if source_revision(project) != {'revision': row['sha'], 'dirty': False}:
         raise ValueError('Kitsune source drift')
     ctx = 'four-surface-' + uuid.uuid4().hex
@@ -131,14 +168,13 @@ def run_cell(row, project, profiles, image_drop=None):
             trial = fixture.trials[fixture.by_target[t]]
             evidence = pair_dir / f'{t}-session-evidence.json'
             fixture.evidence_paths[t] = evidence
-            upstream = [server.command, *server.args]
-            if t == 'aside':
-                upstream += ['--host', 'local', '--profile', profiles[t]]
+            upstream = worker.upstream(t) if t in VENDOR else [server.command, *server.args]
             settings = dict(target=t, upstream=upstream, bootstrap_url=trial.url('/start'),
                             urls=[trial.url(p) for p in trial.paths], active_index=trial.active_index,
                             origin=fixture.origin, evidence_path=str(evidence), elicitation='decline',
                             enabled_tools=list(server.enabled_tools), task_tab='agent', context=ctx,
-                            vendor_profile=profiles.get(t), screenshot=str(screenshot) if screenshot else None,
+                            vendor_profile=worker.ego_profile if t == 'ego' else None,
+                            screenshot=str(screenshot) if screenshot else None,
                             diagnostics_path=str(pair_dir / f'{t}-native-rpc.jsonl'),
                             metadata_path=str(pair_dir / f'{t}-native-metadata.json'))
             if t=='kitsune':
@@ -149,7 +185,8 @@ def run_cell(row, project, profiles, image_drop=None):
             if t in VENDOR:
                 cmd = [sys.executable, str(ROOT/'kitsune_benchmark/mcp_tool_filter.py'),
                        json.dumps([VENDOR[t]]), '--', *cmd]
-            return replace(server, command=cmd[0], args=tuple(cmd[1:]))
+            # The vendor paths are pinned in session.json; do not re-resolve an ambient binary override.
+            return replace(server, command=cmd[0], args=tuple(cmd[1:]), env_vars=() if t in VENDOR else server.env_vars)
 
         def grade(t, result):
             evidence = coexistence.wait_session_closed(fixture.evidence_paths[t])

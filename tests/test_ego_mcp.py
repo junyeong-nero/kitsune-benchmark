@@ -41,6 +41,28 @@ class EgoWrapperTest(unittest.TestCase):
         self.assertEqual([t["name"] for t in tools], ["run_script"])
         self.assertIn("GUIDE TEXT", tools[0]["description"])
 
+    def test_explicit_worker_gets_the_named_service_for_guide_and_script(self):
+        with tempfile.TemporaryDirectory() as d:
+            fake = Path(d) / 'routed-ego'
+            fake.write_text('''#!/bin/sh
+[ "$1" = '--ego-server-name=bench-only' ] && [ "$#" = 2 ] && [ -z "$BENCH_CONTROLLER_SENTINEL" ] || exit 70
+case "$2" in
+  skill) echo 'ROUTED GUIDE';;
+  nodejs) IFS= read -r line; echo "routed: $line";;
+  *) exit 71;;
+esac
+''')
+            fake.chmod(0o700)
+            messages = [{'id':1, 'method':'tools/list'}, {'id':2,'method':'tools/call',
+                         'params':{'name':'run_script','arguments':{'code':'hello'}}}]
+            r = subprocess.run([sys.executable, str(WRAPPER), '--binary', str(fake), '--ego-server-name', 'bench-only'],
+                               input=''.join(json.dumps(m)+'\n' for m in messages), text=True, capture_output=True,
+                               timeout=10, check=True, env={**os.environ, 'EGO_BROWSER_BIN':str(fake)+'.wrong',
+                                                           'BENCH_CONTROLLER_SENTINEL':'controller-only'})
+            catalog, call = [json.loads(line)['result'] for line in r.stdout.splitlines()]
+            self.assertIn('ROUTED GUIDE', catalog['tools'][0]['description'])
+            self.assertEqual(call, {'isError': False, 'content':[{'type':'text','text':'routed: hello'}]})
+
     def test_runs_code_on_stdin_and_reports_failures(self):
         ok, failed, unknown = self.call(
             {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "run_script", "arguments": {"code": "hi"}}},

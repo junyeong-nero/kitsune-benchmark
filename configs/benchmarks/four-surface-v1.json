@@ -2,6 +2,7 @@
   "id": "four-surface-v1",
   "models": {"codex": ["gpt-6.2-sol", "0.170.0"], "claude": ["claude-opus-5-5", "2.1.327"]},
   "surfaces": ["ego", "aside", "playwright", "kitsune"],
+  "vendor_gui_versions": {"aside": "1.0.1116.2", "ego": "0.6.3.14"},
   "kitsune": "26d91a1e8203fd964365101cad68dd41fb99f1f5",
   "release_base": "41929f9f43e8450670455eaadcdb38053c455b85",
   "pilot": ["pb-current-04", "pb-handoff-01", "ui-infinite", "mm-chart"],

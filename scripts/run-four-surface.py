@@ -1,21 +1,31 @@
 """Plan, run and report four-surface-v1. Plan/report never launch a model."""
 import argparse
+import base64
 from contextlib import contextmanager
+from dataclasses import asdict
 import fcntl
+import io
 import json
 import os
 from pathlib import Path
+import plistlib
+import secrets
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
 
+from PIL import Image
+
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT))
 from kitsune_benchmark import adapter, ego_mcp  # noqa: E402
-from kitsune_benchmark.four_surface import config, file_hash, plan, run_cell  # noqa: E402
+from kitsune_benchmark.four_surface import VendorWorker, config, file_hash, plan, run_cell, worker_executable  # noqa: E402
 from kitsune_benchmark.four_surface_report import chart, measured, records, summarize  # noqa: E402
 from kitsune_benchmark.smoke import source_revision  # noqa: E402
+
+VENDOR_APPS = {'aside': Path('/Applications/Aside.app'), 'ego': Path(ego_mcp.APP)}
 
 
 def read(p):
@@ -30,33 +40,84 @@ def exclusive(out):
         yield
 
 
-def check_worker():
-    """Model/browser-free negative control. Never read a real credential or another profile."""
+def image_directory(value, out=None):
+    path = value.resolve() if value and value.is_absolute() else None
+    if (path is None or not path.is_dir() or path.is_relative_to(ROOT) or ROOT.is_relative_to(path)
+            or out is not None and (path.is_relative_to(out) or out.is_relative_to(path))):
+        raise ValueError('Provide a dedicated absolute PNG drop separate from the grader and evidence directories')
+    return path
+
+
+def check_install():
+    """Static check of the installed GUI bundles; never repair, launch or re-sign either app."""
+    versions = config()['vendor_gui_versions']
+    for target, path in VENDOR_APPS.items():
+        name, version = ('Aside' if target == 'aside' else 'EgoLite'), versions[target]
+        try:
+            r = subprocess.run(['/usr/bin/codesign', '--verify', '--strict', path], capture_output=True, timeout=60)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise ValueError(f'Cannot verify the {name} GUI bundle; no vendor or model start') from exc
+        if r.returncode:
+            detail = ' (Finder/resource-fork metadata rejected)' if b'detritus not allowed' in r.stderr else ''
+            raise ValueError(f'{name} GUI bundle failed strict signature verification{detail}; no vendor or model start')
+        try:
+            with (path/'Contents/Info.plist').open('rb') as f:
+                actual = plistlib.load(f)['CFBundleShortVersionString']
+        except (OSError, KeyError, plistlib.InvalidFileException) as exc:
+            raise ValueError(f'Cannot verify the {name} GUI version; no vendor or model start') from exc
+        if actual != version:
+            raise ValueError(f'{name} GUI version {actual} does not match {version}; no vendor or model start')
+
+
+def check_worker(binary, service, image_drop):
+    """No model or page actions. Require a denied synthetic marker AND an actual PNG round trip."""
+    service = ego_mcp.validate_service(service)
+    check_install()
+    png = io.BytesIO()
+    Image.frombytes('RGB', (4, 1), secrets.token_bytes(12)).save(png, format='PNG')
+    payload = png.getvalue()
+    dest = image_drop / ('four-control-' + secrets.token_hex(16) + '.png')
+    if os.path.lexists(dest):
+        raise ValueError('PNG control path collision; no start')
     private = ROOT / 'artifacts'
     private.mkdir(mode=0o700, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix='.four-surface-control-', dir=private) as directory:
-        with tempfile.NamedTemporaryFile(dir=directory) as canary:
-            path = json.dumps(canary.name)
+    try:
+        with tempfile.NamedTemporaryFile(prefix='.four-surface-control-', dir=private) as canary:
             code = ("const fs = await import('node:fs/promises'); let access = 'visible'; "
-                    f"try {{ await fs.access({path}); }} catch (e) {{ access = e.code; }} "
-                    "console.log(JSON.stringify({privateFileAccess:access}));")
-            reply = ego_mcp.run_script(ego_mcp.find_binary(), code)
-    observed = []
-    for block in reply.get('content', []):
-        for line in block.get('text', '').splitlines():
-            try:
-                record = json.loads(line)
-            except ValueError:
-                continue
-            if isinstance(record, dict) and 'privateFileAccess' in record:
-                observed.append(record['privateFileAccess'])
-    if observed == ['visible']:
-        raise ValueError('EgoLite can see the private grader canary on this worker; no model starts')
-    if reply.get('isError') or len(observed) != 1 or observed[0] not in {'EACCES', 'EPERM', 'ENOENT'}:
-        raise ValueError('Private grader isolation could not be measured; no model starts')
+                    f"try {{ await fs.access({json.dumps(canary.name)}); }} catch (e) {{ access = e.code; }} "
+                    "if (['EACCES','EPERM','ENOENT'].includes(access)) "
+                    f"await fs.writeFile({json.dumps(str(dest))}, Buffer.from('{base64.b64encode(payload).decode()}', "
+                    "'base64'), {flag:'wx', mode:0o640}); console.log(JSON.stringify({privateFileAccess:access}));")
+            reply = ego_mcp.run_script(binary, code, server_name=service)
+        observed = []
+        for block in reply.get('content', []):
+            for line in block.get('text', '').splitlines():
+                try:
+                    record = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(record, dict) and 'privateFileAccess' in record:
+                    observed.append(record['privateFileAccess'])
+        if 'visible' in observed:
+            raise ValueError('EgoLite can see the private grader canary on this worker; no model starts')
+        if reply.get('isError') or len(observed) != 1 or observed[0] not in ('EACCES', 'EPERM', 'ENOENT'):
+            raise ValueError('Named EgoLite runtime did not prove grader isolation; no model starts')
+        try:
+            with os.fdopen(os.open(dest, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), 'rb') as f:
+                info = os.fstat(f.fileno())
+                if not (stat.S_ISREG(info.st_mode) and info.st_nlink == 1 and info.st_size == len(payload)
+                        and f.read(len(payload) + 1) == payload):
+                    raise ValueError('PNG handoff mismatch; no model starts')
+        except OSError as exc:
+            raise ValueError('PNG handoff unavailable; no model starts') from exc
+    finally:
+        try:
+            dest.unlink(missing_ok=True)
+        except OSError as exc:
+            raise ValueError('Could not clean up the disposable PNG control; no model starts') from exc
 
 
-def pins(project, base, release, profiles):
+def pins(project, base, release, worker):
     spec=config()
     for path,sha in [(project,spec['kitsune'])]+([(base,spec['release_base'])] if release else []):
         if source_revision(path) != {'revision':sha,'dirty':False}:
@@ -74,13 +135,10 @@ def pins(project, base, release, profiles):
                                     cwd=ROOT,env=env,text=True,timeout=10)
     files.update(firefox=Path(firefox),playwright=ROOT/'node_modules/@playwright/mcp/package.json')
     if not release:
-        if not all(profiles.values()):
-            raise ValueError('Supply the two designated benchmark-only vendor profile IDs; refusing default personal profiles')
-        files.update(aside=Path.home()/'.local/bin/aside', ego=Path(ego_mcp.find_binary()),
-                     aside_app=Path('/Applications/Aside.app/Contents/Info.plist'),
-                     ego_app=Path('/Applications/ego lite.app/Contents/Info.plist'))
+        files.update(aside=Path(worker.aside_cli), ego=Path(worker.ego_cli))
+        files.update({key+'_app':path/'Contents/Info.plist' for key,path in VENDOR_APPS.items()})
     return {'benchmark_commit':rev['revision'], 'files':{k:file_hash(p) for k,p in files.items()},
-            'profiles':profiles if not release else {}, 'models':spec['models']}
+            **({'worker':asdict(worker), 'vendor_gui_versions':spec['vendor_gui_versions']} if not release else {'profiles':{}}), 'models':spec['models']}
 
 
 def catalog_pins(rows):
@@ -94,19 +152,18 @@ def catalog_pins(rows):
 
 
 def run(args, matrix):
-    profiles={'aside':args.aside_profile,'ego':args.ego_profile}
     release=args.scope=='release'
     if not args.dedicated_worker:
         raise ValueError('Model-driven native runtimes require a dedicated benchmark worker, not a personal workstation')
     out=args.out.resolve()
-    image_drop = None
+    worker = image_drop = None
     if not release:
-        check_worker()
-        image_drop = args.image_drop.resolve() if args.image_drop else None
-        if (image_drop is None or not image_drop.is_dir() or image_drop.is_relative_to(ROOT)
-                or image_drop.is_relative_to(out) or out.is_relative_to(image_drop) or ROOT.is_relative_to(image_drop)):
-            raise ValueError('Provide a dedicated shared PNG drop separate from the grader and evidence directories')
-    provenance=pins(args.kitsune_project,args.release_base,release,profiles)
+        worker = VendorWorker.from_args(args)
+        image_drop = image_directory(args.image_drop, out)
+        check_worker(worker.ego_cli, worker.ego_service, image_drop)
+    provenance=pins(args.kitsune_project,args.release_base,release,worker)
+    if not release:
+        provenance = {**provenance, 'image_drop':str(image_drop)}
     reference_catalogs = {}
     if args.scope in {'main','replication'}:
         if args.pilot is None:
@@ -145,7 +202,7 @@ def run(args, matrix):
             project=args.release_base if cell['arm']=='base' else args.kitsune_project
             print(f"{cell['seq']}/{len(matrix['cells'])}: {cell['harness']} · {cell['arm']} · {cell['task']}",flush=True)
             try:
-                result=run_cell(cell, project, profiles, image_drop)
+                result=run_cell(cell, project, worker, image_drop)
             except Exception as exc:
                 adapter.write_json(folder/'result.json',{**cell,'status':'runner_error','error':str(exc)[:600]})
                 raise
@@ -162,13 +219,16 @@ def run(args, matrix):
 
 def main():
     p=argparse.ArgumentParser(description=__doc__)
-    p.add_argument('action',choices=('plan','check-worker','run','report','chart'))
+    p.add_argument('action',choices=('plan','check-install','check-worker','run','report','chart'))
     p.add_argument('--scope',choices=('pilot','main','replication','release'),default='pilot')
     p.add_argument('--out',type=Path)
     p.add_argument('--pilot',type=Path)
     p.add_argument('--kitsune-project',type=Path,default=ROOT.parent/'kitsune')
     p.add_argument('--release-base',type=Path,default=ROOT.parent/'kitsune-v0.8.0')
     p.add_argument('--dedicated-worker',action='store_true',help='Confirm isolated native-code worker with no personal data and fixture-only browser access')
+    p.add_argument('--aside-cli',type=Path,help='Absolute path to the verified LOCAL Aside CLI or restricted launcher')
+    p.add_argument('--ego-cli',type=Path,help='Absolute path to the verified EgoLite CLI or restricted launcher')
+    p.add_argument('--ego-server-name',help='Verified named EgoLite test service (never the default)')
     p.add_argument('--aside-profile',help='Dedicated LOCAL Aside benchmark profile ID')
     p.add_argument('--ego-profile',help='Dedicated EgoLite benchmark profile ID')
     p.add_argument('--image-drop',type=Path,help='Existing screenshot-only directory shared with the isolated EgoLite worker')
@@ -177,9 +237,15 @@ def main():
     if args.action=='plan':
         print(json.dumps(matrix, indent=2))
         return
+    if args.action == 'check-install':
+        check_install()
+        print('Both installed GUI bundles match the version pins and pass codesign --verify --strict. This does not certify a worker.')
+        return
     if args.action == 'check-worker':
-        check_worker()
-        print('Synthetic private file is not visible. This alone does not certify the worker or profiles.')
+        service = ego_mcp.validate_service(args.ego_server_name)
+        drop = image_directory(args.image_drop, args.out.resolve() if args.out else None)
+        check_worker(worker_executable(args.ego_cli, 'EgoLite'), service, drop)
+        print('Named EgoLite runtime denied the grader marker and wrote the control PNG. Browser routing, network and Aside remain separate gates.')
         return
     if args.out is None:
         p.error('--out is required; use one new private directory per scope')
