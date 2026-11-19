@@ -40,6 +40,50 @@ class BenchmarkTests(unittest.TestCase):
         self.assertEqual((s['completed'], s['tool_calls'], s['turns'], s['final_message']), (True, 1, 2, 'ok'))
         self.assertEqual((s['tokens'], s['tool_errors']), ({'input':12,'cached_input':5,'output':6}, [{'tool':'Bash','message':'boom'}]))
 
+    def test_final_answer_and_wap_plan(self):
+        from framework.transcript import final_answer
+        self.assertIsNone(final_answer('no marker'))
+        self.assertEqual(final_answer('FINAL ANSWER: draft\nmore\nFINAL ANSWER: **Toronto; $412**\n'), 'Toronto; $412')
+        self.assertEqual(final_answer('FINAL ANSWER: COMP 210\nCOMP 330'), 'COMP 210\nCOMP 330')
+        tasks = run.load_tasks('webarena-pro')
+        self.assertEqual(len(tasks), 26)
+        self.assertTrue(all(t['suite'] == 'webarena-pro' and t['sites'] and t['intent'] for t in tasks))
+        plan = json.loads(subprocess.check_output(['python3', 'scripts/run.py', '--suite', 'webarena-pro', '--task', 'wap-199']))
+        self.assertEqual({r['task'] for r in plan}, {'wap-199'})
+        self.assertNotEqual(subprocess.run(['python3', 'scripts/run.py', '--task', 'wap-199'], capture_output=True).returncode, 0)
+
+    def test_wap_attempt_grades_state_and_answer(self):
+        task = run.load_tasks('webarena-pro')[0]
+        calls = []
+        def core(cmd, task_id, folder, *rest):
+            calls.append((cmd, rest))
+            if cmd == 'prepare':
+                Path(folder).mkdir(parents=True)
+                urls = {s: f'http://localhost:{3000 + i}' for i, s in enumerate(task['sites'])}
+                (Path(folder) / 'prepare.json').write_text(json.dumps({'urls': urls, 'credentials': {}}))
+                for s in task['sites']:
+                    (Path(folder) / f'{s}.json').write_text(json.dumps({'cookies': [{'name': s, 'value': 'v', 'path': '/'}]}))
+                return {'ok': True}
+            return {'score': 1.0, 'success': rest == ('Denver',), 'nodes': []}
+        done = {'type': 'result', 'subtype': 'success', 'is_error': False, 'num_turns': 1, 'result': 'Found it.\nFINAL ANSWER: Denver'}
+        seen = {}
+        def agent(argv, cwd, env, timeout):
+            seen['prompt'] = argv[-1]
+            seen['config'] = json.loads((Path(cwd) / 'mcp.json').read_text())
+            return {'stdout': json.dumps(done), 'stderr': '', 'returncode': 0, 'timed_out': False}
+        with patch.object(run, 'wap_core', core), patch.object(run, 'invoke', agent):
+            result = run.attempt(task, 'playwright', {'command': 'pw', 'args': ['--isolated']}, 'claude', 'model', 5)
+        self.assertEqual((result['status'], result['answer'], [c[0] for c in calls]), ('pass', 'Denver', ['prepare', 'grade']))
+        self.assertIn('FINAL ANSWER', seen['prompt'])
+        self.assertIn(task['intent'], seen['prompt'])
+        self.assertIn('--storage-state', seen['config']['mcpServers']['browser']['args'])
+
+    def test_launch_page(self):
+        from framework.fixture import launch
+        with launch() as url:
+            with urlopen(url) as response:
+                self.assertIn(b'Benchmark task', response.read())
+
     def test_analysis_report(self):
         from scripts.analyze import report, signature
         base = {'harness':'claude', 'model':'m', 'browser_mode':'isolated', 'task':'dispatch', 'agent_seconds':10}

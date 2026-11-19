@@ -11,6 +11,8 @@ interface, not only browser speed.
 - `scripts/analyze.py`: report on success, tool calls, token usage, recurring tool errors and failure causes
 - `scripts/publish.py`: builds the test set and run logs as a Hugging Face dataset and uploads it
 - `scripts/figure.py`: renders the summary SVG from `summary.json`, with icons from `figure-icons/`
+- `scripts/kitsune_runtime.py`: starts a private Kitsune bridge and headless Firefox for a given checkout
+- `framework/wap_core.py`, `framework/wap_login.js`: WebArena-Pro reset, sign-in and grading (see below)
 
 Run every command from this directory. Results: [2026-11-19 report](../docs/results/2026-11-19-four-way-12-task.md).
 
@@ -40,6 +42,78 @@ Each attempt gets a new server and an empty submission log. An attempt passes on
 **exactly once**; recovering after a wrong submission is still a failure. One repeat is 12 × 4 = 48 attempts, and
 the starting arm rotates per task and repeat. Repeating fixed data checks reliability; it does not add tasks. The
 results do not generalize to visual reasoning, real logins or long web navigation.
+
+## WebArena-Pro subset (`--suite webarena-pro`)
+
+The 12 fixtures are near the ceiling: frontier agents pass almost all of them, so they separate tools mainly by cost.
+The second suite uses [WebArena-Pro](https://arxiv.org/abs/2611.17955) (NeurIPS 2026 E&D, released 2026-11-13,
+[code](https://github.com/McGill-NLP/webarena-pro) MIT). It has 400 human-validated tasks on 20 self-hosted apps
+modeled on services such as Pipedrive, Google Flights and Airbnb. Its best published result is 62.3%, from Claude Code
+with Opus 5.5 and Codex with GPT 6.1 Sol driving Playwright MCP: the same agents and one of the same tools as here.
+
+`testset/webarena-pro.json` lists **26 tasks (19 test, 7 dev)** chosen so that grading cannot depend on the tool:
+
+- every site is one of the 8 apps whose images are under 150 MB (flight-search, jobportal, minerva-lite,
+  password-manager, pipedrive, thunderbird, travelmap, x-lite), so the suite fits a laptop VM;
+- every rubric node starts with an authoritative `backend_state` or `answer_match` check. The other tasks need UI
+  evidence recorded by WebArena-Pro's own Playwright browser or an LLM judge, which would favor the Playwright arm.
+
+The tasks are multi-step and some span sites, e.g. book the cheapest June weekend trip with flights and lodging, register
+for a course that fits a schedule, or reply to every unread email.
+
+### Setup
+
+```sh
+brew install colima docker            # Apple Silicon: amd64 images run under Rosetta
+colima start --vm-type vz --vz-rosetta --cpu 4 --memory 5 --disk 30
+export DOCKER_HOST="unix://$HOME/.colima/default/docker.sock"
+git clone https://github.com/McGill-NLP/webarena-pro.git && cd webarena-pro/webarena-pro-core
+uv sync --python 3.12 --locked
+PLAYWRIGHT_SKIP_BROWSER_GC=1 uv run python -m playwright install firefox   # without the flag it deletes other Firefox builds
+WP_URL_MODE=port uv run webarena-pro env start flight-search jobportal minerva-lite password-manager \
+  pipedrive thunderbird travelmap x-lite --wait-timeout 300
+export BENCH_WAP_CORE="$PWD"
+```
+
+Kitsune runs against a private bridge and headless Firefox loading a given checkout's extension. Start one and export
+the `BENCH_KITSUNE_*` variables from its `env.json`:
+
+```sh
+python3 scripts/kitsune_runtime.py ../../kitsune /tmp/kitsune-rt &   # prints "ready <revision>"
+eval "$(python3 -c "import json;d=json.load(open('/tmp/kitsune-rt/env.json'));print(' '.join(f'export {k}={v}' for k,v in d.items() if k.startswith('BENCH_')))")"
+uv run --directory "$BENCH_WAP_CORE" python "$PWD/framework/wap_core.py" control /tmp/wap-control   # every task must fail
+python3 scripts/run.py --suite webarena-pro --execute --browser-mode existing-profile \
+  --arm-mode playwright=isolated --arm-mode kitsune=isolated --harness claude --model claude-opus-5-5 \
+  --out runs/wap/claude.jsonl
+```
+
+### Per attempt
+
+1. Each of the task's sites is recreated from its seed image. In-place restore is not used: pipedrive's
+   `restore-seed-if-empty` keeps earlier attempts' records. Core then signs in the task's user with Playwright Firefox
+   and saves a storage state.
+2. The harness signs the arm's browser in before the agent starts, as in the paper:
+
+   | Arm | Sign-in |
+   |---|---|
+   | Playwright MCP | `--storage-state` with the saved cookies |
+   | Kitsune | `cookies.set` through the private bridge |
+   | EgoLite | CDP `Network.setCookie` in the TaskSpace page |
+   | Aside | the site's login form, through the REPL (`framework/wap_login.js`); the REPL exposes no cookie or CDP API |
+
+3. The prompt gives the intent, the site URLs, a UI-only rule and asks for a final `FINAL ANSWER: <answer>` line
+   (`done` for action-only tasks). The default timeout is 600 s, the paper's wall budget.
+4. `framework/wap_core.py grade` runs the task's evaluation DAG with that answer as `send_msg_to_user(...)`.
+   `pass` requires a full score. Each row records `score`, `answer` and the per-rubric `rubrics` trail.
+
+Limits:
+
+- **No LLM judge or UI evidence.** A rubric that the backend check does not prove falls through to strategies that
+  get no evidence here, so it fails. This is stricter than the paper, and scores are not comparable to its 62.3%.
+- No step budget is enforced, only the wall time. Media tools are not offered (the subset has no media tasks).
+- minerva-lite, travelmap and x-lite all use a cookie named `session` on `localhost`, so a browser can be signed in to
+  only one of them at a time; no selected task uses two of them.
+- Aside and EgoLite use the operator's profiles, so `localhost` cookies remain there and Aside fixture tabs stay open.
 
 ## Running
 

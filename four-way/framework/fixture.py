@@ -14,6 +14,33 @@ def render(task):
 
 
 @contextmanager
+def launch():
+    """A blank page at a unique URL, so a CLI arm can find and attach the task tab before it leaves for a site."""
+    path = '/' + token_urlsafe(18)
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            if self.path != path:
+                return self.send_error(404)
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/html; charset=utf-8')
+            self.end_headers()
+            self.wfile.write(b'<!doctype html><title>Benchmark task</title>')
+
+        def log_message(self, *args):
+            pass
+
+    with ThreadingHTTPServer(('127.0.0.1', 0), Handler) as server:
+        thread = Thread(target=server.serve_forever, kwargs={'poll_interval': 0.05})
+        thread.start()
+        try:
+            yield f'http://127.0.0.1:{server.server_port}{path}'
+        finally:
+            server.shutdown()
+            thread.join()
+
+
+@contextmanager
 def fixture(task):
     path = '/' + token_urlsafe(18)
     submissions = []

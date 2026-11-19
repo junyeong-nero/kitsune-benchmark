@@ -9,6 +9,13 @@ def _text(value, limit=300):
     return str(value or '')[:limit]
 
 
+def final_answer(text):
+    """Text after the last 'FINAL ANSWER:' marker, else None (fixture tasks never ask for one)."""
+    text = str(text or '')
+    at = text.rfind('FINAL ANSWER:')
+    return text[at + len('FINAL ANSWER:'):].strip().strip('`*').strip() if at >= 0 else None
+
+
 def _events(stdout):
     events = []
     for line in stdout.splitlines():
@@ -44,7 +51,8 @@ def claude(stdout):
     return {'completed': bool(result) and not result.get('is_error') and result.get('subtype') == 'success',
             'turns': (result or {}).get('num_turns'), 'cost_usd': (result or {}).get('total_cost_usd'),
             'tokens': tokens, 'tool_calls': sum(tools.values()), 'tools': dict(tools), 'tool_errors': errors,
-            'final_message': _text((result or {}).get('result') or final, 600)}
+            'final_message': _text((result or {}).get('result') or final, 600),
+            'final_answer': final_answer((result or {}).get('result') or final)}
 
 
 def codex(stdout):
@@ -80,7 +88,7 @@ def codex(stdout):
             warnings.append(_text(e.get('message')))
     return {'completed': turns > 0 and not failed, 'turns': turns or None, 'cost_usd': None, 'tokens': tokens,
             'tool_calls': sum(tools.values()), 'tools': dict(tools), 'tool_errors': errors,
-            'harness_warnings': warnings, 'final_message': _text(final, 600)}
+            'harness_warnings': warnings, 'final_message': _text(final, 600), 'final_answer': final_answer(final)}
 
 
 def summarize(harness, stdout):
