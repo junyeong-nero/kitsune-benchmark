@@ -1,8 +1,7 @@
 """Start a private Kitsune runtime (bridge + headless Firefox with that checkout's extension) for isolated runs.
 
-Follows kitsune_benchmark/native.py: the extension is copied with only its WS port changed, the bridge gets a
-private home, ports and token, and nothing touches the user's profile or default bridge. Writes the BENCH_KITSUNE_*
-variables for scripts/run.py to --env and stays up until interrupted.
+Only the extension copy's WS port changes. The bridge gets private ports, home and token. Publish env.json
+once both bridge and extension are ready; stop the owned child groups when interrupted.
 """
 import argparse
 import json
@@ -74,12 +73,16 @@ def main():
         return procs[-1]
 
     def stop(*_):
+        raise SystemExit(0)
+
+    def cleanup():
         for proc in procs:
             try:
                 os.killpg(proc.pid, signal.SIGTERM)
             except ProcessLookupError:
                 pass
-        raise SystemExit(0)
+        for proc in procs:
+            proc.wait(timeout=15)
 
     signal.signal(signal.SIGTERM, stop)
     signal.signal(signal.SIGINT, stop)
@@ -89,20 +92,24 @@ def main():
         browser = spawn([str(ROOT / 'node_modules/.bin/web-ext'), 'run', '--no-config-discovery', '--no-input',
                          '--source-dir', str(folder / 'extension'), '--artifacts-dir', str(folder / 'web-ext'),
                          '--firefox', firefox, '--no-reload', '--start-url', 'about:blank',
-                         '--args=--width=1280', '--args=--height=805', '--args=-headless'], 'firefox.log')
+                         '--args=--width=1280', '--args=--height=805', '--args=-headless',
+                         # Bound memory on small hosts: few content processes (one per site under Fission).
+                         '--pref=dom.ipc.processCount=2', '--pref=dom.ipc.processCount.webIsolated=1'], 'firefox.log')
         s = wait(http, token, browser, extension=True)
-        revision = subprocess.run(['git', '-C', str(checkout), 'rev-parse', '--short', 'HEAD'],
-                                  capture_output=True, text=True).stdout.strip()
-        (folder / 'env.json').write_text(json.dumps({
+        revision = (subprocess.check_output(['git', '-C', str(checkout), 'rev-parse', '--short', 'HEAD'],
+                                            text=True).strip() if (checkout / '.git').exists() else 'export')
+        pending = folder / 'env.tmp'
+        pending.write_text(json.dumps({
             'BENCH_KITSUNE': str(checkout / '.venv/bin/kitsune'), 'BENCH_KITSUNE_HTTP_PORT': str(http),
             'BENCH_KITSUNE_TOKEN': token, 'BENCH_KITSUNE_HOME': str(folder / 'home'),
             'revision': revision, 'build': s.get('build') or s.get('version')}))
+        pending.replace(folder / 'env.json')
         print('ready', revision, flush=True)
         while all(proc.poll() is None for proc in procs):
             time.sleep(1)
         raise SystemExit('bridge or browser exited')
     finally:
-        stop()
+        cleanup()
 
 
 if __name__ == '__main__':

@@ -1,4 +1,0 @@
-{
-  "id": "example-domain",
-  "prompt": "Use the browser MCP to open https://example.com in a new tab. Report the page heading and the destination URL of the 'Learn more' link. Do not submit forms, modify accounts, or navigate unrelated existing tabs."
-}
