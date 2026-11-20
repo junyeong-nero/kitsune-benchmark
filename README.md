@@ -8,7 +8,22 @@ view, along with tokens, time and local CPU/RAM.
 **Docs:** [Overview](docs/README.md) · [Running guide](docs/running.md) · [Results](docs/results/README.md) ·
 [Results by Kitsune version](docs/results/kitsune-versions.md)
 
-## Latest result: four-way, 12 tasks (2026-11-19)
+## Latest result: WebArena-Pro four-way, 26 tasks (2026-11-20)
+
+[![Four-way benchmark, 26 WebArena-Pro tasks under Claude Code, 104 attempts: Kitsune and Playwright MCP passed 13, Aside and EgoLite 12; Kitsune used the least input (283k tokens per attempt, Playwright MCP 660k) and EgoLite made the fewest tool calls (12.8, Kitsune 14.0)](docs/assets/2026-11-20-webarena-pro-four-way.svg)](docs/results/2026-11-20-webarena-pro-four-way.md)
+
+Aside, EgoLite, Playwright MCP and Kitsune on 26 [WebArena-Pro](https://arxiv.org/abs/2611.17955) tasks, under Claude
+Code (`claude-opus-5-5`), graded by backend state and answers without an LLM judge
+([report](docs/results/2026-11-20-webarena-pro-four-way.md),
+[suite](four-way/README.md#webarena-pro-subset---suite-webarena-pro)). The Codex run is still in progress.
+
+- **Success:** tied. Kitsune and Playwright MCP passed 13/26, Aside and EgoLite 12/26, and all four passed the same
+  12 tasks.
+- **Cost:** Kitsune used the least input (283k tokens per attempt incl. cache; Playwright MCP 660k). On the tasks
+  every arm passed it used 39% of Playwright MCP's input. EgoLite made the fewest tool calls (12.8; Kitsune 14.0).
+- **Not comparable to the paper's 62.3%:** grading has no LLM judge, and 11 of the 13 shared misses ended at it.
+
+## Four-way, 12 tasks (2026-11-19)
 
 [![Four-way benchmark, 12 local tasks, 96 attempts: Kitsune used the fewest tool calls and least input under Claude Code and Codex, and missed one task (a native confirm() dialog) under both](docs/assets/2026-11-19-four-way.svg)](docs/results/2026-11-19-four-way-12-task.md)
 

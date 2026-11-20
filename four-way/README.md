@@ -10,11 +10,13 @@ interface, not only browser speed.
 - `scripts/run.py`: plans and runs attempts, rotates arm order, writes JSONL results and raw transcripts
 - `scripts/analyze.py`: report on success, tool calls, token usage, recurring tool errors and failure causes
 - `scripts/publish.py`: builds the test set and run logs as a Hugging Face dataset and uploads it
-- `scripts/figure.py`: renders the summary SVG from `summary.json`, with icons from `figure-icons/`
+- `scripts/figure.py`: renders the summary SVG from `summary.json` (`--suite webarena-pro` for that suite's figure),
+  with icons from `figure-icons/`
 - `scripts/kitsune_runtime.py`: starts a private Kitsune bridge and headless Firefox for a given checkout
 - `framework/wap_core.py`, `framework/wap_login.js`: WebArena-Pro reset, sign-in and grading (see below)
 
-Run every command from this directory. Results: [2026-11-19 report](../docs/results/2026-11-19-four-way-12-task.md).
+Run every command from this directory. Results: [2026-11-19 report](../docs/results/2026-11-19-four-way-12-task.md)
+(12 fixtures) and [2026-11-20 report](../docs/results/2026-11-20-webarena-pro-four-way.md) (WebArena-Pro subset).
 
 ## Test set
 
