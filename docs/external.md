@@ -1,7 +1,7 @@
 # External track (`external-v1`): MiniWoB++ and live sites
 
 [Documentation index](README.md) · [Running guide](running.md) ·
-[Task catalog](../tasks/external/catalog.json) ·
+[Task catalog](https://github.com/junyeong-nero/kitsune-benchmark/blob/1ef91e1/tasks/external/catalog.json) ·
 [Historical MiniWoB result](results/2026-10-18-miniwob.md)
 
 **Scope:** 10 tasks that were not written for this repository's fixtures.

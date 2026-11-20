@@ -1,6 +1,6 @@
 # Four-way, 12 tasks: Aside, EgoLite, Playwright MCP and Kitsune under Claude Code and Codex
 
-[Results index](README.md) · [Suite and running guide](../../four-way/README.md)
+[Results index](README.md) · [Suite and running guide](https://github.com/junyeong-nero/kitsune-benchmark/blob/1ef91e1/four-way/README.md)
 
 ![Four-way benchmark, 12 local tasks, 96 attempts. Success, Claude Code / Codex: Aside 12/12 and 12/12; EgoLite 12/12 and 11/12; Playwright MCP 12/12 and 10/12; Kitsune 11/12 and 10/12. Mean input tokens per attempt, Claude / Codex: Aside 53k / 79k; EgoLite 71k / 76k; Playwright 65k / 93k; Kitsune 31k / 66k. Mean tool calls: Aside 4.7 / 4.8; EgoLite 4.0 / 3.5; Playwright 7.1 / 5.9; Kitsune 3.2 / 2.9.](../assets/2026-11-19-four-way.svg)
 
@@ -34,7 +34,7 @@ These are single attempts per task and agent. Read differences of one task as ob
 | EgoLite | `ego-browser` 0.6.3.14 (Chromium 156), `nodejs`, existing profile, new TaskSpace per attempt |
 | Playwright MCP | 0.0.83, `--browser firefox --isolated --headless`\*\* |
 | Kitsune | `kitsune-browser` 0.8.0, main `bc372d1`, existing profile (Firefox), user tabs `read-only` |
-| Tasks | 12 original local fixtures ([list](../../four-way/README.md#test-set)), 1 repeat, 240 s timeout |
+| Tasks | 12 original local fixtures ([list](https://github.com/junyeong-nero/kitsune-benchmark/blob/1ef91e1/four-way/README.md#test-set)), 1 repeat, 240 s timeout |
 | Plan | 12 tasks × 4 arms × 2 agents = 96 attempts; the starting arm rotates per task |
 | Grading | the fixture server's received form posts; pass = exactly one correct submission |
 

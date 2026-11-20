@@ -12,7 +12,7 @@ Compare Playwright MCP and Kitsune MCP on **continuing work inside an existing
 browser session**, not just opening an empty browser and following a URL.
 
 - **36 specifications:** nine categories, four tasks each, in
-  [`tasks/personal/catalog.json`](../tasks/personal/catalog.json). `taskset-v3.5`
+  [`tasks/personal/catalog.json`](https://github.com/junyeong-nero/kitsune-benchmark/blob/1ef91e1/tasks/personal/catalog.json). `taskset-v3.5`
   (28 tasks) is the current frozen tag; the eight civic-document and
   authenticated-service tasks are the [taskset-v4 preparation](#civic-documents-and-authenticated-services-taskset-v4-preparation).
 - **All 36 tasks are runnable local fixtures.** The original six (one per
@@ -23,7 +23,7 @@ browser session**, not just opening an empty browser and following a URL.
   starting tab's own URL.
 - **Three deterministic data variants** (`0`, `1`, `2`) per runnable task.
   These are different inputs, not three identical repeated trials.
-- Configuration: [`configs/benchmarks/personal.json`](../configs/benchmarks/personal.json),
+- Configuration: [`configs/benchmarks/personal.json`](https://github.com/junyeong-nero/kitsune-benchmark/blob/1ef91e1/configs/benchmarks/personal.json),
   model `gpt-6-luna`, reasoning `medium`, Codex CLI `0.163.0`.
 - **Actual model evaluation:** all six runnable tasks, variant 0, one attempt per
   MCP on `gpt-6-luna` on 2026-10-19. All 12 runs were scorable; current overall

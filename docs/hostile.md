@@ -1,6 +1,6 @@
 # Hostile-UI capability matrix (draft)
 
-[Documentation index](README.md) · [Catalog](../tasks/hostile/catalog.json) ·
+[Documentation index](README.md) · [Catalog](https://github.com/junyeong-nero/kitsune-benchmark/blob/1ef91e1/tasks/hostile/catalog.json) ·
 [First results](results/2026-10-29-hostile-headless.md)
 
 **Purpose.** Simple HTML pages accept almost any input. Real sites often do not: handlers check `isTrusted`, menus
@@ -11,7 +11,7 @@ asks "does an agent find the way?".
 
 ## Components
 
-Two layers in [`tasks/hostile/catalog.json`](../tasks/hostile/catalog.json):
+Two layers in [`tasks/hostile/catalog.json`](https://github.com/junyeong-nero/kitsune-benchmark/blob/1ef91e1/tasks/hostile/catalog.json):
 
 - **Defense catalog (17):** hand-written pages in `kitsune_benchmark/hostile_pages.py`. Each page isolates one
   mechanism, so a failure names its cause:
