@@ -12,8 +12,10 @@ evidence, LLM judge) get no evidence here and cannot award credit; a node a back
 from datetime import date
 import json
 from pathlib import Path
+import os
 import sys
 import time
+import urllib.request
 
 from webarena_pro_core.autologin.sync_api import AutoLogin
 from webarena_pro_core.eval.dag import DAGEvaluator, EvalContext, parse_eval_dag
@@ -60,12 +62,21 @@ def tasks():
 def prepare(task_id, folder):
     _, task = subset()[task_id]
     folder = Path(folder)
-    folder.mkdir(parents=True, exist_ok=True)
+    folder.mkdir(mode=0o700, parents=True, exist_ok=True)
     login = AutoLogin()
     credentials = {}
     for site in task.sites:
         # Recreate from the seed image: some in-place restores (pipedrive's restore-seed-if-empty) keep mutations.
         reset_site(site, backend='container')
+    if 'flight-search' in task.sites:
+        # Its backend geolocates the host's public IP (currency, nearby airports). Without container egress it falls
+        # back to New York/USD, the paper's conditions; anything else means the egress block is missing.
+        url = deployed_website_urls(['flight-search'])['flight-search'] + '/api/geolocation'
+        with urllib.request.urlopen(url, timeout=30) as response:
+            geo = json.load(response)
+        if (geo.get('country_code'), geo.get('currency')) != ('US', 'USD'):
+            raise RuntimeError(f'flight-search geolocated to {geo.get("country_code")}/{geo.get("currency")}; '
+                               'block container internet egress (see README)')
     for site, user in _users(task).items():
         login.save_storage_state(site, folder / f'{site}.json', username=user, browser_name='firefox')
         if site == 'flight-search':
@@ -78,7 +89,8 @@ def prepare(task_id, folder):
     start = {'task_start_time_ms': int(time.time() * 1000), 'task_start_date': date.today().isoformat(),
              'urls': deployed_website_urls(task.sites), 'credentials': credentials}
     (folder / 'prepare.json').write_text(json.dumps(start))
-    return {'ok': True, 'sites': list(task.sites)}
+    # Everything the harness needs, so it can run on another machine than Core (e.g. a codespace).
+    return {**start, 'states': {site: json.loads((folder / f'{site}.json').read_text()) for site in task.sites}}
 
 
 def grade(task_id, folder, answer):
@@ -104,6 +116,7 @@ def control(folder):
 
 
 if __name__ == '__main__':
+    os.umask(0o077)  # Core writes temporary storage states, including on a shared remote host.
     command, *args = sys.argv[1:]
     result = {'tasks': tasks, 'prepare': prepare, 'grade': grade, 'control': control}[command](*args)
     print(json.dumps(result, default=str))

@@ -1,142 +1,67 @@
-# Kitsune Benchmark
+# Kitsune browser benchmark
 
-Does an AI agent do everyday browser work as well with **Kitsune MCP** as with **Playwright MCP**, and does it leave
-the user's browser alone while it works? This repository runs both on the same tasks, with the same model and tool
-allowlist. The results are checked from outside the agent: the apps' saved state, the tabs left behind and the user's
-view, along with tokens, time and local CPU/RAM.
+One benchmark: **26 WebArena-Pro tasks × two subscription models × four browser tools = 208 attempts**. Run Claude Code (`claude-opus-5-5`) first, then Codex (`gpt-6.1-sol`). Each gets one attempt with Aside CLI REPL, EgoLite CLI, Playwright MCP and Kitsune MCP. Attempts are serial; starting arm rotates by task. The first 19 tasks are test, the last seven dev.
 
-**Docs:** [Overview](docs/README.md) · [Running guide](docs/running.md) · [Results](docs/results/README.md) ·
-[Results by Kitsune version](docs/results/kitsune-versions.md)
+[Latest report: results, tokens and tool calls for both models](docs/results/2026-11-20-webarena-pro-four-way.md) · [Past reports](docs/results/README.md) · [Retired harnesses and their instructions](https://github.com/junyeong-nero/kitsune-benchmark/tree/1ef91e1)
 
-## Latest result: four-way, 12 tasks (2026-11-19)
+```sh
+python3 benchmark.py                                 # print the plan; no model/browser/site access
+python3 benchmark.py --execute                       # after setup: all 208, output under runs/
+python3 benchmark.py --execute --task wap-199 --out runs/smoke  # optional 8-cell smoke
+```
 
-[![Four-way benchmark, 12 local tasks, 96 attempts: Kitsune used the fewest tool calls and least input under Claude Code and Codex, and missed one task (a native confirm() dialog) under both](docs/assets/2026-11-19-four-way.svg)](docs/results/2026-11-19-four-way-12-task.md)
-
-Aside, EgoLite, Playwright MCP and Kitsune on 12 original local tasks, under Claude Code (`claude-opus-5-5`) and
-Codex (`gpt-6.1-sol`), graded by what the server received ([report](docs/results/2026-11-19-four-way-12-task.md),
-[suite](four-way/README.md)):
-
-- **Success:** 90/96. Kitsune 11/12 and 10/12; it missed the native `confirm()` task under both agents.
-- **Cost:** Kitsune had the fewest tool calls (3.2 / 2.9 per attempt) and the least input (31k / 66k tokens incl.
-  cache). Playwright MCP made the most calls (7.1 / 5.9).
-- **Problems found:** a blocking dialog in Kitsune, checkbox state missing from EgoLite snapshots, and lost refs
-  between Aside's one-shot REPL calls.
-
-## Kitsune v0.7.2 release
-
-[![Kitsune v0.7.2 vs Playwright MCP 0.0.83, lite plan: kept the user's tab in front in 28 of 28 tasks vs 2 of 28; list-price cost on tasks both solved 0.97× personal, 0.56× crowded, 0.87× isolated; task success 96 of 98 vs 98 of 98](docs/assets/2026-11-04-v0.7.2-chart.png)](docs/results/2026-11-04-opus-subscription-v0.7.2.md)
-
-Claude Opus 5.5 through Claude Code, `taskset-v3.2`, lite plan (two data variants), one run per task, 306 runs
-([report](docs/results/2026-11-04-opus-subscription-v0.7.2.md)):
-
-- **The user's view:** Kitsune never moved it in 28 coexistence tasks. Playwright MCP moved it in 26. When the user
-  was typing, Kitsune kept their input in 3 of 3 runs and Playwright in 0 of 3.
-- **Success:** Playwright 98/98, Kitsune 96/98 on the personal and gallery tasks. Kitsune's two misses are one task,
-  `pb-tabs-03`, in two variants. The user's tab stayed in front, but the grader reads Kitsune's `current` tab
-  ([#94](https://github.com/junyeong-nero/kitsune-benchmark/issues/94)).
-- **Input on tasks both solved, Kitsune / Playwright:** personal 0.985, crowded gallery 0.625, isolated gallery 0.962.
-  External MiniWoB++ tasks: 7/7 both.
-
-These are single attempts, so read the differences as observations, not a ranking. Earlier releases:
-[v0.7.1](docs/results/2026-10-29-opus-subscription-v0.7.1.md), [v0.7.0](docs/results/2026-10-26-opus-subscription-v0.7.0.md).
-
-## What it measures
-
-| Track | What the agent does | Graded by |
-| --- | --- | --- |
-| [Personal browsing](docs/personal-browsing.md) | 36 tasks in already-open tabs and a signed-in test session: look things up, fill in drafts, don't submit or close what it shouldn't; eight civic-document and authenticated-service tasks are new in the v4 preparation | The local apps' saved state and the tabs it leaves |
-| [Component gallery](docs/gallery.md) | 21 tasks: custom widgets, shadow DOM, iframes, media puzzles and one hand-off, on a crowded page and one at a time | Each task's recorded outcome |
-| [Coexistence](docs/coexistence.md) | The 36 personal tasks while a user is in the browser: tabs the user opened, a watched view, a user typing (`coexistence-local-v3` preparation) | Personal grading plus the user's view and input |
-| [External](docs/external.md) | 7 MiniWoB++ tasks and 3 live sites (Steam, Wikipedia, MDN) | MiniWoB++'s own reward; live tasks are recorded, not graded |
-| [Full native](docs/full-native.md) (Kitsune only, not run yet) | 14 of those tasks with Kitsune's own tool groups: `KITSUNE_CAPS=core` vs `all` + the tool gateway, reported apart from the head-to-head | The tracks' own graders, plus gateway use, batch steps and capability errors |
-| [Hostile UI](docs/hostile.md) (draft, no model) | 26 real-web components that resist automation | Scripted tool strategies |
-
-The personal and gallery apps are synthetic and local. No real account or everyday browser profile is used.
-`main` prepares `taskset-v4`; `taskset-v3.5` remains the latest frozen tag. The expanded 36-task totals are not
-comparable with the 28-task results above. See the [upgrade protocol](docs/results/kitsune-versions.md#preparing-taskset-v4).
+`npm run benchmark -- --execute` is equivalent. Each execution creates a **new** output directory, with a plan, private transcripts and a flushed `results.jsonl`. A recorded task failure or 600-second agent timeout does not stop the matrix. Infrastructure and other agent errors stop it for inspection; never interpret a partial run as 208 failures. No automatic quota retry or resume. Do not publish the raw directory: it may contain site data and auth material.
 
 ## Setup
 
-Needs Python 3.11+, uv, Node/npm, Claude Code logged in to a claude.ai subscription, and a Kitsune checkout
-(`../kitsune` by default).
+**Agent host (tested on macOS).** Install Python 3.10+, Node/npm, and authenticated `claude` and `codex` CLIs with access to the models above. Install/open the signed Aside and EgoLite apps and ensure `aside` and `ego-browser` are on PATH. These two arms **use the active app profiles**; use a dedicated OS account. The Codex CLI arms need `danger-full-access` to reach the local apps; their UI-only restriction is an instruction, not an OS sandbox. Use only trusted benchmark sites. Playwright and Kitsune launch isolated headless Firefox. Do not start a second benchmark on the same sites/profiles.
 
 ```sh
-uv sync --locked
-npm ci --ignore-scripts --no-audit --no-fund
-npm run setup:firefox
+npm ci && npm run setup:firefox
+# A separate checkout, not the user's running Kitsune installation:
+git clone https://github.com/junyeong-nero/kitsune.git ../kitsune-bench-runtime
+git -C ../kitsune-bench-runtime checkout 4e6d6fb
+uv sync --locked --directory ../kitsune-bench-runtime
+export BENCH_KITSUNE_CHECKOUT="$(cd ../kitsune-bench-runtime && pwd)"
+export BENCH_PLAYWRIGHT="$PWD/node_modules/.bin/playwright-mcp"
 ```
 
-This pins Playwright MCP `0.0.83`, web-ext `10.8.0` and a private Firefox. Every run gets a fresh profile and its own
-Kitsune bridge ports.
-
-## Run
+**Site host.** Use a disposable Linux Docker host with `uv`, preferably separate from a memory-constrained agent host. Site resets destroy changes. Use the upstream revision below and disable **container internet egress** on this host while allowing localhost/forwarded clients to access the sites. The flight-search backend otherwise geolocates the host; prepare rejects an environment other than US/USD.
 
 ```sh
-# Check the CLI and the login; no model calls.
-uv run --locked python -m kitsune_benchmark doctor --json
-
-# Plan one task pair; no browser or model calls.
-uv run --locked python -m kitsune_benchmark personal --task pb-current-01 --variant 0
-
-# Run it: two agent runs on your subscription. Without --task, --execute runs the six-task pilot (12 runs).
-uv run --locked python -m kitsune_benchmark personal --task pb-current-01 --variant 0 --execute
-
-# A v4-preparation lite cohort (362 agent runs), then its review. Freeze/tag before release comparisons.
-uv run --locked python scripts/run-full-suite.py --plan lite \
-  --kitsune-project artifacts/vendor/kitsune-v0.7.2 --out artifacts/my-suite
-uv run --locked python scripts/analyze-release.py artifacts/my-suite
+git clone https://github.com/McGill-NLP/webarena-pro.git
+git -C webarena-pro checkout 42f4a076
+cd webarena-pro/webarena-pro-core
+uv sync --python 3.12 --locked
+PLAYWRIGHT_SKIP_BROWSER_GC=1 uv run python -m playwright install firefox
+WP_URL_MODE=port uv run webarena-pro env start flight-search jobportal minerva-lite password-manager pipedrive thunderbird travelmap x-lite --wait-timeout 300
+export BENCH_WAP_CORE="$PWD"  # set this on the agent host too, to this site-host path
 ```
 
-By default runs use Claude Code on the subscription: they count against your plan, use no API credit and never fall
-back to an API key. API billing (`--harness claude-api --allow-api-billing`) and Codex (`--harness codex`) are opt-in.
-The [running guide](docs/running.md) covers every track, budgets, stopping and exit codes.
-
-## Model-free concurrency benchmark
+On a disposable Linux Docker host using the default `172.17.0.0/16` bridge and iptables backend, the run used these forwarding rules (adapt to your actual bridge; reapply after a host restart). They affect containers on that bridge, not just the selected apps:
 
 ```sh
-uv run --locked python -m kitsune_benchmark stress --profile release-v1          # plan only
-uv run --locked python -m kitsune_benchmark stress --profile release-v1 --execute
+sudo iptables -I DOCKER-USER -s 172.17.0.0/16 -m conntrack --ctstate NEW ! -d 10.0.0.0/8 -j REJECT
+sudo iptables -I DOCKER-USER -s 172.17.0.0/16 -d 172.16.0.0/12 -j RETURN
+sudo iptables -I DOCKER-USER -s 172.17.0.0/16 -d 192.168.0.0/16 -j RETURN
 ```
 
-One private shared browser, 1–32 MCP clients, three repeats; **no agent/model calls**.
-The full-suite script includes this separate track before model work (`--skip-stress`
-is the recorded opt-out). It does not change graded task scores or the frozen
-taskset. See [protocol and safety limits](docs/stress.md) and the
-[first published observation](docs/results/2026-10-26-kitsune-stress-v1.md).
-
-For a fresh, counter-ordered **Kitsune vs Playwright shared-browser comparison**:
+For local Core, put `uv` on PATH and leave `BENCH_WAP_SSH` unset. For a Codespace, install Core and start the sites there, then on the agent host:
 
 ```sh
-uv run --locked python -m kitsune_benchmark stress-compare --profile shared-browser-v1 --execute
+export CS=your-codespace-name
+gh codespace cp four-way/framework/wap_core.py "remote:/tmp/wap_core.py" -c "$CS"
+export BENCH_WAP_SSH="gh codespace ssh -c $CS --" BENCH_WAP_SCRIPT=/tmp/wap_core.py
+export BENCH_WAP_CORE=/absolute/remote/path/to/webarena-pro-core
+gh codespace ports forward 3001:3001 4601:4601 4701:4701 5201:5201 7001:7001 7101:7101 9101:9101 3201:3201 -c "$CS"  # leave running in another terminal
 ```
 
-This is separate `stress-compare-v1` evidence, not pooled with the standalone
-Kitsune track. In a full suite, `--stress-comparison` selects it instead of the
-Kitsune-only prelude. See [protocol](docs/stress-comparison.md) and
-[paired results](docs/results/2026-10-26-shared-browser-stress-comparison.md).
+Check credentials/quota, site availability, disk and memory **before** a full run. The runner does not start, pay for, or stop a Codespace. Stop forwarding and stop/delete the disposable site host and its private `/tmp/wap-bench/` auth states when finished.
 
-## Tests
+## Measurement
 
-```sh
-# No model calls.
-uv run --locked python -m unittest discover -s tests
+Every attempt recreates its sites from seed and signs the assigned browser in **before** starting the timer. Core grades final server state and/or the `FINAL ANSWER:` value. No credit from agent claims or a trajectory judge. `agent_seconds` excludes setup and grading. `input` includes cache reads; `cached_input` is a subset, not additional tokens. Do not equate tool calls with individual clicks: CLI scripts and Kitsune Python calls can batch operations. See the [task manifest](four-way/testset/webarena-pro.json) and report for selection criteria and limitations.
 
-# Real Firefox and both MCP servers, still no model calls.
-PERSONAL_BROWSER_TEST=1 PERSONAL_KITSUNE_TEST=1 \
-  uv run --locked python -m unittest discover -s tests -p 'test_personal.py'
-PERSONAL_BROWSER_TEST=1 PERSONAL_KITSUNE_TEST=1 \
-  uv run --locked python -m unittest discover -s tests -p 'test_coexistence.py'
-```
+To summarize a new run and export shareable metrics without transcripts: `python3 summary.py runs/<timestamp>/results.jsonl --csv metrics.csv`.
 
-## Reading the results
-
-- Look at `scorable` and `task_success` from the grader, not at the exit code or the agent's final answer.
-- Input tokens already include cached input. Cost figures are Claude Code's list-price estimate, not what a
-  subscription charges.
-- Elapsed time includes the harness's own setup calls. The two targets often run at the same time, so time is measured
-  under shared load. Summed RSS is not unique memory.
-- A result describes a model + harness + MCP configuration on these tasks. Compare Kitsune versions only on the same
-  [taskset tag](docs/results/kitsune-versions.md#frozen-taskset).
-- Raw logs, profiles and session state stay in the gitignored `artifacts/`. Review them before you share anything.
-
-WebArena-style tasks, real personal accounts and repeated, counterbalanced runs are future work.
+Offline checks: `python3 -m unittest discover -s tests -v`. No agent, browser or network credentials required.

@@ -1,9 +1,0 @@
-{
-  "id": "component-gallery-v2",
-  "model": "gpt-6-luna",
-  "reasoning_effort": "medium",
-  "codex_version": "0.163.0",
-  "claude_code": {"model": "claude-opus-5-5", "effort": "medium", "version": "2.1.303", "max_budget_usd_per_run_by_model": {"claude-opus-5-5": 1.0, "claude-sonnet-5-5": 0.5, "claude-haiku-5-5": 0.1}},
-  "timeout_sec": 240,
-  "purpose": "Synthetic modern-component and multimodal gallery; tool capability and judgement probes, not an upstream benchmark score"
-}

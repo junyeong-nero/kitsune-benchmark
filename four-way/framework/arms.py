@@ -140,8 +140,8 @@ def surface(arm, settings, folder, url, mode='isolated', login=None):
                 'is already the fixture. Variables do not persist between calls. Never call openTab, closeTab, '
                 'listBrowserTabs or attachBrowserTab yourself.')
         # REPL sessions cannot close app-opened tabs (closeTab only detaches) and goto(about:/data:) never reports
-        # readiness on them. Leave the dead fixture tab for the operator.
-        close = None
+        # readiness on them. Blank the tab from the page instead, so finished tabs hold no site memory.
+        close = attach + 'await page.evaluate(() => { setTimeout(() => location.replace("about:blank"), 0); });'
     else:
         guide = vendor([settings[0], 'skill'])
         receipt = vendor(settings, f'const t=await taskSpace("bench-{uuid4().hex}");console.log("SPACE="+t.spaceId)')
@@ -158,9 +158,15 @@ def surface(arm, settings, folder, url, mode='isolated', login=None):
         if arm == 'egolite':
             page = f'const p=(await taskSpace({space})).page("p1");\n'
             if login:
-                cookies = [{k: c[k] for k in ('name', 'value', 'domain', 'path', 'httpOnly', 'secure', 'sameSite')}
+                # Core logs in with Firefox, which records an unspecified SameSite as "None". Chromium rejects
+                # SameSite=None without Secure, so send those as unspecified (Chromium's Lax default), as the server did.
+                cookies = [{k: c[k] for k in ('name', 'value', 'domain', 'path', 'httpOnly', 'secure')}
+                           | ({'sameSite': c['sameSite']} if c.get('sameSite') != 'None' or c.get('secure') else {})
                            | ({'expires': c['expires']} if c.get('expires', -1) > 0 else {}) for _, c in _cookies(login)]
-                vendor(settings, page + f'for (const c of {json.dumps(cookies)}) await p.cdp("Network.setCookie", c);')
+                out = vendor(settings, page + f'for (const c of {json.dumps(cookies)}) {{ const r = await p.cdp("Network.setCookie", c); '
+                             'if (!r.success) console.log("COOKIE_REJECTED " + c.name); }')
+                if 'COOKIE_REJECTED' in out:
+                    raise ValueError('EgoLite rejected a sign-in cookie: ' + out.strip()[-200:])
             vendor(settings, page + f'await p.goto({json.dumps(url)})')
         yield ({}, 'Bash', 'Bash(./browser:*)', f'Use Bash only as ./browser followed by one quoted JavaScript argument. {hint}\nCLI reference:\n{guide}')
     finally:

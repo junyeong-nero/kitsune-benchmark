@@ -4,7 +4,8 @@
   "private": true,
   "description": "Pinned local tools for isolated Firefox smoke runs",
   "scripts": {
-    "setup:firefox": "node scripts/install-firefox.mjs"
+    "benchmark": "python3 benchmark.py",
+    "setup:firefox": "PLAYWRIGHT_SKIP_BROWSER_GC=1 playwright install firefox"
   },
   "dependencies": {
     "@playwright/mcp": "0.0.83",

@@ -30,7 +30,8 @@ def claude(stdout):
     tools, errors, final, result = Counter(), [], '', None
     names = {}
     for e in _events(stdout):
-        content = (e.get('message') or {}).get('content') or []
+        message = e.get('message')  # some events (e.g. system notices) carry a plain string here
+        content = (message.get('content') if isinstance(message, dict) else None) or []
         if e.get('type') == 'assistant':
             for block in content:
                 if block.get('type') == 'tool_use':

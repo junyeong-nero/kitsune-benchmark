@@ -1,7 +1,0 @@
-{
-  "id": "kitsune",
-  "command": "uv",
-  "args": ["run", "--locked", "--project", "/ABSOLUTE/PATH/TO/kitsune", "kitsune"],
-  "startup_timeout_sec": 120,
-  "tool_timeout_sec": 60
-}
