@@ -1,7 +1,7 @@
 # Coexistence track (`coexistence-local-v3` preparation)
 
 [Documentation index](README.md) · [Running guide](running.md) ·
-[Spec catalog](../tasks/coexistence/catalog.json) · [Personal protocol](personal-browsing.md)
+[Spec catalog](https://github.com/junyeong-nero/kitsune-benchmark/blob/1ef91e1/tasks/coexistence/catalog.json) · [Personal protocol](personal-browsing.md)
 
 **Status: `coexistence-local-v3`, part of the untagged `taskset-v4` preparation.** The scope is:
 
@@ -168,7 +168,7 @@ default-Kitsune totals; `scripts/analyze-release.py` prints the comparison. It c
 user tabs are read-only (a write is refused with `user_tab_read_only`), agent tabs allow everything unless the user
 is typing there (`user_active`), and a user tab becomes the agent's only after `browser_tabs action=request` and the
 user's approval. Six scenarios check it (#74). They have their own catalog,
-[`tasks/coexistence/tab-permissions.json`](../tasks/coexistence/tab-permissions.json), and benchmark ID
+[`tasks/coexistence/tab-permissions.json`](https://github.com/junyeong-nero/kitsune-benchmark/blob/1ef91e1/tasks/coexistence/tab-permissions.json), and benchmark ID
 `coexistence-tab-permissions-v0-draft`. They run only with `coexistence --tab-permissions`, never in the default
 selection or `run-full-suite`, and are never pooled with `coexistence-local-v2` or `v3`. The main catalog and config are
 unchanged.

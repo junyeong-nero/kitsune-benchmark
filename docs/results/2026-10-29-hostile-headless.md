@@ -1,6 +1,6 @@
 # Hostile-UI capability matrix: synthetic input and opt-in OS input (2026-10-29)
 
-[Track](../hostile.md) · [Catalog](../../tasks/hostile/catalog.json)
+[Track](../hostile.md) · [Catalog](https://github.com/junyeong-nero/kitsune-benchmark/blob/1ef91e1/tasks/hostile/catalog.json)
 
 **No model calls.** These are scripted tool strategies on 26 components: 17 defense pages and 9 real UI libraries.
 Success is reported by each component's own handler.
