@@ -1,6 +1,9 @@
 # Result reports
 
-[Documentation index](../README.md) · [Running guide](../running.md)
+[Documentation index](../README.md) · [Current runner](../../README.md) · [Retired running guide](../running.md)
+
+The two newest reports (2026-11-19 and 2026-11-20) use the current `four-way/` suite; everything older
+comes from retired harnesses.
 
 Reports are dated records of actual executions. **Changing the configured model
 does not change the model used in an older report.** Different tasks, models,
