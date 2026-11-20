@@ -108,6 +108,26 @@ class BenchmarkTests(unittest.TestCase):
             self.assertIn(name, svg)
         self.assertNotIn('<svg xmlns', svg[10:])  # icons inlined as groups, not nested documents
 
+    def test_webarena_pro_figure_uses_its_own_scale_and_shows_misses_plainly(self):
+        import xml.etree.ElementTree as ET
+        from scripts.figure import render
+        cell = {'attempts':26, 'pass':13, 'fail':12, 'error':1, 'mean_input_tokens':400_000, 'mean_tool_calls':20.0}
+        both = render({f'{h}/{a}': cell for h in ('claude','codex') for a in run.ARMS}, 'webarena-pro')
+        ET.fromstring(both)
+        for text in ('13/26', '400k', '20.0', '>800k<', '>40<', 'MCP · isolated Firefox', 'Top / bottom bar:'):
+            self.assertIn(text, both)
+        # Half the scale: 400k of 800k and 20 of 40 calls. A miss is the usual outcome here, not an alert.
+        self.assertIn('width="145.0"', both)
+        self.assertIn('width="100.0"', both)
+        self.assertNotIn('12 fail', both)
+        self.assertNotIn('MCP · your Firefox', both)
+        # An agent that has not run is left out, and the other's bar is centered on the row.
+        one = render({f'claude/{a}': cell for a in run.ARMS}, 'webarena-pro')
+        ET.fromstring(one)
+        self.assertNotIn('gpt-6.1-sol', one)
+        self.assertNotIn('Top / bottom bar:', one)
+        self.assertEqual(one.count('>13/26<'), 4)
+
     def test_existing_profile_routes_and_isolated_default(self):
         from framework.arms import config
         with patch.dict('os.environ', {}, clear=True), patch('framework.arms.binary', side_effect=str), \
