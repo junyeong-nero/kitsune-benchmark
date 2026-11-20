@@ -2,6 +2,10 @@
 
 **20 November 2026 · 208 retained attempts · one repeat per cell.** Kitsune and Playwright passed the same tasks under each model: 13/26 on Claude Code and 12/26 on Codex. On the 12 tasks all four tools solved within each model, Kitsune used **39% of Playwright's input on Claude but 87% on Codex**. The size of the token difference depends on the model and the tasks; it is not a general success-rate or latency advantage.
 
+![Four-way benchmark, 26 WebArena-Pro tasks, 208 attempts. Passed, Claude Code / Codex: Kitsune 13/26 and 12/26; Playwright MCP 13/26 and 12/26; Aside 12/26 and 12/26; EgoLite 12/26 and 12/26. Mean input tokens per attempt: Kitsune 283k / 414k; Aside 463k / 512k; EgoLite 360k / 622k; Playwright MCP 660k / 809k. Mean tool calls per attempt: Kitsune 14.0 / 15.8; Aside 16.1 / 15.6; EgoLite 12.8 / 17.5; Playwright MCP 29.8 / 35.1.](../assets/2026-11-20-webarena-pro-four-way.svg)
+
+The figure's bars are means per attempt from the CSV: input over the attempts that reported usage, tool calls over all 26. The tables below give totals.
+
 [Public per-attempt metrics (CSV)](2026-11-20-webarena-pro-four-way.csv) · [Run instructions](../../README.md). Recompute status counts, token totals/coverage and median latency with `python3 summary.py docs/results/2026-11-20-webarena-pro-four-way.csv`. The CSV deliberately omits prompts, answers, tool payloads, credentials and transcripts.
 
 ## Success and tool use
