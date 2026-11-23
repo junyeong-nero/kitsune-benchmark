@@ -92,13 +92,19 @@ sudo iptables -I DOCKER-USER -s 172.17.0.0/16 -d 192.168.0.0/16 -j RETURN
 
 ```sh
 export CS=your-codespace-name
-gh codespace cp four-way/framework/wap_core.py "remote:/tmp/wap_core.py" -c "$CS"
+gh codespace ssh -c "$CS" -- 'cat > /tmp/wap_core.py' < four-way/framework/wap_core.py
 export BENCH_WAP_SSH="gh codespace ssh -c $CS --" BENCH_WAP_SCRIPT=/tmp/wap_core.py
 export BENCH_WAP_CORE=/absolute/remote/path/to/webarena-pro-core
-gh codespace ports forward 3001:3001 4601:4601 4701:4701 5201:5201 7001:7001 7101:7101 9101:9101 3201:3201 -c "$CS"  # leave running in another terminal
+gh codespace ssh -c "$CS" -- -N $(for p in 3001 4601 4701 5201 7001 7101 9101 3201; do printf -- '-L %s:localhost:%s ' $p $p; done)  # leave running in another terminal
 ```
 
 The runner does not start, pay for or stop a Codespace.
+
+> [!WARNING]
+> Forward the ports over SSH (`-L`), not with `gh codespace ports forward`. Under parallel load, that
+> forwarder drops requests: in four tabs walking Travelmap pages, 6–7 of 189 page requests never reached the
+> site and timed out after 15 s, in each of two runs. Over SSH it was 0 of 189, also twice (kitsune#605).
+> `gh codespace cp` fails on a remote `/tmp` path, hence the `ssh … cat` copy above.
 
 ### 5. Before and after a run
 
