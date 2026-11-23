@@ -66,6 +66,16 @@ class LocalTests(unittest.TestCase):
             rows = [json.loads(line) for line in (out / 'results.jsonl').read_text().splitlines()]
         self.assertEqual([(r['harness'], r['task'], r['arm']) for r in rows], [('claude', 'confirm', 'playwright')])
 
+    def test_kitsune_cells_require_a_synced_checkout(self):
+        stale = subprocess.CompletedProcess([], 1)
+        with patch.dict('os.environ', BENCH_KITSUNE_CHECKOUT='checkout'), patch.object(local.subprocess, 'run', return_value=stale) as run, \
+                patch.object(local, 'attempt', side_effect=AssertionError), redirect_stdout(io.StringIO()), \
+                patch('sys.stderr', io.StringIO()) as err:
+            with self.assertRaises(SystemExit):
+                local.main(['--execute', '--task', 'confirm', '--arm', 'kitsune'])
+        self.assertEqual(run.call_args.args[0], ['uv', 'sync', '--locked', '--check', '--directory', 'checkout'])
+        self.assertIn('uv sync --locked', err.getvalue())
+
     def test_playwright_arm_runs_the_package_script_with_node(self):
         with local.browser({'arm': 'playwright'}, None) as settings:
             self.assertEqual(Path(settings['args'][0]), local.PLAYWRIGHT)

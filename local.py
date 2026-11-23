@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import subprocess
 import sys
 import tempfile
 import time
@@ -57,6 +58,11 @@ def claude_binary():
     return path
 
 
+def kitsune_synced(checkout):
+    """Whether the checkout's .venv matches its uv.lock. A stale venv (e.g. without Windows-only psutil) looks like a bug."""
+    return subprocess.run(['uv', 'sync', '--locked', '--check', '--directory', checkout], capture_output=True).returncode == 0
+
+
 def attempt(cell, task, settings, executable, log):
     with tempfile.TemporaryDirectory(prefix='browser-bench-') as tmp, fixture(task['id']) as (url, submissions):
         with surface(cell['arm'], settings, Path(tmp), url) as surfaced:
@@ -87,8 +93,14 @@ def main(argv=None):
         print(json.dumps(cells, indent=2)); return 0
     if not shutil.which('node'):
         p.error('node is not on PATH')
-    if any(c['arm'] == 'kitsune' for c in cells) and not os.getenv('BENCH_KITSUNE_CHECKOUT'):
-        p.error('set BENCH_KITSUNE_CHECKOUT first (see README)')
+    if any(c['arm'] == 'kitsune' for c in cells):
+        checkout = os.getenv('BENCH_KITSUNE_CHECKOUT')
+        if not checkout:
+            p.error('set BENCH_KITSUNE_CHECKOUT first (see README)')
+        if not shutil.which('uv'):
+            p.error('uv is not on PATH')
+        if not kitsune_synced(checkout):
+            p.error(f'{checkout}: .venv does not match uv.lock; run `uv sync --locked --directory {checkout}` first')
     executable = claude_binary()
     folder = args.out or Path('runs') / time.strftime('local-%Y%m%d-%H%M%S')
     folder.mkdir(mode=0o700, parents=True, exist_ok=False)
