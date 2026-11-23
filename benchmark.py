@@ -57,10 +57,15 @@ def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--execute', action='store_true', help='actually reset sites and invoke both subscriptions')
     p.add_argument('--out', type=Path, help='new private run directory (default: runs/<timestamp>)')
-    p.add_argument('--task', choices=[t['id'] for t in TASKS], help='optional single-task smoke (8 attempts)')
+    p.add_argument('--task', action='append', choices=[t['id'] for t in TASKS],
+                   help='only these tasks (repeatable; one task alone is the 8-cell smoke)')
+    p.add_argument('--harness', action='append', choices=list(MODELS), help='only these agents (repeatable)')
+    p.add_argument('--arm', action='append', choices=ARMS, help='only these browser arms (repeatable)')
     args = p.parse_args(argv)
     tasks = {t['id']: t for t in TASKS}
-    cells = [c for c in matrix() if not args.task or c['task'] == args.task]
+    # Filters keep the full matrix's order, so a subset runs its cells in the published arm rotation.
+    cells = [c for c in matrix() if all(not chosen or c[key] in chosen for key, chosen in
+                                        (('task', args.task), ('harness', args.harness), ('arm', args.arm)))]
     if not args.execute:
         print(json.dumps(cells, indent=2)); return 0
     for key in ['BENCH_WAP_CORE', 'BENCH_KITSUNE_CHECKOUT'] + (['BENCH_WAP_SCRIPT'] if os.getenv('BENCH_WAP_SSH') else []):

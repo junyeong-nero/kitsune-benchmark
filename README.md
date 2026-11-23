@@ -21,6 +21,7 @@ Four browser tools, two subscription agents, the same 26 [WebArena-Pro](https://
 python3 benchmark.py                                            # print the plan; no model/browser/site access
 python3 benchmark.py --execute                                  # after setup: all 208, output under runs/
 python3 benchmark.py --execute --task wap-199 --out runs/smoke  # optional 8-cell smoke
+python3 benchmark.py --task wap-238 --harness codex --arm kitsune --arm playwright  # a subset; filters repeat
 ```
 
 `npm run benchmark -- --execute` is equivalent.

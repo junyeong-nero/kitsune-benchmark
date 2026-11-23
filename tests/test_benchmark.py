@@ -43,6 +43,17 @@ class BenchmarkTests(unittest.TestCase):
             self.assertEqual(len(rows), 8)
             self.assertEqual({r['browser_mode'] for r in rows if r['arm']=='kitsune'}, {'isolated'})
 
+    def test_filters_select_a_subset_in_matrix_order(self):
+        argv = ['--task', 'wap-238', '--task', 'wap-096', '--harness', 'codex', '--arm', 'kitsune', '--arm', 'playwright']
+        with redirect_stdout(io.StringIO()) as output:
+            self.assertEqual(bench.main(argv), 0)
+        plan = json.loads(output.getvalue())
+        full = [c for c in bench.matrix() if c['harness'] == 'codex' and c['task'] in ('wap-238', 'wap-096')
+                and c['arm'] in ('kitsune', 'playwright')]
+        self.assertEqual(plan, full)
+        self.assertEqual(len(plan), 4)
+        self.assertEqual({c['model'] for c in plan}, {'gpt-6.1-sol'})
+
     def test_prepare_login_agent_grade(self):
         cell = next(c for c in bench.matrix() if c['arm']=='playwright')
         task = bench.TASKS[0]
