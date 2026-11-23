@@ -72,9 +72,16 @@ material change.
 
 ### Local fixtures
 
-No full 24-attempt run yet. A 2-cell smoke (`confirm`, Kitsune `c957c5f`, `claude` subscription) passed with both arms
-on Windows 11 (2026-11-23). Its first Kitsune attempt surfaced a stale Kitsune `.venv` without the Windows-only
-`psutil`, so `local.py` now refuses a checkout whose `.venv` does not match `uv.lock`.
+[First full run](docs/results/2026-11-23-local-windows.md) (2026-11-23, Windows 11, Claude Code `claude` subscription,
+Kitsune `c957c5f`):
+
+| Tool | Passed | Mean calls | Mean input per attempt | Tool errors | Median seconds |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Kitsune MCP | 12/12 | 3.3 | 32.5k | 0 | 16.0 |
+| Playwright MCP | 12/12 | 7.3 | 65.7k | 0 | 18.6 |
+
+No Windows-specific bug: every Kitsune bridge command succeeded and no browser or bridge process outlived its attempt.
+The fixtures are near the ceiling for this model, so this is a compatibility check, not a tool ranking.
 
 ## Docs
 
