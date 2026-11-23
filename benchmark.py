@@ -1,4 +1,4 @@
-"""Plan (default) or execute the serial two-model, four-browser WebArena-Pro matrix."""
+"""Plan (default) or execute the serial Claude Opus, four-browser WebArena-Pro matrix: API key first, then subscription."""
 import argparse
 from contextlib import contextmanager
 import json
@@ -14,7 +14,8 @@ sys.path.insert(0, str(ROOT))
 from framework.arms import ARMS, binary, config
 from framework.runner import attempt
 
-MODELS = {'claude': 'claude-opus-5-5', 'codex': 'gpt-6.1-sol'}
+# Same Claude Code harness and model; only billing differs. API-key cells run first. Codex is not in the matrix.
+MODELS = {'claude-api': 'claude-opus-5-5', 'claude': 'claude-opus-5-5'}
 TASKS = json.loads((ROOT / 'testset/webarena-pro.json').read_text())
 
 
@@ -55,7 +56,8 @@ def settings(cell):
 
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--execute', action='store_true', help='actually reset sites and invoke both subscriptions')
+    p.add_argument('--execute', action='store_true', help='actually reset sites and invoke Claude Code')
+    p.add_argument('--allow-api-billing', action='store_true', help='required to execute claude-api cells (ANTHROPIC_API_KEY)')
     p.add_argument('--out', type=Path, help='new private run directory (default: runs/<timestamp>)')
     p.add_argument('--task', action='append', choices=[t['id'] for t in TASKS],
                    help='only these tasks (repeatable; one task alone is the 8-cell smoke)')
@@ -68,10 +70,14 @@ def main(argv=None):
                                         (('task', args.task), ('harness', args.harness), ('arm', args.arm)))]
     if not args.execute:
         print(json.dumps(cells, indent=2)); return 0
-    for key in ['BENCH_WAP_CORE', 'BENCH_KITSUNE_CHECKOUT'] + (['BENCH_WAP_SCRIPT'] if os.getenv('BENCH_WAP_SSH') else []):
+    api = any(c['harness'] == 'claude-api' for c in cells)
+    if api and not args.allow_api_billing:
+        p.error('claude-api cells bill ANTHROPIC_API_KEY; pass --allow-api-billing or --harness claude')
+    for key in ['BENCH_WAP_CORE', 'BENCH_KITSUNE_CHECKOUT'] + (['BENCH_WAP_SCRIPT'] if os.getenv('BENCH_WAP_SSH') else []) \
+            + (['ANTHROPIC_API_KEY'] if api else []):
         if not os.getenv(key):
             p.error(f'set {key} first (see README)')
-    executables = {h: binary(h) for h in MODELS}
+    executables = {h: binary('claude') for h in MODELS}
     folder = args.out or Path('runs') / time.strftime('%Y%m%d-%H%M%S')
     folder.mkdir(mode=0o700, parents=True, exist_ok=False)
     (folder / 'plan.json').write_text(json.dumps(cells, indent=2))

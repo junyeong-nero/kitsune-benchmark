@@ -18,44 +18,65 @@ class BenchmarkTests(unittest.TestCase):
             self.assertEqual(bench.main([]), 0)
         plan = json.loads(output.getvalue())
         self.assertEqual(len(plan), 208)
-        self.assertEqual({c['model'] for c in plan[:104]}, {'claude-opus-5-5'})
-        self.assertEqual({c['model'] for c in plan[104:]}, {'gpt-6.1-sol'})
+        self.assertEqual({c['model'] for c in plan}, {'claude-opus-5-5'})
+        self.assertEqual({c['harness'] for c in plan[:104]}, {'claude-api'})
+        self.assertEqual({c['harness'] for c in plan[104:]}, {'claude'})
         self.assertEqual(sum(c['split']=='dev' for c in plan), 56)
         self.assertEqual([c['arm'] for c in plan[:5]], ['aside','egolite','playwright','kitsune','egolite'])
         key = lambda c: (c['model'], c['task'], c['arm'], c['split'])
         with (bench.ROOT.parent/'docs/results/2026-11-20-webarena-pro-four-way.csv').open() as f:
             rows = list(csv.DictReader(f))
         self.assertEqual(len(rows), 208)
-        self.assertEqual(set(map(key, rows)), set(map(key, plan)))
+        claude = [r for r in rows if r['harness'] == 'claude']
+        self.assertEqual(set(map(key, claude)), set(map(key, plan[:104])))
+        self.assertEqual(set(map(key, claude)), set(map(key, plan[104:])))
         self.assertEqual(sum(r['status']=='error' for r in rows), 4)
         self.assertEqual(sum(bool(r['input']) for r in rows), 204)
 
     def test_single_task_execution_records_eight_cells(self):
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp)/'out'
-            with patch.dict('os.environ', BENCH_WAP_CORE='core', BENCH_KITSUNE_CHECKOUT='checkout'), \
+            argv = ['--task','wap-199','--execute','--allow-api-billing','--out',str(out)]
+            with patch.dict('os.environ', BENCH_WAP_CORE='core', BENCH_KITSUNE_CHECKOUT='checkout', ANTHROPIC_API_KEY='k'), \
                  patch.object(bench, 'binary', side_effect=str), patch.object(bench, 'settings', return_value=nullcontext({})), \
                  patch.object(bench, 'attempt', return_value={'status':'fail','score':0}), redirect_stdout(io.StringIO()):
-                self.assertEqual(bench.main(['--task','wap-199','--execute','--out',str(out)]), 0)
+                self.assertEqual(bench.main(argv), 0)
                 with self.assertRaises(FileExistsError):
-                    bench.main(['--task','wap-199','--execute','--out',str(out)])
+                    bench.main(argv)
             rows = [json.loads(line) for line in (out/'results.jsonl').read_text().splitlines()]
             self.assertEqual(len(rows), 8)
             self.assertEqual({r['browser_mode'] for r in rows if r['arm']=='kitsune'}, {'isolated'})
+            self.assertEqual([r['harness'] for r in rows], ['claude-api']*4 + ['claude']*4)
+
+    def test_api_cells_need_explicit_billing_opt_in(self):
+        with patch.dict('os.environ', BENCH_WAP_CORE='core', BENCH_KITSUNE_CHECKOUT='checkout', ANTHROPIC_API_KEY='k'), \
+             patch.object(bench, 'attempt', side_effect=AssertionError), redirect_stdout(io.StringIO()), \
+             patch('sys.stderr', io.StringIO()), self.assertRaises(SystemExit):
+            bench.main(['--task','wap-199','--execute'])
 
     def test_filters_select_a_subset_in_matrix_order(self):
-        argv = ['--task', 'wap-238', '--task', 'wap-096', '--harness', 'codex', '--arm', 'kitsune', '--arm', 'playwright']
+        argv = ['--task', 'wap-238', '--task', 'wap-096', '--harness', 'claude', '--arm', 'kitsune', '--arm', 'playwright']
         with redirect_stdout(io.StringIO()) as output:
             self.assertEqual(bench.main(argv), 0)
         plan = json.loads(output.getvalue())
-        full = [c for c in bench.matrix() if c['harness'] == 'codex' and c['task'] in ('wap-238', 'wap-096')
+        full = [c for c in bench.matrix() if c['harness'] == 'claude' and c['task'] in ('wap-238', 'wap-096')
                 and c['arm'] in ('kitsune', 'playwright')]
         self.assertEqual(plan, full)
         self.assertEqual(len(plan), 4)
-        self.assertEqual({c['model'] for c in plan}, {'gpt-6.1-sol'})
+        self.assertEqual({c['model'] for c in plan}, {'claude-opus-5-5'})
+        with redirect_stdout(io.StringIO()), patch('sys.stderr', io.StringIO()), self.assertRaises(SystemExit):
+            bench.main(['--harness', 'codex'])
 
     def test_prepare_login_agent_grade(self):
+        result = self._attempt('ANTHROPIC_API_KEY')
+        self.assertEqual((result['status'], result['score'], result['api_key_source']), ('fail', 0.5, 'ANTHROPIC_API_KEY'))
+        # An API-billed cell that fell back to the subscription is an error, which stops the matrix.
+        result = self._attempt('none')
+        self.assertEqual((result['status'], result['error']), ('error', 'billing_mismatch'))
+
+    def _attempt(self, source):
         cell = next(c for c in bench.matrix() if c['arm']=='playwright')
+        self.assertEqual(cell['harness'], 'claude-api')
         task = bench.TASKS[0]
         events = []
         def core(cmd, task_id, state, *args):
@@ -68,12 +89,13 @@ class BenchmarkTests(unittest.TestCase):
             events.append('agent')
             self.assertIn('--storage-state', surfaced[0]['browser']['args'])
             self.assertIn(task['intent'], prompt)
+            init = {'type':'system','subtype':'init','apiKeySource':source}
             result = {'type':'result','is_error':False,'subtype':'success','result':'FINAL ANSWER: Denver'}
-            return json.dumps(result), '', 0, False, 1.0
+            return json.dumps(init) + '\n' + json.dumps(result), '', 0, False, 1.0
         with tempfile.TemporaryDirectory() as tmp, patch.object(run, 'wap_core', core), patch.object(run,'agent',agent):
             result = run.attempt(cell, task, {'command':'pw','args':[]}, 'claude', Path(tmp)/'log')
         self.assertEqual(events,['prepare','agent','grade'])
-        self.assertEqual((result['status'], result['score']), ('fail', 0.5))
+        return result
 
     def test_token_accounting(self):
         c = {'type':'result','usage':{'input_tokens':3,'cache_creation_input_tokens':4,'cache_read_input_tokens':5,'output_tokens':6}}

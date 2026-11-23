@@ -39,7 +39,9 @@ def agent(harness, executable, model, surfaced, prompt, folder, timeout):
     if harness == 'codex':
         cmd = codex.command(executable, model, servers, env, prompt)
     else:
-        if 'CLAUDE_CODE_OAUTH_TOKEN' in os.environ:
+        if harness == 'claude-api':  # API-key billing; the init event's apiKeySource is checked in attempt()
+            env['ANTHROPIC_API_KEY'] = os.environ['ANTHROPIC_API_KEY']
+        elif 'CLAUDE_CODE_OAUTH_TOKEN' in os.environ:
             env['CLAUDE_CODE_OAUTH_TOKEN'] = os.environ['CLAUDE_CODE_OAUTH_TOKEN']
         config = folder / 'mcp.json'
         config.write_text(json.dumps({'mcpServers': servers}))
@@ -85,5 +87,8 @@ def attempt(cell, task, settings, executable, log):
         grade = wap_core('grade', task['task_id'], state, answer)
         graded = 'pass' if grade['success'] else 'fail'
         error = 'timeout' if expired else f'agent_exit_{rc}' if rc else None if summary['completed'] else 'incomplete'
+        billing = {'claude-api': 'ANTHROPIC_API_KEY', 'claude': 'none'}.get(cell['harness'])
+        if billing and summary.get('api_key_source') not in (None, billing):
+            error = 'billing_mismatch'  # stops the matrix: the cell was not billed as planned
         return dict(summary, graded=graded, status='error' if error else graded, error=error, agent_seconds=seconds,
                     score=grade['score'], answer=answer, rubrics=grade['nodes'])

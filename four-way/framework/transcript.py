@@ -28,8 +28,10 @@ def _events(stdout):
 
 def claude(stdout):
     tools, errors, final, result = Counter(), [], '', None
-    names = {}
+    names, source = {}, None
     for e in _events(stdout):
+        if e.get('type') == 'system' and e.get('subtype') == 'init':
+            source = e.get('apiKeySource')
         message = e.get('message')  # some events (e.g. system notices) carry a plain string here
         content = (message.get('content') if isinstance(message, dict) else None) or []
         if e.get('type') == 'assistant':
@@ -49,7 +51,8 @@ def claude(stdout):
     cached = usage.get('cache_read_input_tokens', 0)
     tokens = {'input': usage.get('input_tokens', 0) + usage.get('cache_creation_input_tokens', 0) + cached,
               'cached_input': cached, 'output': usage.get('output_tokens', 0)} if usage else None
-    return {'completed': bool(result) and not result.get('is_error') and result.get('subtype') == 'success',
+    return {'api_key_source': source,
+            'completed': bool(result) and not result.get('is_error') and result.get('subtype') == 'success',
             'turns': (result or {}).get('num_turns'), 'cost_usd': (result or {}).get('total_cost_usd'),
             'tokens': tokens, 'tool_calls': sum(tools.values()), 'tools': dict(tools), 'tool_errors': errors,
             'final_message': _text((result or {}).get('result') or final, 600),
