@@ -2,6 +2,9 @@
 
 [Documentation index](README.md) · [Project README](../README.md)
 
+Two runners: the [four-way WebArena-Pro matrix](#setup) (`benchmark.py`, macOS agent host + Linux site host) and the
+[local fixture track](#local-fixture-track-macos--windows) (`local.py`, macOS, Linux or Windows).
+
 `benchmark.py` plans or executes one serial matrix: 26 WebArena-Pro tasks × 4 browser arms × 2 billing modes of
 Claude Code on `claude-opus-5-5`, **208 attempts**. Codex is not in the matrix.
 
@@ -133,9 +136,71 @@ python3 benchmark.py --execute --harness claude                           # step
 
 The [task manifest](../four-way/testset/webarena-pro.json) gives the selection criteria.
 
+## Local fixture track (macOS / Windows)
+
+`local.py` plans or executes a smaller matrix for finding browser-tool bugs on any desktop OS, without the site host,
+Aside or EgoLite: **12 original loopback fixtures × Playwright MCP and Kitsune MCP = 24 attempts**, under Claude Code
+on `claude-opus-5-5` with the `claude` subscription only (no `claude-api`, no Codex), 300-second timeout, starting arm
+alternating by task.
+
+The fixtures cover dates, autocomplete, pagination, `confirm()`, delayed content, shadow DOM, iframes and a wizard
+([tasks](../local-tasks/tasks.json), [pages](../local-tasks/pages.py)). Each attempt gets a new fixture server, and it
+passes only if that server received the expected form submission **exactly once**. These tasks are near the ceiling
+for frontier agents: read failures as bug leads to inspect, not as tool scores. Linux works the same way as macOS.
+
+### Requirements
+
+- Python 3.10+, Node/npm and `uv`
+- A **native** `claude` CLI signed in to a subscription. Check it with `claude auth status` (`"loggedIn": true`).
+- A Kitsune checkout synced with `uv sync --locked`. This is the Kitsune under test; it does not need to be the
+  four-way pin. Before any Kitsune cell runs, `local.py` checks `uv sync --locked --check` and stops on a stale
+  `.venv` (one without the Windows-only `psutil` broke `browser_run_python` in the first Windows smoke).
+
+### macOS
+
+```sh
+npm ci
+PLAYWRIGHT_SKIP_BROWSER_GC=1 npx playwright install firefox
+uv sync --locked --directory /path/to/kitsune
+export BENCH_KITSUNE_CHECKOUT=/path/to/kitsune
+python3 local.py                                  # print the 24-cell plan only
+python3 local.py --execute --task confirm         # 2-cell smoke
+python3 local.py --execute                        # all 24, output under runs/local-<timestamp>/
+```
+
+### Windows (PowerShell)
+
+Install Claude Code with the native installer (`irm https://claude.ai/install.ps1 | iex`, which puts
+`%USERPROFILE%\.local\bin\claude.exe` on `PATH`), then run `claude` once and `/login`. A Claude Desktop sign-in does
+not sign in the CLI.
+
+```powershell
+npm ci
+$env:PLAYWRIGHT_SKIP_BROWSER_GC = "1"; npx playwright install firefox
+uv sync --locked --directory C:\path\to\kitsune
+$env:BENCH_KITSUNE_CHECKOUT = "C:\path\to\kitsune"
+uv run --no-project python local.py --execute --task confirm   # or `python` from a real install
+uv run --no-project python local.py --execute
+```
+
+- If `claude` resolves to an npm `claude.cmd` shim, set `BENCH_CLAUDE` to a `claude.exe`. `cmd.exe` cannot pass
+  the multi-line prompt.
+- `npm run setup:firefox` and `npm run benchmark` use POSIX shell syntax; use the commands above instead.
+
+### Output and stopping
+
+- Both arms run isolated headless Firefox. Kitsune gets a private bridge, home, token and ports per attempt; the
+  user's own Kitsune bridge and profiles are not touched.
+- Each Kitsune attempt keeps `<attempt>-runtime/` next to its transcript: `bridge.log`, `firefox.log` and
+  `audit.json` (the bridge's command audit, without typed values or secrets). Start there when a cell fails.
+- `--task` and `--arm` repeat and combine. Stopping rules match the four-way runner; `api_key_source` must be `none`,
+  otherwise the cell is recorded as `billing_mismatch` and the run stops.
+- **Do not publish the raw output directory.**
+
 ## Analysis and tests
 
 ```sh
 python3 summary.py runs/<timestamp>/results.jsonl --csv metrics.csv  # summary + shareable metrics, no transcripts
 python3 -m unittest discover -s tests -v                             # offline; no agent, browser or credentials
+BENCH_TEST_FIREFOX=1 python3 -m unittest discover -s tests -p test_local.py  # also solve every fixture in Firefox, no model
 ```

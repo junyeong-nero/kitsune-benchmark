@@ -75,6 +75,8 @@ def attempt(cell, task, settings, executable, log):
     # Pass only on exactly one correct submission: recovering after a wrong one is still a failure.
     graded = 'pass' if submitted == [task['expected']] else 'fail'
     error = 'timeout' if expired else f'agent_exit_{rc}' if rc else None if summary['completed'] else 'incomplete'
+    if summary.get('api_key_source') not in (None, 'none'):
+        error = 'billing_mismatch'  # subscription only; stops the matrix
     return dict(summary, graded=graded, status='error' if error else graded, error=error, agent_seconds=seconds,
                 submissions=submitted)
 

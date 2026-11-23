@@ -56,6 +56,11 @@ class LocalTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp, patch.object(local.runner, 'agent', timeout):
             row = local.attempt(cell, local.TASKS[0], {'command': 'unused'}, 'claude', Path(tmp) / 'log')
         self.assertEqual((row['status'], row['graded'], row['error']), ('error', 'fail', 'timeout'))
+        init = json.dumps({'type': 'system', 'subtype': 'init', 'apiKeySource': 'ANTHROPIC_API_KEY'})
+        api = lambda *_: (init + '\n' + done(), '', 0, False, 1.0)
+        with tempfile.TemporaryDirectory() as tmp, patch.object(local.runner, 'agent', api):
+            row = local.attempt(cell, local.TASKS[0], {'command': 'unused'}, 'claude', Path(tmp) / 'log')
+        self.assertEqual((row['status'], row['error']), ('error', 'billing_mismatch'))
 
     def test_execute_runs_the_selected_cells(self):
         with tempfile.TemporaryDirectory() as tmp, patch.object(local, 'claude_binary', lambda: 'claude'), \
