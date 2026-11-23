@@ -3,7 +3,6 @@ import json
 import os
 from pathlib import Path
 import shlex
-import signal
 import subprocess
 import tempfile
 import time
@@ -11,6 +10,7 @@ import time
 from framework import codex, transcript
 from framework.arms import surface
 from framework.launch import launch
+from framework.procs import GROUP, kill_tree
 
 ROOT = Path(__file__).resolve().parents[1]
 POLICY = ('Use only the designated browser and the task websites\' UI. No other websites, tabs you did not open, '
@@ -19,6 +19,10 @@ POLICY = ('Use only the designated browser and the task websites\' UI. No other 
           'do not switch tools.')
 FINISH = ('When you are done, end your reply with one line: FINAL ANSWER: <answer>. If the task only asks you to '
           'change something, write FINAL ANSWER: done.')
+KEEP = {'HOME','PATH','TMPDIR','LANG','USER','SHELL'}
+# Windows: the profile and app-data folders (CLI sign-in), temp, executable lookup and Claude Code's Git Bash.
+KEEP_WINDOWS = {'USERPROFILE','HOMEDRIVE','HOMEPATH','APPDATA','LOCALAPPDATA','PROGRAMDATA','TEMP','TMP','SYSTEMROOT',
+                'SYSTEMDRIVE','WINDIR','COMSPEC','PATHEXT','USERNAME','CLAUDE_CODE_GIT_BASH_PATH'}
 
 
 def wap_core(*args):
@@ -35,7 +39,7 @@ def wap_core(*args):
 
 def agent(harness, executable, model, surfaced, prompt, folder, timeout):
     servers, tools, allow, _ = surfaced
-    env = {k: v for k, v in os.environ.items() if k in {'HOME','PATH','TMPDIR','LANG','USER','SHELL'}}
+    env = {k: v for k, v in os.environ.items() if k in KEEP | KEEP_WINDOWS}
     if harness == 'codex':
         cmd = codex.command(executable, model, servers, env, prompt)
     else:
@@ -50,17 +54,14 @@ def agent(harness, executable, model, surfaced, prompt, folder, timeout):
                '--mcp-config', str(config), '--tools', tools, '--allowedTools', allow, '--', prompt]
     start = time.monotonic()
     proc = subprocess.Popen(cmd, cwd=folder, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                            stderr=subprocess.PIPE, text=True, start_new_session=True)
+                            stderr=subprocess.PIPE, encoding='utf-8', errors='replace', **GROUP)
     expired = False
     try:
         stdout, stderr = proc.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
         expired = True
     finally:
-        try:
-            os.killpg(proc.pid, signal.SIGKILL)
-        except (ProcessLookupError, PermissionError):
-            pass
+        kill_tree(proc)
         if expired:
             stdout, stderr = proc.communicate()
         proc.wait()
@@ -81,7 +82,7 @@ def attempt(cell, task, settings, executable, log):
             sites = '\n'.join(f'- {s}: {urls[s]}' for s in task['sites'])
             prompt = f'{surfaced[3]}\n\nTask websites:\n{sites}\nRules: {POLICY}\nTask: {task["intent"]}\n{FINISH}'
             stdout, stderr, rc, expired, seconds = agent(cell['harness'], executable, cell['model'], surfaced, prompt, folder, cell['timeout'])
-        log.write_text(stdout + ('\n# stderr\n' + stderr if stderr else ''))
+        log.write_text(stdout + ('\n# stderr\n' + stderr if stderr else ''), encoding='utf-8')
         summary = transcript.summarize(cell['harness'], stdout)
         answer = summary.get('final_answer') or ''
         grade = wap_core('grade', task['task_id'], state, answer)

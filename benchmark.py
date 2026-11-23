@@ -4,14 +4,17 @@ from contextlib import contextmanager
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
 import time
+import urllib.request
 
 ROOT = Path(__file__).resolve().parent / 'four-way'
 sys.path.insert(0, str(ROOT))
 from framework.arms import ARMS, binary, config
+from framework.procs import WINDOWS, kill_tree
 from framework.runner import attempt
 
 # Same Claude Code harness and model; only billing differs. API-key cells run first. Codex is not in the matrix.
@@ -29,7 +32,8 @@ def matrix(tasks=TASKS):
 
 
 @contextmanager
-def settings(cell):
+def settings(cell, logs=None):
+    """Browser settings for one cell. With logs, keep the private Kitsune bridge and browser logs there."""
     arm = cell['arm']
     if arm != 'kitsune':
         yield config(arm, cell['browser_mode'])
@@ -45,13 +49,37 @@ def settings(cell):
                 if proc.poll() is not None or time.monotonic() > deadline:
                     raise RuntimeError('private Kitsune bridge/Firefox failed to start')
                 time.sleep(.25)
-            env = json.loads((folder / 'env.json').read_text())
+            env = json.loads((folder / 'env.json').read_text(encoding='utf-8'))
             yield {'command': env['BENCH_KITSUNE'], 'env': {k.removeprefix('BENCH_'): env[k] for k in
                    ('BENCH_KITSUNE_HTTP_PORT', 'BENCH_KITSUNE_HOME', 'BENCH_KITSUNE_TOKEN')} | {'KITSUNE_NO_BRIDGE_RESTART': '1'}}
         finally:
-            if proc.poll() is None:
+            if logs:
+                audit(folder, logs)
+            if WINDOWS:
+                kill_tree(proc)  # terminate() would skip the runtime's own cleanup of its bridge and browser
+            elif proc.poll() is None:
                 proc.terminate()
             proc.wait(timeout=30)
+            if logs:
+                logs.mkdir(parents=True, exist_ok=True)
+                for name in ('bridge.log', 'firefox.log'):
+                    if (folder / name).is_file():
+                        shutil.copy(folder / name, logs / name)
+
+
+def audit(runtime, logs):
+    """Best effort: save the private bridge's command audit (no typed values or secrets) before teardown."""
+    try:
+        env = json.loads((runtime / 'env.json').read_text(encoding='utf-8'))
+        request = urllib.request.Request(f'http://127.0.0.1:{env["BENCH_KITSUNE_HTTP_PORT"]}/api/audit', data=b'{"limit": 100000}',
+                                         headers={'Authorization': 'Bearer ' + env['BENCH_KITSUNE_TOKEN'],
+                                                  'Content-Type': 'application/json'})
+        with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(request, timeout=10) as response:
+            body = response.read()
+        logs.mkdir(parents=True, exist_ok=True)
+        (logs / 'audit.json').write_bytes(body)
+    except (OSError, ValueError, KeyError) as exc:
+        print(f'warning: Kitsune audit not saved: {type(exc).__name__}', file=sys.stderr)
 
 
 def main(argv=None):
