@@ -28,10 +28,11 @@ class LocalTests(unittest.TestCase):
             self.assertEqual(local.main([]), 0)
         plan = json.loads(output.getvalue())
         self.assertEqual(set(PAGES), {t['id'] for t in local.TASKS})
-        self.assertEqual(len(plan), 12 * 2 * 2)
+        self.assertEqual(len(plan), 12 * 2)
+        self.assertEqual({(c['harness'], c['model']) for c in plan}, {('claude', 'claude-opus-5-5')})
         for i in range(0, len(plan), 2):
             self.assertEqual({c['arm'] for c in plan[i:i + 2]}, set(local.ARMS))
-            self.assertEqual(len({(c['harness'], c['task']) for c in plan[i:i + 2]}), 1)
+            self.assertEqual(len({c['task'] for c in plan[i:i + 2]}), 1)
         self.assertEqual([c['arm'] for c in plan[:4]], ['playwright', 'kitsune', 'kitsune', 'playwright'])
 
     def test_grades_actual_submissions_not_agent_reply(self):
@@ -56,16 +57,13 @@ class LocalTests(unittest.TestCase):
             row = local.attempt(cell, local.TASKS[0], {'command': 'unused'}, 'claude', Path(tmp) / 'log')
         self.assertEqual((row['status'], row['graded'], row['error']), ('error', 'fail', 'timeout'))
 
-    def test_execute_resolves_only_selected_agents(self):
-        resolved = []
-        with tempfile.TemporaryDirectory() as tmp, patch.object(local, 'agent_binary', lambda h: resolved.append(h) or h), \
+    def test_execute_runs_the_selected_cells(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.object(local, 'claude_binary', lambda: 'claude'), \
                 patch.object(local, 'browser', lambda cell, logs: nullcontext({})), \
                 patch.object(local, 'attempt', return_value={'status': 'pass'}), redirect_stdout(io.StringIO()):
             out = Path(tmp) / 'out'
-            self.assertEqual(local.main(['--execute', '--harness', 'claude', '--arm', 'playwright', '--task', 'confirm',
-                                         '--out', str(out)]), 0)
+            self.assertEqual(local.main(['--execute', '--arm', 'playwright', '--task', 'confirm', '--out', str(out)]), 0)
             rows = [json.loads(line) for line in (out / 'results.jsonl').read_text().splitlines()]
-        self.assertEqual(resolved, ['claude'])
         self.assertEqual([(r['harness'], r['task'], r['arm']) for r in rows], [('claude', 'confirm', 'playwright')])
 
     def test_playwright_arm_runs_the_package_script_with_node(self):
@@ -76,9 +74,9 @@ class LocalTests(unittest.TestCase):
     def test_windows_rejects_cmd_shims(self):
         with patch.object(local, 'WINDOWS', True), patch.object(local, 'binary', lambda name: r'C:\npm\claude.cmd'):
             with self.assertRaisesRegex(ValueError, 'BENCH_CLAUDE'):
-                local.agent_binary('claude')
+                local.claude_binary()
         with patch.object(local, 'WINDOWS', True), patch.object(local, 'binary', lambda name: r'C:\bin\claude.exe'):
-            self.assertEqual(local.agent_binary('claude'), r'C:\bin\claude.exe')
+            self.assertEqual(local.claude_binary(), r'C:\bin\claude.exe')
 
     def test_kill_tree_stops_a_child_and_its_descendant(self):
         script = ('import subprocess, sys, time; c = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"]); '

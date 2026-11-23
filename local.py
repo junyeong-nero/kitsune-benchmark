@@ -1,4 +1,4 @@
-"""Plan (default) or execute the local fixture matrix: Kitsune and Playwright MCP under Claude Code and Codex.
+"""Plan (default) or execute the local fixture matrix: Kitsune and Playwright MCP under Claude Code.
 
 Runs on macOS, Linux and Windows. It needs no Docker site host, WebArena-Pro, Aside or EgoLite: each attempt gets
 its own loopback fixture server, and grading uses only the form submissions that server received.
@@ -23,7 +23,7 @@ from framework.arms import binary, surface
 from framework.procs import WINDOWS
 
 ARMS = ('playwright', 'kitsune')
-MODELS = bench.MODELS
+MODEL = bench.MODELS['claude']
 TASKS = json.loads((ROOT / 'local-tasks/tasks.json').read_text(encoding='utf-8'))
 POLICY = ('Use only the designated browser and the rendered fixture UI. No other tabs, profiles, agents, shell commands, '
           'filesystem, page evaluation, source, storage, direct HTTP, or network inspection. Stop after one submission. '
@@ -32,11 +32,10 @@ PLAYWRIGHT = ROOT / 'node_modules/@playwright/mcp/cli.js'
 
 
 def matrix(tasks=TASKS):
-    for harness, model in MODELS.items():
-        for i, task in enumerate(tasks):
-            start = i % len(ARMS)
-            for arm in ARMS[start:] + ARMS[:start]:
-                yield dict(harness=harness, model=model, task=task['id'], arm=arm, timeout=300)
+    for i, task in enumerate(tasks):
+        start = i % len(ARMS)
+        for arm in ARMS[start:] + ARMS[:start]:
+            yield dict(harness='claude', model=MODEL, task=task['id'], arm=arm, timeout=300)
 
 
 @contextmanager
@@ -50,11 +49,11 @@ def browser(cell, logs):
         yield settings
 
 
-def agent_binary(name):
-    path = binary(os.environ.get('BENCH_' + name.upper()) or name)
+def claude_binary():
+    path = binary(os.environ.get('BENCH_CLAUDE') or 'claude')
     if WINDOWS and Path(path).suffix.lower() in ('.cmd', '.bat'):
         # cmd.exe cuts an argument at its first newline, and the prompt has several.
-        raise ValueError(f'{name} resolves to the {path} shim; set BENCH_{name.upper()} to the native {name}.exe')
+        raise ValueError(f'claude resolves to the {path} shim; set BENCH_CLAUDE to the native claude.exe')
     return path
 
 
@@ -76,32 +75,31 @@ def attempt(cell, task, settings, executable, log):
 
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--execute', action='store_true', help='actually start browsers and invoke the subscriptions')
+    p.add_argument('--execute', action='store_true', help='actually start browsers and invoke Claude Code')
     p.add_argument('--out', type=Path, help='new private run directory (default: runs/local-<timestamp>)')
     p.add_argument('--task', action='append', choices=[t['id'] for t in TASKS], help='only these tasks (repeatable)')
-    p.add_argument('--harness', action='append', choices=list(MODELS), help='only these agents (repeatable)')
     p.add_argument('--arm', action='append', choices=ARMS, help='only these browser arms (repeatable)')
     args = p.parse_args(argv)
     tasks = {t['id']: t for t in TASKS}
     cells = [c for c in matrix() if all(not chosen or c[key] in chosen for key, chosen in
-                                        (('task', args.task), ('harness', args.harness), ('arm', args.arm)))]
+                                        (('task', args.task), ('arm', args.arm)))]
     if not args.execute:
         print(json.dumps(cells, indent=2)); return 0
     if not shutil.which('node'):
         p.error('node is not on PATH')
     if any(c['arm'] == 'kitsune' for c in cells) and not os.getenv('BENCH_KITSUNE_CHECKOUT'):
         p.error('set BENCH_KITSUNE_CHECKOUT first (see README)')
-    executables = {h: agent_binary(h) for h in {c['harness'] for c in cells}}
+    executable = claude_binary()
     folder = args.out or Path('runs') / time.strftime('local-%Y%m%d-%H%M%S')
     folder.mkdir(mode=0o700, parents=True, exist_ok=False)
     (folder / 'plan.json').write_text(json.dumps(cells, indent=2))
     with (folder / 'results.jsonl').open('x', encoding='utf-8') as out:
         for i, cell in enumerate(cells, 1):
-            log = folder / f'{i:03}-{cell["harness"]}-{cell["task"]}-{cell["arm"]}.jsonl'
+            log = folder / f'{i:03}-{cell["task"]}-{cell["arm"]}.jsonl'
             print(f'[{i}/{len(cells)}] {log.stem}', flush=True)
             try:
                 with browser(cell, folder / (log.stem + '-runtime')) as settings:
-                    row = attempt(cell, tasks[cell['task']], settings, executables[cell['harness']], log)
+                    row = attempt(cell, tasks[cell['task']], settings, executable, log)
             except Exception as exc:
                 # Do not leak commands or credentials. Never count infra errors as task failures.
                 out.write(json.dumps(dict(cell, status='infra_error', error=type(exc).__name__)) + '\n')
