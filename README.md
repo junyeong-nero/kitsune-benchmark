@@ -70,6 +70,10 @@ Kitsune and Playwright passed the same tasks under each model. On the 12 tasks e
 only, `claude-api`): 12/26 vs 13/26 on 2026-11-20. Only `wap-077` changed, and input and calls were within 1–2%: no
 material change.
 
+[Kitsune main `c7149a8` check](docs/results/2026-11-24-kitsune-main-c7149a8-claude-api.md) (2026-11-24, Kitsune arm only,
+`claude-api`), after the #613–#619 fixes: 13/26. Only `wap-077` changed (the agent's reading); input fell 18% and tool errors
+fell from 15 to 7.
+
 ### Local fixtures
 
 [First full run](docs/results/2026-11-23-local-windows.md) (2026-11-23, Windows 11, Claude Code `claude` subscription,
