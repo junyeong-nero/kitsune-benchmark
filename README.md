@@ -72,7 +72,7 @@ material change.
 
 [Kitsune main `c7149a8` check](docs/results/2026-11-24-kitsune-main-c7149a8-claude-api.md) (2026-11-24, Kitsune arm only,
 `claude-api`), after the #613–#619 fixes: 13/26. Only `wap-077` changed (the agent's reading); input fell 18% and tool errors
-fell from 15 to 7.
+fell from 15 to 7. Transcript review filed [Kitsune #627–#635](https://github.com/junyeong-nero/kitsune/issues/627).
 
 ### Local fixtures
 

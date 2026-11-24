@@ -68,26 +68,26 @@ None of these grades came from a tool defect.
 
 ## Bug and enhancement leads from the transcripts
 
-Found by reading all 26 transcripts after the run. Counts are from this run only. No issues have been filed yet.
+Found by reading all 26 transcripts after the run. Counts are from this run only. B1, B2 and E2 were then reproduced on a local fixture page with the same runtime (main `c7149a8`, isolated headless Firefox).
 
 ### Bugs
 
-| # | Finding | Evidence |
-|---|---|---|
-| B1 | `tab.wait_for(text_gone='Loading...')` returned `ok` while `tab.text()`, called straight after, still contained `Loading...`. The text cleared only after `time.sleep(3)`. Both use `document.body.innerText`, so the wait's read and the text read disagree somewhere in between. One suspect: in `_poll_page_wait`, any reply without `ok: false` ends the wait. **Needs a reproduction** against a page that renders `Loading...` and then replaces it. | `wap-229` (`/deals/48`), `wap-231` (`/deals/1`): PipeCRM detail pages |
-| B2 | When a query clips a field, the warning says "read one element in full with `tab.markdown(target)`". For a `<textarea>`, Markdown collapses the line breaks: the query value had `analytics.\n\nAbout the role`, and `markdown()` returned `analytics. About the role`. The hint therefore leads to lossy reads of form values. | `wap-096` (the agent rebuilt the newlines by hand) |
+| # | Kitsune issue | Finding | Evidence |
+|---|---|---|---|
+| B1 | [#627](https://github.com/junyeong-nero/kitsune/issues/627) | `tab.text()` serves page text cached for up to 5 s. The bridge caches `getPageText` for `CACHE_TTL = 5` s, and only bridge write actions clear it, so a change the page makes itself stays invisible. `wait_for(text_gone='Loading...')` did succeed (at 2.5 s in the reproduction), but the `text()` straight after it still held `Loading...`, while `query` and `markdown` already showed the new content. | `wap-229`, `wap-231` (wait `ok`, then a stale `Loading...`); `wap-233` (still stale after `sleep(1.5)`) |
+| B2 | [#629](https://github.com/junyeong-nero/kitsune/issues/629) | When a query clips a field, the warning says "read one element in full with `tab.markdown(target)`". For a `<textarea>`, Markdown collapses the line breaks: the query value had `analytics.\n\nAbout the role`, and `markdown()` returned `analytics. About the role`. The hint therefore leads to lossy reads of form values. `tab.forms()` keeps the value intact. | `wap-096` (the agent rebuilt the newlines by hand) |
 
 ### Enhancements
 
-| # | Finding | Evidence |
-|---|---|---|
-| E1 | Inside `browser_run_python`, `tab.text()` is capped at 20,000 characters (`PAGE_TEXT_LIMIT`), even though a script's reads are not shown to the model and its output has its own 16 KB cap. Scans of long result lists read only part of the page. | 15 "Page text was cut" warnings in 5 tasks; `wap-069`'s fare scan read 176 of 200 fares on each search |
-| E2 | The snapshot lists `article` for `role="article"` divs, but the CSS selector `article` matches only the tag. `query('article')` returned `[]` with no warning, and `click('article >> nth=0')` returned `not_found`. A zero-match hint naming `role=article` would have saved these calls. | `wap-341` (3 times), `wap-140` (once) |
-| E3 | `navigate` and `new_tab` return once the DOM is ready (#601), so single-page apps are often read mid-render: an empty `snapshot`, an empty `text()`, or `Loading...`. Agents then add `sleep(1–3)` and read again. A hint when the body is nearly empty, or an optional wait for content, would remove the retry. | 7 tasks: flight-search new tabs, PipeCRM deal pages, Vaultwise |
-| E4 | Icon-only buttons appear as `button ""` inside `form ""`, with no form `action` or `data-testid`, so the agent cannot tell bookmark from like. In the transcripts, `query('form', fields=['action'])` showed `/bookmark/t835` at once. | `wap-261` (about 6 calls), `wap-260` (1 call through `html`) |
-| E5 | `query` noise and silence: a field that is not supported, such as `outerHTML`, is read as an attribute and silently left out. The "results were truncated" warning also fires when the caller set a small `limit` on purpose (`limit=1`, `3`, `5`). | 12 truncation warnings; `wap-261` `outerHTML` |
-| E6 | Page-by-page work does not fit the script budget. One TravelMap `navigate` took about 3 s. Four threads on four tabs did 24 navigations in 83 s, no faster than one tab. Whether the bottleneck is the site, the port forward or the bridge's scheduling is not measured. | `wap-247` (timeout in both runs) |
-| E7 | `a.delete, #rcmbtn_delete, text=Delete` failed with `unsupported_selector`. The hint lists the accepted forms but does not say that a selector list cannot mix CSS with `text=`. | `wap-239` (1 error, then recovered) |
+| # | Kitsune issue | Finding | Evidence |
+|---|---|---|---|
+| E1 | [#630](https://github.com/junyeong-nero/kitsune/issues/630) | Inside `browser_run_python`, `tab.text()` is capped at 20,000 characters (`PAGE_TEXT_LIMIT`), even though a script's reads are not shown to the model and its output has its own 16 KB cap. Scans of long result lists read only part of the page. | 15 "Page text was cut" warnings in 5 tasks; `wap-069`'s fare scan read 176 of 200 fares on each search |
+| E2 | [#628](https://github.com/junyeong-nero/kitsune/issues/628) | The snapshot lists `article` for `role="article"` divs, but the CSS selector `article` matches only the tag. `query('article')` returned `[]` with no warning, and `click('article >> nth=0')` returned `not_found`. A zero-match hint naming `role=article` would have saved these calls. | `wap-341` (3 times), `wap-140` (once) |
+| E3 | [#631](https://github.com/junyeong-nero/kitsune/issues/631) | `navigate` and `new_tab` return once the DOM is ready (#601), so single-page apps are often read mid-render: an empty `snapshot`, an empty `text()`, or `Loading...`. Agents then add `sleep(1–3)` and read again. A hint when the body is nearly empty, or an optional wait for content, would remove the retry. | 7 tasks: flight-search new tabs, PipeCRM deal pages, Vaultwise |
+| E4 | [#632](https://github.com/junyeong-nero/kitsune/issues/632) | Icon-only buttons appear as `button ""` inside `form ""`, with no form `action` or `data-testid`, so the agent cannot tell bookmark from like. In the transcripts, `query('form', fields=['action'])` showed `/bookmark/t835` at once. | `wap-261` (about 6 calls), `wap-260` (1 call through `html`) |
+| E5 | [#633](https://github.com/junyeong-nero/kitsune/issues/633) | `query` noise and silence: a field that is not supported, such as `outerHTML`, is read as an attribute and silently left out. The "results were truncated" warning also fires when the caller set a small `limit` on purpose (`limit=1`, `3`, `5`). | 12 truncation warnings; `wap-261` `outerHTML` |
+| E6 | [#634](https://github.com/junyeong-nero/kitsune/issues/634) | Page-by-page work does not fit the script budget. One TravelMap `navigate` took about 3 s. Four threads on four tabs did 24 navigations in 83 s, no faster than one tab. Whether the bottleneck is the site, the port forward or the bridge's scheduling is not measured. | `wap-247` (timeout in both runs) |
+| E7 | [#635](https://github.com/junyeong-nero/kitsune/issues/635) | `a.delete, #rcmbtn_delete, text=Delete` failed with `unsupported_selector`. The hint lists the accepted forms but does not say that a selector list cannot mix CSS with `text=`. | `wap-239` (1 error, then recovered) |
 
 ## Protocol and exclusions
 
@@ -95,4 +95,4 @@ Found by reading all 26 transcripts after the run. Counts are from this run only
 - Runner `ba0bfc2`. Kitsune main `c7149a8` ran from a separate runtime checkout (`uv sync --locked`) with isolated headless Firefox. Model: `claude-opus-5-5`, Claude Code 2.1.331.
 - Sites and Core: WebArena-Pro `42f4a076` in a Codespace, with container egress blocked again after the Codespace restarted. Unlike 23 November, ports were forwarded over SSH (`-L`), as the [running guide](../running.md#4-connect-the-agent-host-to-the-sites) recommends. Each attempt recreated its sites and signed in before measurement.
 - Grading is unchanged: `backend_state` and `answer_match`, with no working LLM judge. A rubric that escalates to `llm_judge` fails with `configuration_error`, as intended.
-- No attempt was excluded. The four-way runner does not save the bridge audit, so B1 and E6 rest on the transcripts alone. Raw evidence remains private.
+- No attempt was excluded. The four-way runner does not save the bridge audit, so E6 rests on the transcripts alone. Raw evidence remains private.
