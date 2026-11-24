@@ -74,6 +74,10 @@ material change.
 `claude-api`), after the #613–#619 fixes: 13/26. Only `wap-077` changed (the agent's reading); input fell 18% and tool errors
 fell from 15 to 7. Transcript review filed [Kitsune #627–#635](https://github.com/junyeong-nero/kitsune/issues/627).
 
+[Kitsune main `2ce7360` check](docs/results/2026-11-25-kitsune-main-2ce7360-claude-api.md) (2026-11-25, Kitsune arm only,
+`claude-api`), after the #627–#635 fixes: 12/26. Only `wap-077` changed (the agent's answer); input fell 11%, tool calls 7% and
+median time 14%, and tool errors rose from 7 to 12. Transcript review filed [Kitsune #648–#656](https://github.com/junyeong-nero/kitsune/issues/648).
+
 ### Local fixtures
 
 [First full run](docs/results/2026-11-23-local-windows.md) (2026-11-23, Windows 11, Claude Code `claude` subscription,
