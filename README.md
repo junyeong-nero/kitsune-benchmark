@@ -78,6 +78,11 @@ fell from 15 to 7. Transcript review filed [Kitsune #627–#635](https://github.
 `claude-api`), after the #627–#635 fixes: 12/26. Only `wap-077` changed (the agent's answer); input fell 11%, tool calls 7% and
 median time 14%, and tool errors rose from 7 to 12. Transcript review filed [Kitsune #648–#656](https://github.com/junyeong-nero/kitsune/issues/648).
 
+[Kitsune main `0a8ada9` check](docs/results/2026-11-25-kitsune-main-0a8ada9-claude-api.md) (2026-11-25, Kitsune arm only,
+`claude-api`), the v0.8.3 candidate, after the #648–#656 fixes: 13/26. Only `wap-077` changed (the agent's answer); input, calls
+and time were within 3% of the `2ce7360` run on the common passes. Against v0.8.2, input is down 29% and calls 15%. Transcript
+review filed [Kitsune #666–#670](https://github.com/junyeong-nero/kitsune/issues/666).
+
 ### Local fixtures
 
 [First full run](docs/results/2026-11-23-local-windows.md) (2026-11-23, Windows 11, Claude Code `claude` subscription,
