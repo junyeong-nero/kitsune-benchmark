@@ -83,6 +83,11 @@ median time 14%, and tool errors rose from 7 to 12. Transcript review filed [Kit
 and time were within 3% of the `2ce7360` run on the common passes. Against v0.8.2, input is down 29% and calls 15%. Transcript
 review filed [Kitsune #666–#670](https://github.com/junyeong-nero/kitsune/issues/666).
 
+[Kitsune main `4e3f6c1` check](docs/results/2026-11-26-kitsune-main-4e3f6c1-claude-api.md) (2026-11-26, Kitsune arm only,
+`claude-api`), after the #666–#670 fixes: 12/26. Only `wap-077` changed (the agent's answer); input fell 7%, tool calls 8% and
+tool errors from 13 to 6. Transcript review filed
+[Kitsune #678–#686](https://github.com/junyeong-nero/kitsune/issues/678).
+
 ### Local fixtures
 
 [First full run](docs/results/2026-11-23-local-windows.md) (2026-11-23, Windows 11, Claude Code `claude` subscription,
